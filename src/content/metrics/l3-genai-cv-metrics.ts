@@ -4,666 +4,560 @@ const m: Module = {
   id: 'metrics-l3-genai-cv-metrics',
   subjectId: 'metrics',
   level: 3,
-  title: 'GenAI & Vision Metrics: Perplexity, BLEU, ROUGE, IoU & mAP',
+  title: 'Text Generation Metrics: Perplexity, BLEU & ROUGE',
   whyItMatters:
-    'Generative models broke evaluation. There is no confusion matrix for a paragraph, and "is this summary good?" has no ground-truth cell to count. This module gives you the four numbers everyone quotes — perplexity, BLEU/ROUGE, IoU, mAP — plus the honest account of what each one cannot see, and KL divergence, the single quantity that connects cross-entropy, VAEs, distillation and RLHF into one idea.',
-  estMinutes: 55,
+    'Every metric you have met so far counts things: this prediction was right, that one was wrong, put each one in a box and add up the boxes. Text generation has no boxes. A model writes a sentence, a human wrote a different sentence, and both can be correct. This module builds the three numbers people actually report — perplexity, BLEU and ROUGE — from four probabilities and two six-word sentences you can check on paper, and shows exactly what each one is blind to.',
+  assumes: [
+    'You have read *Loss vs Metric*, so you know a loss is the number the model descends and a metric is the number a person reads',
+    'You have read *Classification Losses*, so you have met cross-entropy: the average surprise of the model, measured as minus the log of the probability it gave to the correct answer',
+    'You know what precision and recall are from *The Confusion Matrix*',
+    'You have seen a Python list, a for loop, and a function',
+    'You know from school maths that a logarithm is the inverse of a power: log2(8) = 3 because 2 to the power 3 is 8',
+  ],
+  estMinutes: 44,
   sections: [
     {
       type: 'intuition',
-      title: 'The problem: no cell to count',
-      md: `Classification metrics all rest on one move — put each prediction in a box, count the boxes. Generative output has no boxes.
+      title: 'Two answers, both correct, and no box to put them in',
+      md: `A model is asked to rewrite one sentence. A human wrote the reference answer.
 
-- A model writes *"The meeting was postponed to Friday."* The reference says *"They moved the meeting to Friday."*
-- Same meaning. Zero word overlap on 4 of 6 words. Is that a hit or a miss?
-- A detector draws a box around a dog, 8 pixels off. Correct? Half correct?
-- So the field split into two strategies: **score the model's own probabilities** (perplexity, KL) or **score the output text against a reference** (BLEU, ROUGE, judges).
-- Vision took a third route: define "close enough" geometrically (IoU) and then reuse the precision-recall machinery you already know.
-- Everything in this module is one of those three moves. Know which one a metric is making and you know what it can't see.`,
+- Reference, written by the human: **"the meeting was postponed to friday"**.
+- The model writes: **"they pushed it back until friday"**.
+- Read both. They mean the same thing. Any person would mark this correct.
+- Now count the words they share. Only one word — *friday* — appears in both. Five of six words are different.
+- A second model writes: **"the meeting was not postponed to friday"**. That means the opposite. It is wrong.
+- But it shares six words out of seven with the reference.
+
+So word-counting rates the wrong answer far above the right one. Hold that in mind: it is not a bug we are going to fix in this module, it is the permanent limitation of every score here. By the end you will be able to put a number on it — the correct paraphrase scores **0.0000** and the flipped-meaning sentence scores **0.7559** on the same metric.`,
     },
     {
       type: 'intuition',
-      title: 'KL divergence: the cost of using the wrong map',
-      md: `You navigate a city with a map. The map is slightly wrong — a street here, a one-way there.
+      title: 'The two things you can measure instead',
+      md: `Since you cannot check meaning by counting, the field split into two moves. Both are in this module.
 
-- You still arrive, but you pay for it: extra turns, extra surprises.
-- **KL divergence** measures exactly that surcharge, for probability distributions instead of maps.
-- Truth is **P**. Your model is **Q**. KL(P || Q) = the *extra* bits of surprise you pay per event by encoding reality with Q instead of P.
-- Read it as: *how much worse is my model's story than the true story?*
-- Units are bits (log base 2) or nats (natural log). Pick one and stay there.
-- Two properties do all the work: KL is never negative, and it is **zero only when P and Q are identical**.`,
+- **Move one: score the model’s own probabilities.** Before the model writes a word it assigns a probability to every word it might write. Take a piece of real human text and ask: what probability did the model give to the words that actually appeared? That needs no reference answer and no judgement about meaning. **Perplexity** is this move.
+- **Move two: score the output text against a reference.** Write down one correct answer, then measure how much of it the model’s answer reuses. **BLEU** and **ROUGE** are this move.
+- Move one measures whether the model has learned the language. Move two measures whether it produced this particular answer.
+- Neither one measures whether the answer is true, useful, or safe. Nothing in this module does.`,
     },
     {
-      type: 'math',
-      intro: 'The definition, and the two facts you must be able to state.',
-      latex: [
-        'D_{KL}(P \\parallel Q) = \\sum_{x} P(x)\\,\\log \\frac{P(x)}{Q(x)} \\;=\\; \\mathbb{E}_{x \\sim P}\\!\\left[ \\log \\frac{P(x)}{Q(x)} \\right]',
-        'D_{KL}(P \\parallel Q) \\;\\ge\\; 0, \\qquad D_{KL}(P \\parallel Q) = 0 \\iff P = Q \\quad \\text{(Gibbs / Jensen)}',
-        'D_{KL}(P \\parallel Q) \\;\\ne\\; D_{KL}(Q \\parallel P) \\quad \\text{— asymmetric, no triangle inequality: NOT a distance.}',
-      ],
-    },
-    {
-      type: 'hinglish',
-      md: `KL divergence ek hi sawaal poochta hai: *sachai P hai, par mere paas sirf model ka naqsha Q hai — is naqshe pe chalne se mujhe kitni EXTRA hairaani sehni padegi?* Jawab bits me aata hai. **Zero matlab dono naqshe bilkul same.** Aur ek baat pakki yaad rakho: yeh symmetric **nahi** hai. P ki nazar se Q dekhna aur Q ki nazar se P dekhna do alag numbers dete hain — neeche ka code yehi prove karta hai. Isiliye interview me kabhi "KL distance" mat bolna; woh ek galti hai jo interviewer turant pakad leta hai. Bolo "divergence".`,
+      type: 'intuition',
+      title: 'From cross-entropy to perplexity: four probabilities, by hand',
+      md: `You already know cross-entropy: the model’s average surprise, where surprise on one item is minus the log of the probability the model gave to the correct answer. Perplexity is that same number, rescaled once. Here is the whole thing on four words.
+
+- The sentence is **"the cat sat down"**. The model reads it left to right and, at each position, reports the probability it had given to the word that actually came next.
+- p(the) = **0.5**. p(cat, given "the") = **0.25**. p(sat, given "the cat") = **0.125**. p(down, given "the cat sat") = **0.25**.
+- Take log base 2 of each: log2(0.5) = −1, log2(0.25) = −2, log2(0.125) = −3, log2(0.25) = −2. (log2(0.5) = −1 because 2 to the power −1 is 0.5.)
+- Flip the signs and average: (1 + 2 + 3 + 2) / 4 = **2 bits of surprise per word**. That average is the cross-entropy.
+- **Perplexity** is 2 raised to that average: 2² = **4**.
+
+Why raise 2 to the power of it? Because it converts "bits of surprise" back into "number of choices". A model choosing uniformly between 4 equally likely words has probability 0.25 every time, surprise 2 bits every time, and perplexity exactly 4. So our model is, on average across this sentence, **as unsure as someone picking blindly among 4 options at every word**. That is the whole reason perplexity exists: 2 bits means nothing to most people, "as confused as a 4-way blind guess" means something.`,
     },
     {
       type: 'note',
-      md: `Why the asymmetry actually matters, honestly. In KL(P || Q) the expectation is taken over P: wherever P has mass and Q has none, the ratio blows up, so Q is forced to **cover** all of P — it spreads out and blurs across modes. That is the direction maximum likelihood minimises, which is one reason plain likelihood-trained generative models produce safe, averaged, slightly mushy samples. Flip it: KL(Q || P) is an expectation over Q, so Q is only punished where *it* puts mass — it can safely ignore parts of P and collapse onto a single mode. That is the direction variational methods and reverse-KL fine-tuning minimise: sharper, less diverse. Neither is "right". "Forward KL is mass-covering, reverse KL is mode-seeking" is the sentence to have ready.`,
-    },
-    {
-      type: 'intuition',
-      title: 'The link that ties this whole subject together',
-      md: `Cross-entropy is not a separate idea from KL. It is KL plus a constant.
-
-- Entropy H(P) = the surprise that is *irreducible* — the noise in the data itself. You cannot train it away.
-- Cross-entropy H(P, Q) = H(P) + KL(P || Q). Total surprise = unavoidable surprise + your model's surcharge.
-- The data distribution P is **fixed** during training. So H(P) is a constant.
-- Therefore **minimising cross-entropy IS minimising KL(P || Q)**. Same optimisation, different offset.
-- That is the answer to "why cross-entropy?": it is the differentiable, computable form of "make my distribution match the data's".
-- It also explains why the loss floor is not zero. A well-trained model bottoms out at roughly H(P) — the data's own entropy.`,
-    },
-    {
-      type: 'note',
-      md: `Where KL shows up once you leave this subject, one line each. **VAE (ELBO):** the objective is reconstruction quality minus KL(q(z|x) || p(z)) — the KL term drags the encoder's per-example latent distribution toward the N(0, I) prior so the latent space stays samplable. **Knowledge distillation:** the student is trained on KL(teacher || student) over temperature-softened probabilities, so it copies the teacher's whole distribution ("cat 0.7, dog 0.2, fox 0.1") instead of just the hard label. **RLHF:** the PPO objective is reward minus β·KL(policy || reference model) — a leash that stops the tuned model drifting into degenerate text that games the reward model. Same quantity, three jobs: regularise, imitate, restrain. Full treatment in the GenAI subject.`,
-    },
-    {
-      type: 'intuition',
-      title: 'Perplexity: cross-entropy wearing a friendlier number',
-      md: `A language model predicts the next token. Score it by how surprised it was by the token that actually came.
-
-- Average the negative log-likelihood over every token. That is exactly cross-entropy per token.
-- Then exponentiate it. That is **perplexity**.
-- Why exponentiate? To get back into units of *choices*. Perplexity 30 means: **as confused as if it were picking uniformly among 30 equally likely tokens** at every step.
-- Lower is better, floor is 1.0 (perfect certainty, always right). A uniform model over a 50,000-token vocabulary has perplexity 50,000.
-- One shocked token wrecks the average — log of a tiny probability is a huge negative number. Perplexity is dominated by the model's worst moments, not its typical ones.
-- It measures only one thing: probability assigned to real text. It says nothing about truth, helpfulness, or safety.`,
-    },
-    {
-      type: 'math',
-      intro: 'Perplexity is exp(average cross-entropy). That is the whole definition.',
-      latex: [
-        '\\text{PPL} = \\exp\\!\\left( -\\frac{1}{N} \\sum_{i=1}^{N} \\log p(t_i \\mid t_{<i}) \\right) = \\exp\\big( H(P_{\\text{data}}, P_{\\text{model}}) \\big)',
-        '\\text{Uniform over } V \\text{ tokens} \\Rightarrow p = \\tfrac{1}{V} \\Rightarrow \\text{PPL} = V \\quad \\text{— the "N equally likely options" reading.}',
-        '\\text{Base matters only for the exponent base: } 2^{H_{\\text{bits}}} = e^{H_{\\text{nats}}}. \\text{ Same number, be consistent.}',
-      ],
+      md: `Where KL divergence fits, in plain words, because you will hear the name. Cross-entropy splits into two parts. Part one is the surprise nobody can avoid: real text is genuinely unpredictable, and even a perfect model would be surprised sometimes. Part two is the extra surprise you pay for having the wrong probabilities. That second part is called the **KL divergence** between the true word probabilities and the model’s. It is never negative, and it is zero only when the two sets of probabilities are identical. Check it on a two-word toy language where the truth is 90%/10% and the model says 50%/50%: the unavoidable part is 0.4690 bits, the model’s cross-entropy is 1.0000 bits, and the difference — the KL divergence — is 0.5310 bits. Training cannot touch the first part, so lowering cross-entropy means lowering KL, and perplexity is that same quantity written as a number of choices. That is all you need here.`,
     },
     {
       type: 'code',
       lang: 'python',
-      title: 'Perplexity by hand, and KL in both directions to prove it is not a distance',
-      code: `import numpy as np
+      title: 'Perplexity by hand: the four probabilities, step by step',
+      code: `import math
 
-logp2 = np.array([-0.15, -2.00, -0.30, -5.00, -1.00, -0.55])   # log2 p(true token)
-nll = -logp2.mean()                        # average surprise, bits per token
-print('avg NLL = %.3f bits  ->  perplexity = %.3f' % (nll, 2 ** nll))
-worse = logp2.copy(); worse[3] = -12.0     # one token the model found shocking
-print('one shocked token   ->  perplexity = %.3f' % 2 ** (-worse.mean()))
-
-P = np.array([0.60, 0.30, 0.08, 0.02])     # truth: peaked
-Q = np.array([0.25, 0.25, 0.25, 0.25])     # model: uniform
-kl = lambda a, b: float((a * np.log2(a / b)).sum())
-print('KL(P||Q) = %.4f   KL(Q||P) = %.4f   same? %s'
-      % (kl(P, Q), kl(Q, P), np.isclose(kl(P, Q), kl(Q, P))))
-print('KL(P||P) = %.4f' % kl(P, P))
-
-H = float(-(P * np.log2(P)).sum())         # entropy of the truth
-CE = float(-(P * np.log2(Q)).sum())        # cross-entropy of Q under P
-print('H(P)=%.4f + KL(P||Q)=%.4f = %.4f   CE(P,Q)=%.4f' % (H, kl(P, Q), H + kl(P, Q), CE))
+probs = [0.5, 0.25, 0.125, 0.25]
+total = 0.0
+for p in probs:
+    total = total + math.log2(p)
+avg = total / len(probs)
+print(round(-avg, 4))
+print(round(2 ** (-avg), 4))
 
 # ---- real output ----
-# avg NLL = 1.500 bits  ->  perplexity = 2.828
-# one shocked token   ->  perplexity = 6.350
-# KL(P||Q) = 0.6323   KL(Q||P) = 0.9404   same? False
-# KL(P||P) = 0.0000
-# H(P)=1.3677 + KL(P||Q)=0.6323 = 2.0000   CE(P,Q)=2.0000`,
+# 2.0
+# 4.0`,
       annotations: {
-        3: 'These are the log-probabilities the model gave to the tokens that actually appeared — the only inputs perplexity needs.',
-        5: '1.5 bits per token -> 2^1.5 = 2.83. The model is as unsure as picking between ~3 equally likely tokens each step.',
-        11: 'One lambda, both directions. Note the asymmetry costs nothing to demonstrate — which is why "KL distance" is inexcusable.',
-        13: '0.6323 vs 0.9404 on the SAME pair of distributions. Swapping the arguments changes the answer by 49%.',
-        18: 'The identity, checked numerically: cross-entropy 2.0000 = entropy 1.3677 + KL 0.6323. Training drives the KL term only.',
-        22: 'One token going from -5 to -12 bits more than doubles perplexity, 2.83 -> 6.35. Tail sensitivity, in one line.',
+        1: 'math is a standard Python module. We need log2 (logarithm base 2) and nothing else, so there is no numpy anywhere in this module.',
+        3: 'The four probabilities the model gave to the four words that actually appeared, in order. These are the only inputs perplexity ever needs.',
+        4: 'A running total, started at 0.0 rather than 0 to make clear it accumulates decimals.',
+        5: 'Walk the list one probability at a time. p is the current probability.',
+        6: 'math.log2(p) is the log base 2 of p, which is negative for any probability below 1. Adding logs is how you combine surprises: -1, then -2, then -3, then -2.',
+        7: 'Divide by 4 to get the average. len(probs) is the number of words, so this works for a sentence of any length.',
+        8: 'The minus sign flips the average from -2.0 to +2.0, so it reads as "2 bits of surprise per word" rather than a negative number. This is the cross-entropy.',
+        9: '2 raised to the average surprise. 2 ** 2.0 is 4.0 — the perplexity. Perplexity is always at least 1.0, which would mean the model gave probability 1 to every word it saw.',
       },
     },
     {
-      type: 'note',
-      md: `**The comparability trap — the part papers quietly rely on you forgetting.** Perplexity is per *token*, and tokens are whatever the tokenizer decided they are. A model with a big vocabulary spends fewer tokens on the same sentence, so its per-token surprise is spread over fewer, fatter predictions — a different number for identical text. Change the tokenizer and perplexity moves with no change in model quality whatsoever. It also depends on the evaluation corpus (WikiText-103 perplexity and code-corpus perplexity are unrelated quantities) and on how you handle context windows and end-of-document tokens. So: perplexity is valid for comparing checkpoints of *your* model on *your* held-out set. The "PPL 6.2" in a paper is not portable, and quoting it against your own 9.1 is a mistake an interviewer will catch. Bits-per-character sidesteps the tokenizer issue, which is why some papers report it instead.`,
-    },
-    { type: 'visual', component: 'NextTokenSampler', props: {} },
-    {
-      type: 'note',
-      md: `Look at those bars — perplexity is nothing but a summary of them, taken over thousands of steps. When the bar over the token that actually comes next is tall and the rest are flat on the floor, the negative log-likelihood for that step is near zero and perplexity heads toward 1. When the bars are a low, even hedge across the whole vocabulary, every step contributes a big surprise and perplexity climbs toward the vocabulary size. Now drag **temperature**: raising it flattens the bars, lowering it sharpens them. You are literally reshaping the model's confusion. Careful though — temperature is applied at *sampling* time and perplexity is computed on the raw distribution at temperature 1, so this shows you what the number means, not a way to fake a better one. Top-k and top-p are a third thing again: they truncate the tail rather than reweight it, which changes what the model can say without changing what it believes.`,
-    },
-    {
       type: 'intuition',
-      title: 'Reconstruction loss: rebuild the input after the squeeze',
-      md: `An autoencoder has exactly one job — push the input through a narrow bottleneck and get the input back out the other side.
+      title: 'Another way to read perplexity, and the trait that bites you',
+      md: `There is a second reading of the same number that makes its worst habit obvious.
 
-- Encoder squeezes x into a small code z. Decoder expands z back into an approximation x-hat. The objective is simply *how far is x-hat from x*.
-- **Continuous data** (raw intensities, audio, tabular rows): mean squared error per element, averaged over the batch.
-- **Data already living in [0, 1]** (normalised pixels): binary cross-entropy computed *per pixel*, treating each pixel value as a probability. Same formula as classification cross-entropy, applied one pixel at a time and summed.
-- The bottleneck is the entire trick. Widen it to the input size and the network learns the identity function, drives the loss to zero, and has learnt nothing.
-- This is a training objective, not a number you report. Reconstruction loss forces the code to keep the information that matters and drop the rest.
-- Architectures for all of this live in the DL subject's generative-models module. Here we care only about the objectives and what they do to your outputs.`,
-    },
-    {
-      type: 'math',
-      intro: 'Two reconstruction losses, picked by the range of your data.',
-      latex: [
-        '\\mathcal{L}_{\\text{recon}}^{\\text{MSE}} = \\frac{1}{N}\\sum_{i=1}^{N} \\lVert x_i - \\hat{x}_i \\rVert_2^2 \\qquad \\text{— continuous-valued data}',
-        '\\mathcal{L}_{\\text{recon}}^{\\text{BCE}} = -\\sum_{j=1}^{D} \\Big[ x_j \\log \\hat{x}_j + (1 - x_j)\\log(1 - \\hat{x}_j) \\Big] \\qquad x_j \\in [0, 1] \\text{, summed over pixels}',
-        '\\hat{x} = f_\\theta\\big( g_\\phi(x) \\big), \\qquad \\dim(z) \\ll \\dim(x) \\quad \\text{— the bottleneck is the only thing preventing } \\hat{x} = x \\text{ trivially.}',
-      ],
-    },
-    {
-      type: 'note',
-      md: `**Why plain autoencoder and VAE outputs look blurry — and it is the loss, not the architecture.** Under squared error the prediction that minimises expected loss is the *conditional mean* of everything that could plausibly have produced this input. For an image, many sharp reconstructions are individually plausible: the edge one pixel left, the edge one pixel right, the texture phase shifted. MSE does not let the model pick one and commit — hedging by outputting the average scores better than gambling on any single sharp guess, because a sharp guess that lands slightly wrong is penalised quadratically twice over (wrong where it put detail, wrong where it left detail out). And the average of many sharp images is a blurry image. So the blur is the *optimal* answer to the question you asked. This is the same mass-covering behaviour as forward KL from earlier in this module, seen in pixel space. It is also why the field moved on: adversarial losses replace "be close on average" with "be indistinguishable", and diffusion models predict noise instead of pixels — both sidestep the averaging.`,
-    },
-    {
-      type: 'intuition',
-      title: 'ELBO: reconstruct, then regularise the latent',
-      md: `A VAE keeps the reconstruction term and bolts a KL term onto it. That second term is the whole difference, and it is the KL you already know.
+- Multiply the four probabilities: 0.5 × 0.25 × 0.125 × 0.25 = **0.00390625**. Take the fourth root of that: **0.25**. That is called the **geometric average** of the four probabilities — multiply them all together, then take the n-th root when there are n of them. It is the natural average for numbers that get multiplied rather than added, which is exactly what probabilities do.
+- Perplexity is 1 divided by that geometric average: 1 / 0.25 = **4**. Same answer as before, by a different route.
+- Now the consequence. In a multiplication, one very small factor drags everything down and no amount of large factors rescues it. Change the third probability from 0.125 to **0.001** — one word the model found shocking — and leave the other three alone.
+- Perplexity jumps from 4.00 to **13.37**, more than tripling, because of a single word out of four.
 
-- **ELBO = E_q[log p(x|z)] − KL(q(z|x) || p(z))**. Two halves. Read them separately and it stops being intimidating.
-- **First half — the reconstruction term.** Draw a code z from the encoder's distribution q(z|x), decode it, and ask how much probability the decoder assigns back to the real x. Maximising this is the reconstruction loss above with the sign flipped.
-- **Second half — the KL regulariser.** KL(q(z|x) || p(z)) with the prior p(z) = N(0, I). It drags every example's latent cloud toward one standard normal, so the space stays continuous and *samplable*: draw z from N(0, I), decode, get something plausible. A plain autoencoder cannot do that — its codes sit on unmapped islands and the space between them decodes to garbage.
-- **The tradeoff has a knob.** β-VAE scales the KL term by β. Raise β and you get a cleaner, more disentangled, more samplable latent space and *worse* reconstructions. Lower it and you get sharp reconstructions in a latent space you cannot sample from. No setting gives you both.
-- **Why "lower bound".** What you actually want is log p(x), the likelihood of the data, and it is intractable — it needs an integral over every possible z. ELBO ≤ log p(x) always, and the gap is itself a KL: between the encoder q(z|x) and the true posterior. So pushing the ELBO up pushes the quantity you cannot compute up with it. That is the whole justification.
-- **The classic failure — posterior collapse:** the KL term wins, q(z|x) becomes the prior for every input, and the decoder learns to ignore z entirely.`,
-    },
-    {
-      type: 'math',
-      intro: 'The ELBO, the gap that makes it a bound, and the β knob.',
-      latex: [
-        '\\log p(x) \\;\\ge\\; \\mathcal{L}_{\\text{ELBO}}(x) = \\underbrace{\\mathbb{E}_{q_\\phi(z \\mid x)}\\big[\\log p_\\theta(x \\mid z)\\big]}_{\\text{reconstruction}} \\;-\\; \\underbrace{D_{KL}\\big(q_\\phi(z \\mid x)\\,\\|\\,p(z)\\big)}_{\\text{latent regulariser}}',
-        '\\log p(x) - \\mathcal{L}_{\\text{ELBO}}(x) = D_{KL}\\big(q_\\phi(z \\mid x)\\,\\|\\,p_\\theta(z \\mid x)\\big) \\;\\ge\\; 0 \\quad \\text{— the gap IS a KL, so the bound is tight when } q \\text{ matches the true posterior.}',
-        'D_{KL}\\big(\\mathcal{N}(\\mu, \\sigma^2)\\,\\|\\,\\mathcal{N}(0, 1)\\big) = -\\tfrac{1}{2}\\sum_{j}\\big(1 + \\log \\sigma_j^2 - \\mu_j^2 - \\sigma_j^2\\big) \\quad \\text{— closed form, which is why the prior is a standard normal.}',
-        '\\mathcal{L}_{\\beta\\text{-VAE}} = \\mathbb{E}_{q}\\big[\\log p_\\theta(x \\mid z)\\big] - \\beta\\, D_{KL}\\big(q_\\phi(z \\mid x)\\,\\|\\,p(z)\\big), \\qquad \\beta > 1 \\Rightarrow \\text{cleaner latent, blurrier } \\hat{x}',
-      ],
-    },
-    {
-      type: 'intuition',
-      title: 'GAN: a min-max game with no likelihood anywhere',
-      md: `Autoencoders and VAEs score the output against the input. A GAN scores nothing against anything — it runs two networks against each other and lets the scoreboard be the loss.
-
-- **Discriminator D** takes an image and outputs the probability it is real. It **maximises** the objective: push D(x) toward 1 on real data and D(G(z)) toward 0 on fakes.
-- **Generator G** takes noise z and outputs an image. It **minimises** the same objective: make D(G(z)) large, which means fooling the discriminator.
-- One line, both players: **min over G of max over D of E[log D(x)] + E[log(1 − D(G(z)))]**. Hence "min-max", hence "adversarial".
-- No reconstruction term, no likelihood, no prior to match. Nothing in the objective ever compares a generated image to a specific real one — which is exactly why GAN samples are sharp: nothing is being averaged.
-- At the theoretical optimum G's distribution equals the data distribution and D is pinned at 0.5 everywhere, unable to tell them apart. Nothing guarantees you ever arrive.
-- Because both players move, neither loss falls monotonically. This is a *game*, not an optimisation, and it does not converge the way a loss does.`,
-    },
-    {
-      type: 'note',
-      md: `**The non-saturating trick — the part interviewers actually probe.** The original generator loss has a bug, and it bites exactly when you can least afford it. Early in training G is terrible, D catches every fake, so D(G(z)) sits near 0. Look at log(1 − D(G(z))) there: it is nearly flat. The gradient reaching G through D's logit is proportional to D(G(z)) itself — near zero. So the generator gets almost no learning signal precisely when it is worst and needs the most. The fix, from the same 2014 paper: have G **maximise log D(G(z))** instead of minimising log(1 − D(G(z))). Same fixed point, same direction of improvement, but now the gradient is proportional to 1 − D(G(z)), which is *large* when G is bad and shrinks as G gets good. This is the **non-saturating** loss and it is what every real implementation uses. The numbers below make the gap concrete.`,
+So perplexity is dominated by the model’s worst moments, not its typical ones. A model that is usually confident and occasionally stunned scores worse than one that is mildly unsure all the time.`,
     },
     {
       type: 'code',
       lang: 'python',
-      title: 'The vanishing gradient: original generator loss versus the non-saturating form',
-      code: `import numpy as np
+      title: 'The same calculation as a function, run on three sentences',
+      code: `def perplexity(probs):
+    total = 0.0
+    for p in probs:
+        total = total + math.log2(p)
+    return 2 ** (-total / len(probs))
 
-# D(G(z)) = sigmoid(s), so the gradient reaching G flows back through the logit s.
-# saturating     G minimises log(1 - D)  ->  d/ds = -D      -> magnitude D
-# non-saturating G maximises log D       ->  d/ds = 1 - D   -> magnitude 1 - D
-d = np.array([0.01, 0.05, 0.10, 0.20, 0.35, 0.50])
-print('D(G(z))   |grad| of log(1-D)   |grad| of log D    ratio')
-for p in d:
-    print('  %.2f            %8.4f           %8.4f    %6.1fx' % (p, p, 1 - p, (1 - p) / p))
-
-s = np.log(d / (1 - d))                      # back to logits
-h = 1e-6
-sig = lambda t: 1.0 / (1.0 + np.exp(-t))
-fd = lambda fn: (fn(s + h) - fn(s - h)) / (2 * h)
-print()
-print('finite-difference check, same logits:')
-print('  d/ds log(1-D) =', np.round(fd(lambda t: np.log(1 - sig(t))), 4))
-print('  d/ds log D    =', np.round(fd(lambda t: np.log(sig(t))), 4))
+print(round(perplexity([0.5, 0.25, 0.125, 0.25]), 4))
+print(round(perplexity([0.5, 0.25, 0.001, 0.25]), 4))
+print(round(perplexity([0.25, 0.25, 0.25, 0.25]), 4))
 
 # ---- real output ----
-# D(G(z))   |grad| of log(1-D)   |grad| of log D    ratio
-#   0.01              0.0100             0.9900      99.0x
-#   0.05              0.0500             0.9500      19.0x
-#   0.10              0.1000             0.9000       9.0x
-#   0.20              0.2000             0.8000       4.0x
-#   0.35              0.3500             0.6500       1.9x
-#   0.50              0.5000             0.5000       1.0x
-#
-# finite-difference check, same logits:
-#   d/ds log(1-D) = [-0.01 -0.05 -0.1  -0.2  -0.35 -0.5 ]
-#   d/ds log D    = [0.99 0.95 0.9  0.8  0.65 0.5 ]`,
+# 4.0
+# 13.3748
+# 4.0`,
       annotations: {
-        6: 'Six discriminator verdicts on the generator\'s fakes. 0.01 = "obvious fake, G is bad"; 0.50 = "cannot tell, G has won".',
-        9: 'Both gradient magnitudes at the same operating point, side by side, with their ratio. This one line is the entire argument.',
-        11: 'Back to logits so the numeric check hits exactly the same six points.',
-        14: 'Central difference. If the analytic magnitudes D and 1 - D are right, autodiff-free arithmetic must reproduce them.',
-        22: 'G is at its worst here and the ORIGINAL loss hands it a gradient of 0.01 — a 99x smaller push than the non-saturating form. That is the vanishing gradient, in one row.',
-        27: 'At D = 0.5 the two forms are identical. The trick costs nothing once training is healthy and rescues you when it is not.',
+        1: 'The same lines from the previous snippet, wrapped in a function so we can call it on different sentences.',
+        2: 'The running total, reset to zero on every call.',
+        3: 'Loop over however many probabilities were passed in.',
+        4: 'Add the log of each probability, exactly as before.',
+        5: 'Average, flip the sign, and raise 2 to it — the whole formula on one line now that you have seen it built.',
+        7: 'The original four probabilities. Prints 4.0, matching the hand calculation.',
+        8: 'Only the third probability changed, 0.125 to 0.001. Perplexity more than triples to 13.3748 on the strength of one word.',
+        9: 'A model that says 0.25 for every word. Perplexity 4.0 as well — the same score as our first model, which was confident on some words and lost on others.',
       },
     },
     {
       type: 'note',
-      md: `**Mode collapse, and why no loss curve saves you.** *Mode collapse:* G discovers one output (or a handful) that reliably fools the current D and emits only that — a face model that draws one face, a digit model that only writes 3s. It is the mode-seeking failure from the KL discussion above, made concrete: the objective never punishes G for the modes it *ignores*, only for the ones it gets wrong. Every mitigation is a heuristic — minibatch discrimination, feature matching, unrolled discriminators, or moving to WGAN-GP whose critic value at least correlates with sample quality. *And there is no loss curve to read:* D's loss falling could mean D is winning or that G collapsed; G's loss falling could mean genuine progress or that D got lazy. Neither number tracks sample quality, and the "healthy" equilibrium is both losses sitting flat. That vacuum is precisely why FID and Inception Score exist — you need an **external metric** computed on generated samples against real ones, because the objective itself tells you nothing. FID/IS and the diffusion comparison are covered in the DL subject's generative-models module; the point here is *why* a separate metric was ever necessary.`,
-    },
-    {
-      type: 'note',
-      md: `**The three objectives in one place.** *Autoencoder* — minimise reconstruction error, nothing else. One network, one loss, trains like any supervised model. Gives you compression and denoising, not generation, because the latent space has holes between the training codes. *VAE* — reconstruction minus a KL regulariser on the latent. Still one stable gradient descent, still easy to train, and now samplable; you pay in blur, and β sets the exchange rate. *GAN* — no likelihood, no reconstruction, no reference image in the loss at all: two networks in a min-max game. Sharpest samples of the three and by a distance the hardest to train, with no convergence guarantee, mode collapse, and no trustworthy loss curve. The honest one-liner: **VAE trains easily and blurs; GAN trains badly and sharpens.** Diffusion later ate both by returning to a stable, likelihood-flavoured objective.`,
+      md: `One practical warning before we leave perplexity. It is measured **per word-piece**, and different models chop text into word-pieces differently — one may treat "postponed" as a single piece, another as "post" plus "poned". A model that uses fewer, longer pieces is making fewer, harder predictions for the same text, and its per-piece surprise is a different quantity. So perplexity is a fair way to compare two versions of your own model on your own held-out text, and it is not a fair way to compare your model against a number printed in someone else’s paper. Different chopping, different corpus, different number.`,
     },
     {
       type: 'intuition',
-      title: 'BLEU: did you use the same words as the human?',
-      md: `Machine translation needed an automatic score in 2002. BLEU was the compromise, and it never left.
+      title: 'What an n-gram is',
+      md: `BLEU and ROUGE are both built out of one object, so define it before anything else uses it.
 
-- Take the candidate translation. Count how many of its n-grams appear in the reference(s). That is **n-gram precision**, computed for n = 1, 2, 3, 4 and geometrically averaged.
-- Precision is *clipped*: if "the" appears 7 times in the candidate and twice in the reference, it counts twice. Otherwise "the the the the the" scores 1.0.
-- Precision alone rewards being short — output one word you are sure of and precision is perfect. So BLEU multiplies by a **brevity penalty** that punishes candidates shorter than the reference.
-- Range 0–1 (usually reported ×100). It is a *corpus-level* metric; per-sentence BLEU is noisy and often 0 because 4-grams rarely match.
-- What it captures: surface overlap with a human-written answer. Genuinely useful when there is a narrow set of correct outputs.
-- What it misses: meaning. A perfect paraphrase with different words scores near 0. A fluent sentence with the negation flipped scores nearly as well as the correct one. Word order beyond a 4-gram window is invisible.`,
+- An **n-gram** is a run of n words in a row, taken from a sentence. That is the entire definition. "Gram" here just means "piece".
+- Take the sentence **"the cat sat on the mat"** — six words.
+- Its **1-grams** (also called unigrams) are the single words, in order: *the*, *cat*, *sat*, *on*, *the*, *mat*. There are six. Note that *the* appears twice, and it counts twice.
+- Its **2-grams** (bigrams) are every adjacent pair: *the cat*, *cat sat*, *sat on*, *on the*, *the mat*. There are five.
+- Its **3-grams** are every run of three: *the cat sat*, *cat sat on*, *sat on the*, *on the mat*. There are four.
+- The pattern: a sentence of L words has **L − n + 1** n-grams. Six words gives 6 − 1 + 1 = 6 unigrams, 6 − 2 + 1 = 5 bigrams, 6 − 3 + 1 = 4 trigrams.
+
+Why bother with pairs and triples at all? Because single words say nothing about order. "dog bites man" and "man bites dog" have identical 1-grams. Their 2-grams are completely different. Longer n-grams are how a word-counting metric gets a rough grip on word order.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'n-grams in five lines',
+      code: `def ngrams(words, n):
+    out = []
+    for i in range(len(words) - n + 1):
+        out.append(tuple(words[i:i + n]))
+    return out
+
+cand = 'the cat sat on the mat'.split()
+ref = 'the cat is on the mat'.split()
+print(ngrams(cand, 2))
+
+# ---- real output ----
+# [('the', 'cat'), ('cat', 'sat'), ('sat', 'on'), ('on', 'the'), ('the', 'mat')]`,
+      annotations: {
+        1: 'Takes a list of words and a number n, and returns every run of n words.',
+        2: 'An empty list to collect them in.',
+        3: 'range(len(words) - n + 1) is the L - n + 1 count from the section above, turned into starting positions 0, 1, 2, and so on. The loop stops before a run would fall off the end.',
+        4: 'words[i:i + n] is a slice: the n words starting at position i. tuple(...) freezes that slice into an unchangeable pair or triple, which matters because we will later count how often each one occurs and only unchangeable things can be counted that way. append adds it to the list.',
+        5: 'Hand back the finished list.',
+        7: '.split() cuts a string into a list of words at the spaces. cand is the candidate — the sentence a model produced.',
+        8: 'ref is the reference — the sentence a human wrote. It differs from cand in exactly one word: "is" where the candidate has "sat".',
+        9: 'Print the candidate’s 2-grams. Five of them, exactly the five listed by hand above.',
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'BLEU: how much of what you wrote appears in the human answer',
+      md: `BLEU was built for machine translation, where a good translation reuses most of the words a human would have used. It asks a precision question: **of the n-grams you produced, what fraction appear in the reference?**
+
+Work it on our pair. Candidate: **"the cat sat on the mat"**. Reference: **"the cat is on the mat"**.
+
+- **1-grams.** The candidate’s six are *the, cat, sat, on, the, mat*. Checking each against the reference: *the* is there, *cat* is there, *sat* is not, *on* is there, *the* again is there, *mat* is there. Five of six match, so the 1-gram precision is **5/6 = 0.8333**.
+- **2-grams.** The candidate’s five are *the cat, cat sat, sat on, on the, the mat*. The reference’s five are *the cat, cat is, is on, on the, the mat*. Matching: *the cat* yes, *cat sat* no, *sat on* no, *on the* yes, *the mat* yes. Three of five, so **3/5 = 0.6000**.
+- Notice how the single wrong word damages the 2-gram score twice as hard as the 1-gram score, because it sits inside two different pairs. That is n-grams doing their job.`,
+    },
+    {
+      type: 'intuition',
+      title: 'The two repairs BLEU needs: clipping and a length penalty',
+      md: `That precision idea, taken raw, can be cheated in two obvious ways. BLEU patches both.
+
+- **Cheat one: repeat a good word.** Output **"the the the the the the"**. Every one of the six 1-grams is a word that appears in the reference, so raw precision is 6/6 = 1.0000 for a sentence that says nothing.
+- **The repair, called clipping.** A candidate n-gram can only be credited as many times as it appears in the reference. The reference contains *the* twice, so out of the candidate’s six copies only two get credit. Precision becomes **2/6 = 0.3333**.
+- **Cheat two: say almost nothing.** Output just **"the mat"**. Both 1-grams are in the reference, so 1-gram precision is 2/2 = 1.0000, and its single 2-gram *the mat* is in the reference too, so 2-gram precision is 1/1 = 1.0000. Perfect scores for a two-word non-answer.
+- **The repair, called the brevity penalty.** If the candidate is shorter than the reference, multiply the whole score by e^(1 − r/c), where r is the reference length and c the candidate length. Here r = 6 and c = 2, so the multiplier is e^(1 − 3) = e^(−2) = **0.1353**. If the candidate is as long as the reference or longer, the multiplier is 1 and nothing happens.
+- Why that formula? Because it equals exactly 1 when c = r and falls smoothly the shorter you get, with no cutoff to game. Being long is not penalised at all — precision already punishes padding, since every extra unmatched word enlarges the denominator.
+
+Last piece: BLEU combines the 1-gram and 2-gram precisions (and usually 3-gram and 4-gram too) by taking their **geometric average** — multiply them and take the n-th root, the same averaging you met with perplexity. With 0.8333 and 0.6000: 0.8333 × 0.6000 = 0.5000, and the square root of 0.5000 is **0.7071**. The reason to multiply rather than to add and halve: if any one of the precisions is zero, the whole product is zero. A candidate that gets every single word right but no adjacent pair right scores 0, not 0.5.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Clipped precision, with both cheats tested',
+      code: `def clipped_precision(cand, ref, n):
+    cand_grams = ngrams(cand, n)
+    ref_grams = ngrams(ref, n)
+    matched = 0
+    for g in set(cand_grams):
+        matched = matched + min(cand_grams.count(g), ref_grams.count(g))
+    return matched / len(cand_grams)
+
+print(round(clipped_precision(cand, ref, 1), 4))
+print(round(clipped_precision(cand, ref, 2), 4))
+spam = 'the the the the the the'.split()
+print(round(clipped_precision(spam, ref, 1), 4))
+
+# ---- real output ----
+# 0.8333
+# 0.6
+# 0.3333`,
+      annotations: {
+        1: 'Takes the candidate words, the reference words, and which n to use.',
+        2: 'All of the candidate’s n-grams, using the function from before.',
+        3: 'All of the reference’s n-grams.',
+        4: 'A counter for how many pieces of the candidate got credit.',
+        5: 'set(cand_grams) removes duplicates, so each distinct n-gram is considered once. Without it we would handle "the" twice and clip twice, crediting 4 instead of 2.',
+        6: '.count(g) asks how many times g appears in a list. min(...) of the two counts is the clipping rule in one call: credit is the smaller of "how often you said it" and "how often the human said it".',
+        7: 'Divide by the total number of candidate n-grams. The denominator is the CANDIDATE — that is what makes this precision rather than recall.',
+        9: '1-gram precision on our sentence pair: 5 of 6 words credited, 0.8333.',
+        10: '2-gram precision: 3 of 5 pairs credited, 0.6. Python prints 0.6, not 0.6000.',
+        11: 'The cheat sentence: the word "the", six times over.',
+        12: 'Clipping caps it at the 2 copies the reference has, so 2/6 = 0.3333 instead of a perfect 1.0.',
+      },
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'BLEU on two n-gram sizes, brevity penalty included',
+      code: `def bleu2(cand, ref):
+    p1 = clipped_precision(cand, ref, 1)
+    p2 = clipped_precision(cand, ref, 2)
+    geo = (p1 * p2) ** 0.5
+    bp = 1.0
+    if len(cand) <= len(ref):
+        bp = math.exp(1 - len(ref) / len(cand))
+    return bp * geo
+
+print(round(bleu2(cand, ref), 4))
+print(round(bleu2('the mat'.split(), ref), 4))
+
+# ---- real output ----
+# 0.7071
+# 0.1353`,
+      annotations: {
+        1: 'The whole of BLEU for n = 1 and 2. Real BLEU goes up to n = 4; the shape is identical, just with two more precisions in the product.',
+        2: 'The 1-gram clipped precision, 0.8333 on our pair.',
+        3: 'The 2-gram clipped precision, 0.6.',
+        4: 'Multiply them and raise to the power 0.5, which is the square root — the geometric average of two numbers. 0.8333 * 0.6 = 0.5, and the square root of 0.5 is 0.7071.',
+        5: 'The brevity penalty, starting at 1.0 meaning "no penalty". This is the value it keeps when the candidate is long enough.',
+        6: 'Only a candidate shorter than or equal to the reference gets penalised. Longer candidates are already punished through the precision denominator.',
+        7: 'math.exp(x) is e raised to x. With r = 6 and c = 2 this is e ** (1 - 3) = 0.1353.',
+        8: 'Multiply the penalty into the averaged precision. That product is BLEU.',
+        10: 'Our sentence pair: 0.7071, matching the hand calculation.',
+        11: 'The two-word non-answer: perfect precisions, crushed to 0.1353 by the brevity penalty.',
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'ROUGE: how much of the human answer survives in what you wrote',
+      md: `Summarisation asks the opposite question from translation. A translation must not **add** things, so BLEU checks the candidate’s words against the reference. A summary must not **drop** things, so ROUGE checks the reference’s words against the candidate. One swap: the denominator becomes the reference. That turns precision into recall.
+
+Work it. Reference summary written by a human: **"the board approved the merger on friday"** — seven words. Candidate summary from the model: **"the board approved the merger"** — five words.
+
+- **ROUGE-1.** The reference has seven 1-grams: *the* twice, plus *board, approved, merger, on, friday*. Which survive in the candidate? *the* twice, *board, approved, merger* — five of them. *on* and *friday* are gone. ROUGE-1 = **5/7 = 0.7143**.
+- **ROUGE-2.** The reference’s six 2-grams are *the board, board approved, approved the, the merger, merger on, on friday*. The candidate contains the first four and not the last two. ROUGE-2 = **4/6 = 0.6667**.
+- Now compute BLEU-style precision on the same pair for contrast: every one of the candidate’s five 1-grams is in the reference, so precision is **5/5 = 1.0000**. Precision says the summary is flawless. Recall says it lost the date.
+- That gap is the whole point. The candidate dropped *on friday* — a fact a reader would want. Only the recall-flavoured number can see a missing thing, because a missing thing leaves no trace in the candidate for precision to inspect.
+- **ROUGE-2 is the variant that agrees with human judgement most often** of the common ones, because pairs catch the difference between keeping the words and keeping the statement.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'ROUGE: the same code with one line changed',
+      code: `def rouge_n(cand, ref, n):
+    cand_grams = ngrams(cand, n)
+    ref_grams = ngrams(ref, n)
+    matched = 0
+    for g in set(ref_grams):
+        matched = matched + min(cand_grams.count(g), ref_grams.count(g))
+    return matched / len(ref_grams)
+
+summary = 'the board approved the merger'.split()
+gold = 'the board approved the merger on friday'.split()
+print(round(rouge_n(summary, gold, 1), 4))
+print(round(rouge_n(summary, gold, 2), 4))
+print(round(clipped_precision(summary, gold, 1), 4))
+
+# ---- real output ----
+# 0.7143
+# 0.6667
+# 1.0`,
+      annotations: {
+        1: 'Same three arguments as clipped_precision. Compare the two functions line by line: only lines 5 and 7 differ.',
+        2: 'The candidate’s n-grams, unchanged.',
+        3: 'The reference’s n-grams, unchanged.',
+        4: 'The same counter.',
+        5: 'The loop now walks the REFERENCE’s distinct n-grams. We are asking what the human wrote, not what the model wrote.',
+        6: 'The credit rule is identical: the smaller of the two counts.',
+        7: 'The denominator is now len(ref_grams). One changed word turns precision into recall — that is the entire difference between BLEU and ROUGE.',
+        9: 'The model’s five-word summary.',
+        10: 'The human’s seven-word reference, which additionally says when it happened.',
+        11: 'ROUGE-1 = 5/7 = 0.7143. Two reference words did not survive.',
+        12: 'ROUGE-2 = 4/6 = 0.6667. Two reference pairs did not survive.',
+        13: 'The same pair scored with the precision function instead: 1.0. Precision is blind to what was dropped.',
+      },
     },
     {
       type: 'math',
-      intro: 'BLEU written out — the brevity penalty is the half people forget.',
+      intro: 'The three formulas you just computed by hand, in symbols. N is the number of words, p(t_i) is the probability the model gave to word i, c is candidate length, r is reference length.',
       latex: [
-        '\\text{BLEU} = \\text{BP} \\cdot \\exp\\!\\left( \\sum_{n=1}^{4} w_n \\log p_n \\right), \\qquad w_n = \\tfrac{1}{4}',
-        'p_n = \\frac{\\text{clipped matching } n\\text{-grams in candidate}}{\\text{total } n\\text{-grams in candidate}} \\qquad \\text{(precision)}',
-        '\\text{BP} = \\begin{cases} 1 & c > r \\\\ e^{\\,1 - r/c} & c \\le r \\end{cases} \\quad c = \\text{candidate length},\\; r = \\text{reference length}',
+        '\\text{Perplexity} \\;=\\; 2^{\\,-\\frac{1}{N}\\sum_{i=1}^{N}\\log_2 p(t_i)} \\qquad \\text{our four words: } 2^{2} = 4',
+        'p_n \\;=\\; \\frac{\\text{clipped matching } n\\text{-grams}}{\\text{total } n\\text{-grams in the CANDIDATE}}, \\qquad \\text{BLEU} \\;=\\; \\text{BP}\\cdot\\Big(\\textstyle\\prod_{n=1}^{K} p_n\\Big)^{1/K}',
+        '\\text{BP} \\;=\\; 1 \\text{ if } c > r, \\qquad e^{\\,1 - r/c} \\text{ if } c \\le r \\qquad \\text{our short candidate: } e^{-2} = 0.1353',
+        '\\text{ROUGE-}n \\;=\\; \\frac{\\text{clipped matching } n\\text{-grams}}{\\text{total } n\\text{-grams in the REFERENCE}} \\qquad \\text{our summary: } \\tfrac{5}{7} = 0.7143',
       ],
     },
     {
-      type: 'intuition',
-      title: 'ROUGE: did you keep what mattered?',
-      md: `Summarisation flips the question. A summary must not invent — but above all it must not *omit*.
-
-- So ROUGE swaps the denominator: **matching n-grams divided by the n-grams in the reference**. That is recall, not precision.
-- **ROUGE-1** — unigram overlap. Did the right words survive?
-- **ROUGE-2** — bigram overlap. Did short phrases survive? This one correlates best with humans of the three.
-- **ROUGE-L** — longest common subsequence between candidate and reference, as an F-measure. The subsequence need not be contiguous, so it rewards keeping content *in order* without committing to a fixed n.
-- BLEU is precision-flavoured because a translation must not add. ROUGE is recall-flavoured because a summary must not drop. That one sentence is the whole difference.
-- Same blind spot as BLEU, in the same place: it counts words, so a summary that is factually wrong but lexically similar scores well, and a correct abstractive summary in fresh words scores badly.`,
-    },
-    {
-      type: 'math',
-      intro: 'ROUGE-N and ROUGE-L. Note where the reference sits in each denominator.',
-      latex: [
-        '\\text{ROUGE-N} = \\frac{\\sum_{\\text{ref}} \\text{matching } n\\text{-grams}}{\\sum_{\\text{ref}} \\text{total } n\\text{-grams}} \\quad \\text{— denominator is the REFERENCE: recall}',
-        'R_{lcs} = \\frac{\\mathrm{LCS}(X, Y)}{|Y|}, \\quad P_{lcs} = \\frac{\\mathrm{LCS}(X, Y)}{|X|}, \\quad \\text{ROUGE-L} = F_\\beta(P_{lcs}, R_{lcs})',
-        '\\text{LCS = longest common subsequence: order-aware, gap-tolerant, no fixed } n.',
-      ],
-    },
-    {
-      type: 'note',
-      md: `So why are two demonstrably weak metrics still in every paper and every CI pipeline? Because they are **cheap** (milliseconds, no GPU), **deterministic** (same input, same number, forever), and **comparable** (a 2016 result and a 2025 result on the same test set can be placed side by side). No neural metric has all three. The professional position is not "BLEU is bad, ignore it" — it is: use BLEU/ROUGE as a *regression alarm* that tells you something broke between builds, never as evidence that one system is better than another when the gap is small. A 0.4 BLEU improvement is noise dressed as progress. And never optimise them directly: a model tuned to maximise ROUGE learns to copy sentences verbatim from the source, which maximises overlap and destroys the summary.`,
+      type: 'visual',
+      component: 'PythonPlayground',
+      props: {
+        code: `ref = 'the meeting was postponed to friday'.split()
+right = 'they pushed it back until friday'.split()
+wrong = 'the meeting was not postponed to friday'.split()
+print('correct paraphrase:', round(bleu2(right, ref), 4))
+print('meaning flipped   :', round(bleu2(wrong, ref), 4))`,
+        precomputedOutput: `correct paraphrase: 0.0
+meaning flipped   : 0.7559`,
+        caption: 'The two sentences from the opening, now scored. Word overlap rates the wrong answer 0.7559 and the right answer 0.0.',
+        annotations: {
+          1: 'The human reference from the first section, split into a list of six words.',
+          2: 'The correct paraphrase. It shares exactly one word with the reference: "friday".',
+          3: 'The sentence with the meaning reversed by inserting "not". It shares six of its seven words with the reference.',
+          4: 'BLEU-2 on the correct paraphrase. Its 1-gram precision is 1/6, its 2-gram precision is 0/5, and multiplying by zero gives zero.',
+          5: 'BLEU-2 on the flipped sentence: 1-gram precision 0.8571, 2-gram precision 0.6667, no brevity penalty because it is longer than the reference, so 0.7559.',
+        },
+      },
     },
     {
       type: 'intuition',
-      title: 'Modern eval: embeddings, judges, and humans',
-      md: `Three layers sit above n-gram counting, each buying more validity at more cost.
+      title: 'Worked case: a summariser that got better and scored worse',
+      md: `A news team has a model that summarises articles. The reference summary for one article, written by an editor, is **"the board approved the merger on friday"**.
 
-- **Embedding-based metrics (BERTScore)**: instead of matching tokens exactly, match them by embedding similarity — "postponed" and "moved" now count as a partial hit. Fixes paraphrase blindness, still cannot check facts, and adds a model dependency to your metric.
-- **LLM-as-judge**: hand a strong model the input, the output, and a rubric, and ask it to score or to pick a winner between two candidates. This is what actually correlates with human preference on open-ended tasks — the reason it took over so fast.
-- **Human evaluation**: still the ground truth. Every other metric on this page is an attempt to approximate a human judgement cheaply. Slow, expensive, needs annotation guidelines and inter-annotator agreement — and it is the only thing that settles a real disagreement.
-- The working hierarchy: automatic metrics gate every commit, judges gate every release candidate, humans gate the decisions that matter.`,
-    },
-    {
-      type: 'note',
-      md: `LLM-as-judge, honestly. **The wins:** it handles open-ended output, applies a rubric consistently, and costs cents instead of hours. **The failure modes, all measured and all real:** *position bias* — the same pair swapped can flip the verdict, the first option often wins; *verbosity bias* — longer, more confident answers score higher regardless of correctness; *self-preference* — a judge rates text from its own model family above equally good text from another; *cost and latency* at scale; and *non-determinism*, so your metric moves when nothing else did. **The mitigations, which are all cheap:** prefer **pairwise comparison** over absolute 1–10 scores (models are far better at "which is better" than at calibrated numbers); **randomise the order** and average both orderings, or discard the pair if the verdict flips; give an explicit **rubric** with concrete criteria instead of "rate the quality"; **pin the judge model version** and temperature and treat a judge upgrade as a metric change that invalidates historical numbers; and validate the judge against a few hundred human labels before trusting it. A judge you have never checked against humans is a vibe, not a metric.`,
+- **Version A** outputs **"the board approved the merger on friday"** — a straight copy of the article’s first sentence, which happens to match the reference word for word.
+- Score it. Every reference 1-gram survives, so ROUGE-1 = 7/7 = **1.0000**. Every reference 2-gram survives, so ROUGE-2 = 6/6 = **1.0000**.
+- **Version B** outputs **"directors signed off on the deal at the end of the week"** — 12 words, a genuine rewrite that a reader would call the better summary.
+- Score it. Reference 1-grams surviving in the candidate: *the* appears twice in the reference and twice in the candidate, so both are credited; *board* no, *approved* no, *merger* no, *on* yes, *friday* no. That is 3 of 7. ROUGE-1 = **0.4286**.
+- Reference 2-grams surviving: *the board* no, *board approved* no, *approved the* no, *the merger* no, *merger on* no, *on friday* no. ROUGE-2 = **0.0000**.
+- So version A scores 1.0000 and 1.0000; version B scores 0.4286 and 0.0000.
+
+Version A is not summarising at all — it is copying a sentence out of the article. That is the behaviour ROUGE rewards most, because copying maximises overlap by construction. The number is doing exactly what it was defined to do; it just was not defined to measure summarising. Read this as the standing warning: **do not train a model to maximise ROUGE**, because the highest-scoring strategy available to it is extraction, not summarisation.`,
     },
     {
       type: 'intuition',
-      title: 'The evals that are actually about your product',
-      md: `Generic quality scores rarely map to what breaks in production. Task-specific evals do.
+      title: 'The classic mistake, walked into on purpose',
+      md: `A translation team runs two systems on the same test set and reports BLEU as a percentage, the usual convention.
 
-- **Faithfulness / groundedness (RAG)**: is every claim in the answer supported by the retrieved context? Usually scored by decomposing the answer into claims and checking each against the sources. This — not fluency — is what makes a RAG system trustworthy.
-- **Hallucination rate**: fraction of responses containing at least one unsupported or fabricated factual claim, measured on a fixed probe set.
-- **Refusal rate**: how often the model declines. Watch it in both directions — over-refusal on benign requests is a product bug, under-refusal on harmful ones is a safety bug. A single number here hides both.
-- Add retrieval metrics upstream (recall@k, MRR — the ranking family) because a generation eval cannot distinguish "the model lied" from "the retriever never found it".
-- Each of these gets a full treatment in the GenAI subject. Here, just know they exist and that they beat BLEU for anything user-facing.`,
+- System A scores **32.4**. System B scores **32.8**. The team ships System B and writes "a 0.4 BLEU improvement" in the release notes.
+- Three weeks later, human reviewers rate System B slightly *worse* than System A.
+- The diagnosis. BLEU is an average over the whole test set, and averages have spread. Split the same test set into two random halves, score each half separately, and the two halves will typically disagree with each other by more than 0.4. The gap the team acted on is smaller than the noise in the measurement.
+- There is a second, sharper problem. Even a real 0.4 gain in word overlap need not mean better translation, because we already proved the metric prefers a negated sentence at 0.7559 to a correct paraphrase at 0.0000. BLEU tracks quality across large gaps, not across small ones.
+- The honest use of BLEU: as an **alarm**. If today’s build drops from 32.4 to 21.0, something broke and you go find it. That is a gap no amount of noise explains.
+- The dishonest use: as **evidence** that one system beats another when the gap is a fraction of a point.
+
+The general form of the mistake is treating a cheap proxy as if it were the thing it stands in for. BLEU is cheap, instant, and identical every time you run it. Those are three excellent properties, and none of them is "accurate".`,
     },
     {
       type: 'intuition',
-      title: 'Vision: IoU is how you define "correct" for a box',
-      md: `A detector predicts a box. The truth is another box. They never match pixel-perfectly, so you need a rule.
+      title: 'Practice problems',
+      md: `Pen and paper. Every number here is small on purpose.
 
-- **IoU (Intersection over Union)** = area of overlap ÷ area of union. Perfect overlap = 1, no overlap = 0.
-- Work one: prediction spans x 0→10, y 0→10 (area 100). Truth spans x 5→15, y 0→10 (area 100). Overlap is 5×10 = 50. Union = 100 + 100 − 50 = 150. **IoU = 50/150 = 0.33.**
-- The union denominator is what makes it fair. Plain overlap area would reward drawing one enormous box over the whole image; union punishes exactly that.
-- Now the important bit: **IoU is not the score, it is the threshold.** You pick a cutoff — conventionally **0.5** — and a prediction with IoU ≥ 0.5 against an unmatched ground-truth box becomes a TP; below it, a FP. Each ground-truth box unmatched at the end is a FN.
-- That box counts as a false positive at 0.5 despite being a genuinely reasonable-looking detection. The threshold is a convention, not a law of nature — which is exactly why the field stopped trusting a single one.
-- Once boxes are TP/FP/FN, you are back in confusion-matrix land and every metric you already know applies.`,
-    },
-    {
-      type: 'math',
-      intro: 'IoU, AP, mAP — and the notation everyone quotes without unpacking.',
-      latex: [
-        '\\mathrm{IoU}(A, B) = \\frac{|A \\cap B|}{|A \\cup B|} = \\frac{|A \\cap B|}{|A| + |B| - |A \\cap B|}',
-        '\\mathrm{AP}_c = \\int_0^1 p(r)\\,dr \\;\\approx\\; \\text{area under the precision-recall curve for class } c',
-        '\\mathrm{mAP} = \\frac{1}{C}\\sum_{c=1}^{C} \\mathrm{AP}_c, \\qquad \\mathrm{mAP@[.5{:}.95]} = \\frac{1}{10}\\sum_{\\tau \\in \\{.5,\\, .55,\\, \\dots,\\, .95\\}} \\mathrm{mAP}@\\tau',
-        '\\mathrm{Dice} = \\frac{2|A \\cap B|}{|A| + |B|} = \\frac{2\\,\\mathrm{IoU}}{1 + \\mathrm{IoU}} \\quad \\text{— monotone in IoU, so they never disagree on ranking.}',
-      ],
+1. A model gives these probabilities to the three words that actually appeared: 0.5, 0.5, 0.25. Compute the average surprise in bits and the perplexity.
+2. List all the 1-grams and all the 2-grams of **"a b a b a"**. How many of each are there, and does the L − n + 1 rule agree?
+3. Candidate **"a b c"**, reference **"a b d"**. Compute the clipped 1-gram precision, the clipped 2-gram precision, and BLEU over those two.
+4. Reference summary **"rain is expected tomorrow"**, candidate **"rain tomorrow"**. Compute ROUGE-1 and the 1-gram precision. Which one notices the loss, and why?
+5. A candidate repeats the reference’s first word ten times and adds nothing else. The reference has that word once and is eight words long. Compute the clipped 1-gram precision and the brevity penalty, and say which of the two repairs is doing the work.`,
     },
     {
       type: 'intuition',
-      title: 'mAP, and what mAP@[.5:.95] actually means',
-      md: `Build it in three steps and the acronym stops being scary.
+      title: 'Worked solutions',
+      md: `Check every step, not just the final number.
 
-- Step 1 — **AP for one class**: sort that class's predictions by confidence, walk down the list marking each TP or FP by the IoU rule, and compute the area under the resulting precision-recall curve. One number, one class, all thresholds of confidence.
-- Step 2 — **mAP**: average AP over all classes. The "m" is mean-over-classes. Every class counts equally, so 3 rare classes can sink a model that nails the 77 common ones — a deliberate choice, and one worth naming out loud.
-- Step 3 — the COCO convention: do all of the above at **ten IoU thresholds**, 0.50, 0.55, 0.60, … 0.95, and average those ten numbers. That is **mAP@[.5:.95]**, sometimes just written "mAP" or "AP" in COCO tables.
-- Say it plainly: *"the model's mean average precision, averaged over ten localisation strictness levels from lenient to near-pixel-perfect."*
-- Consequence: mAP@[.5:.95] is always much lower than mAP@0.5 — 0.35 versus 0.60 is a normal pair, not a bug. Comparing a paper's 0.35 against your 0.58 without checking which convention each used is the classic embarrassment.
-- The gap between the two is itself diagnostic: a big gap means you are finding the objects but drawing sloppy boxes.`,
-    },
-    {
-      type: 'note',
-      md: `Two loose ends. **NMS (non-maximum suppression):** a detector fires many overlapping boxes on the same object; NMS keeps the highest-confidence box and deletes every other box overlapping it above an IoU cutoff (typically 0.5–0.7). Without it, nine of ten correct detections would be counted as false positives and precision would collapse — matching is one-to-one, so duplicates are punished. **Segmentation:** the same idea moves from boxes to pixels. Pixel IoU (also called the Jaccard index, and mIoU when averaged over classes) and the **Dice coefficient** are the standard pair; Dice is a monotone transform of IoU, so they rank models identically, but Dice is gentler on small objects and is what medical-imaging papers report — and its soft version is differentiable, so unlike everything else in this module, Dice is also used as a *loss*.`,
+1. log2(0.5) = −1, log2(0.5) = −1, log2(0.25) = −2. Signs flipped and averaged: (1 + 1 + 2)/3 = 4/3 = **1.3333 bits**. Perplexity = 2^1.3333 = **2.5198**. Sanity check: the model sits between "sure of 2 options" and "sure of 4", which matches probabilities of 0.5, 0.5, 0.25.
+2. Five words, so 1-grams: *a, b, a, b, a* — **five** of them, and 5 − 1 + 1 = 5. 2-grams: *a b, b a, a b, b a* — **four**, and 5 − 2 + 1 = 4. The rule agrees. Note that *a b* appears twice; repeats are kept, which is what makes clipping necessary later.
+3. 1-grams: candidate *a, b, c*; the reference contains *a* and *b* but not *c*, so **2/3 = 0.6667**. 2-grams: candidate *a b, b c*; the reference has *a b, b d*, so only *a b* matches: **1/2 = 0.5000**. Geometric average: 0.6667 × 0.5000 = 0.3333, square root = **0.5774**. Lengths are equal, so the brevity penalty is e^(1−1) = 1 and BLEU = **0.5774**.
+4. Reference 1-grams: *rain, is, expected, tomorrow* — four. Surviving in the candidate: *rain* and *tomorrow*, so ROUGE-1 = **2/4 = 0.5000**. Precision: both candidate words are in the reference, so **2/2 = 1.0000**. Recall notices the loss; precision cannot, because the dropped words *is expected* left nothing in the candidate to inspect. Precision only ever examines what is present.
+5. The candidate is ten copies of one word. Clipping credits it only as many times as the reference has it, which is once, so precision = **1/10 = 0.1000**. The candidate has 10 words and the reference 8, so c > r and the brevity penalty is **1.0** — it does nothing at all. Clipping is doing all the work here, which is the point: the two repairs cover different cheats. Length cheating is what the brevity penalty catches; repetition is what clipping catches.`,
     },
     {
       type: 'intuition',
-      title: 'The sentence that makes you sound senior',
-      md: `Every metric here is a proxy. State what yours proxies and where it breaks, and you are already ahead of the room.
+      title: 'Beyond the basics - skip this on your first read',
+      md: `Everything above stands alone. These are names you will hear, one line each, so they are not new when you meet them properly.
 
-- Perplexity proxies "assigns probability to real text" — and is not comparable across tokenizers.
-- BLEU and ROUGE proxy "overlaps with one human's wording" — and cannot see meaning.
-- LLM-judge scores proxy "a human would prefer this" — and inherit the judge's biases.
-- IoU-based metrics proxy "found and localised the object" — under a threshold someone chose.
-- So report the proxy *with* its failure mode, pair one cheap automatic metric with one expensive validated one, and hold a small human-labelled set as the anchor everything else is calibrated against.
-- The senior line: *"No single number is trustworthy here, so I run a cheap deterministic metric per commit, a pinned LLM judge per release, and a human-labelled gold set that validates the judge."*`,
+- **BLEU is a corpus-level metric.** In practice you pool the matched counts and the total counts across the entire test set and divide once, rather than averaging per-sentence BLEU scores. Per-sentence BLEU is very noisy and is often exactly 0, because a short sentence rarely matches any 4-gram at all.
+- **ROUGE-L** is a third ROUGE variant that finds the longest sequence of reference words appearing in the candidate in the same order but not necessarily next to each other, then scores that. It rewards keeping content in order without committing to a fixed n.
+- **BERTScore** replaces exact word matching with similarity between the models’ internal representations of the words, so *postponed* and *moved* count as a partial match. It fixes the paraphrase blindness you saw at the top and still cannot check whether anything is true.
+- **LLM-as-judge** means handing the input, the output, and a written rubric to a strong language model and asking it to score or to pick a winner. It is what actually tracks human preference on open-ended tasks, and it is a separate subject with its own failure modes.
+- **RAG evaluation** asks a different question again — whether every claim in the answer is supported by the documents that were retrieved. Also its own subject.
+- **Bits per character** is perplexity’s chopping-proof cousin: measure surprise per character instead of per word-piece, so two models that split text differently become comparable.`,
     },
   ],
   quiz: [
     {
-      question: 'Cross-entropy H(P, Q) = H(P) + KL(P || Q). What follows for training?',
+      question: 'A model gives probabilities 0.25, 0.25, 0.25, 0.25 to the four words that appeared. What is its perplexity?',
       options: [
-        {
-          text: 'Cross-entropy and KL are unrelated objectives that happen to share a formula',
-          explanation: 'They differ by exactly H(P), the data entropy — that is a very close relationship, not an unrelated one.',
-        },
-        {
-          text: 'Since the data distribution P is fixed, H(P) is a constant, so minimising cross-entropy is exactly minimising KL(P || Q)',
-          explanation: 'Correct. That identity is why cross-entropy is THE default loss: it is the computable form of "make my distribution match the data".',
-        },
-        {
-          text: 'Minimising cross-entropy also drives H(P) to zero',
-          explanation: 'H(P) is a property of the data, not of the model. No amount of training changes it — which is why loss bottoms out near H(P), not at 0.',
-        },
+        { text: '0.25', explanation: 'That is the probability itself. Perplexity is always at least 1.0, so a number below 1 cannot be one.' },
+        { text: '4', explanation: 'Correct. Each word carries log2(0.25) = -2, so the average surprise is 2 bits, and 2 squared is 4 — as unsure as picking blindly among four options at every word.' },
+        { text: '2', explanation: '2 is the average surprise in bits. Perplexity is 2 raised to that, which is 4.' },
       ],
       correct: 1,
     },
     {
-      question: 'Which statement about KL divergence is true?',
+      question: 'How many 2-grams does the sentence "the sun rose early" have?',
       options: [
-        { text: 'It is a distance metric, so KL(P||Q) = KL(Q||P)', explanation: 'Both halves are wrong. It is asymmetric and violates the triangle inequality — never call it a distance.' },
-        { text: 'It can be negative when Q is much broader than P', explanation: 'KL is non-negative for any valid P and Q (Gibbs inequality). Breadth changes the magnitude, never the sign.' },
-        {
-          text: 'It is non-negative, zero only when P = Q, and asymmetric',
-          explanation: 'Correct — the three facts to state. The code showed 0.6323 vs 0.9404 on the same pair, and 0.0000 for KL(P||P).',
-        },
-      ],
-      correct: 2,
-    },
-    {
-      question: 'Model A reports perplexity 12 with a 32k BPE vocabulary; Model B reports 15 with a character-level tokenizer. Which is better?',
-      options: [
-        {
-          text: 'Undetermined — perplexity is per token, so different tokenizations produce numbers that are not comparable',
-          explanation: 'Correct. Character models spread the same text over far more, far easier predictions. Re-evaluate both under identical tokenization, or compare bits-per-character.',
-        },
-        { text: 'Model A, 12 < 15', explanation: 'That comparison assumes both numbers count the same units. They do not — the tokenizer defines the unit.' },
-        { text: 'Model B, because character-level modelling is harder', explanation: 'Difficulty of the task is not the issue; the incomparability of per-token averages is. You cannot rank them from these numbers at all.' },
-      ],
-      correct: 0,
-    },
-    {
-      question: 'You raise β well above 1 in a β-VAE. Samples get blurrier, but interpolating between two latent codes now produces smooth, plausible images. Why?',
-      options: [
-        {
-          text: 'β scales the KL term, so each example\'s latent posterior is pushed harder toward N(0, I) — a cleaner, more continuous, more samplable latent space bought with reconstruction quality',
-          explanation: 'Correct. ELBO = reconstruction − β·KL. Raising β raises the price of straying from the prior, so the encoder gives up detail to comply. Push it too far and you get posterior collapse: the decoder stops using z at all.',
-        },
-        {
-          text: 'β scales the reconstruction term, so the decoder is trained harder and overfits to sharp detail',
-          explanation: 'Backwards on both counts. β multiplies the KL regulariser, not the reconstruction term, and the observed effect is blurrier output — the opposite of a decoder trained harder on detail.',
-        },
-        {
-          text: 'β is the encoder\'s learning rate, so a larger value simply trains the encoder faster',
-          explanation: 'β is a weight inside the objective, not an optimiser setting. It changes what the optimum IS, not how quickly you reach it — which is why it trades one property for another rather than improving both.',
-        },
-      ],
-      correct: 0,
-    },
-    {
-      question: 'Early in GAN training the discriminator rejects every fake, so D(G(z)) ≈ 0.01. Under the ORIGINAL min-max generator loss, what happens, and what is the standard fix?',
-      options: [
-        {
-          text: 'The gradient is enormous, so the generator overshoots — lower its learning rate',
-          explanation: 'The sign of the problem is backwards. The gradient reaching G through the discriminator\'s logit is proportional to D(G(z)) itself, which is 0.01 here — vanishingly small, not enormous.',
-        },
-        {
-          text: 'The gradient reaching G is proportional to D(G(z)) ≈ 0.01, so it nearly vanishes; the fix is the non-saturating form where G maximises log D(G(z)), giving a gradient proportional to 1 − D(G(z)) ≈ 0.99',
-          explanation: 'Correct, and it is the cruellest possible timing: the generator gets no signal exactly when it is worst. Same fixed point, 99x the gradient — which is why every real implementation uses the non-saturating form.',
-        },
-        {
-          text: 'Nothing — the two generator losses are equivalent, so the gradient magnitude is identical either way',
-          explanation: 'They share a fixed point, not a gradient. The two magnitudes coincide only at D = 0.5; at D = 0.01 the run above measured 0.01 versus 0.99, a 99x gap.',
-        },
+        { text: '4', explanation: 'That is the number of 1-grams. Each 2-gram needs a partner to its right, so the last word starts no pair.' },
+        { text: '3', explanation: 'Correct. The pairs are "the sun", "sun rose", "rose early". The rule L - n + 1 gives 4 - 2 + 1 = 3.' },
+        { text: '6', explanation: 'That would be every possible pair of words in any order. n-grams are runs of adjacent words only, in the order they appear.' },
       ],
       correct: 1,
     },
     {
-      question: 'What is the core structural difference between BLEU and ROUGE?',
+      question: 'A candidate outputs "good good good good" against a reference that contains "good" exactly once. What does clipping do to the 1-gram precision?',
       options: [
-        { text: 'BLEU uses n-grams, ROUGE uses embeddings', explanation: 'Both are n-gram overlap metrics. Embedding-based scoring is BERTScore, a different family entirely.' },
-        { text: 'BLEU is for summarisation, ROUGE for translation', explanation: 'Exactly backwards — BLEU came from machine translation, ROUGE from summarisation.' },
-        {
-          text: 'BLEU divides matches by n-grams in the candidate (precision); ROUGE divides by n-grams in the reference (recall)',
-          explanation: 'Correct, and the reason is task shape: a translation must not add, a summary must not omit. BLEU adds a brevity penalty precisely because precision alone rewards being short.',
-        },
-      ],
-      correct: 2,
-    },
-    {
-      question: 'A predicted box covers x 0→10, y 0→10; the true box covers x 5→15, y 0→10. At the standard threshold, how is this prediction counted?',
-      options: [
-        { text: 'True positive — the boxes clearly overlap', explanation: 'Overlap is not the rule. IoU = 50/150 = 0.33, which is below 0.5, so it does not qualify.' },
-        {
-          text: 'False positive — IoU = 50/150 = 0.33, below the 0.5 threshold',
-          explanation: 'Correct. Overlap 50, union 100 + 100 − 50 = 150. And the ground-truth box, left unmatched, also counts as a false negative.',
-        },
-        { text: 'Partial credit of 0.33 toward precision', explanation: 'There is no partial credit. IoU is a threshold that produces a hard TP/FP decision, not a score that gets averaged in.' },
+        { text: 'Nothing — all four words appear in the reference, so precision is 1.0', explanation: 'That is precisely the cheat clipping exists to stop. Without it a model could score perfectly by repeating one safe word.' },
+        { text: 'Credits the word once, giving 1/4 = 0.25', explanation: 'Correct. Credit is capped at the number of times the reference contains that n-gram, so one of the four copies counts and the denominator stays at 4.' },
+        { text: 'Sets the score to zero because the candidate repeats itself', explanation: 'Clipping caps credit, it does not zero it. The candidate did produce one word that genuinely belongs, and it gets credit for exactly that one.' },
       ],
       correct: 1,
     },
     {
-      question: 'A COCO table reports mAP@[.5:.95] = 0.42. What exactly is that number?',
+      question: 'Why does BLEU multiply its n-gram precisions and take a root, instead of just averaging them normally?',
       options: [
-        {
-          text: 'Average precision per class, averaged over classes, then averaged again over the ten IoU thresholds 0.50, 0.55, … 0.95',
-          explanation: 'Correct. Two averages over classes and localisation strictness. It is always well below the same model’s mAP@0.5.',
-        },
-        { text: 'The fraction of objects detected with confidence between 0.5 and 0.95', explanation: 'The range refers to IoU thresholds (localisation strictness), not to confidence scores.' },
-        { text: 'mAP measured on the 50th to 95th percentile of the hardest images', explanation: 'Nothing here is about image difficulty percentiles — .5:.95 is the IoU sweep.' },
+        { text: 'Because multiplying is faster to compute', explanation: 'Speed is not the reason, and the difference is unmeasurable either way.' },
+        { text: 'Because a zero in any one precision then forces the whole score to zero', explanation: 'Correct. A candidate with perfect single words but no correct adjacent pair produces a product of zero. A plain average would give it half marks for word soup.' },
+        { text: 'Because the precisions are on different scales and need normalising', explanation: 'They are all fractions between 0 and 1, so they are already on the same scale.' },
       ],
-      correct: 0,
+      correct: 1,
     },
     {
-      question: 'Your LLM judge consistently prefers whichever answer is longer, even when the shorter one is correct. What is this, and what is the cheapest fix?',
+      question: 'A summary drops "the deadline is monday" from a reference, but everything it does say is taken verbatim from the reference. Which number spots the problem?',
       options: [
-        { text: 'Position bias — randomise the order of the two candidates', explanation: 'Order randomisation fixes position bias, which is a real and separate problem. Length preference survives it untouched.' },
-        { text: 'Self-preference — switch to a judge from a different model family', explanation: 'Self-preference is favouring your own family’s outputs. Changing families does not stop verbosity bias; most judges have it.' },
-        {
-          text: 'Verbosity bias — put explicit length and conciseness criteria in the rubric and compare pairs rather than scoring absolutely',
-          explanation: 'Correct. It is a known, measured bias. A concrete rubric plus pairwise comparison is the cheap mitigation; validating the judge against human labels is the check that proves it worked.',
-        },
+        { text: 'Precision, because the candidate is shorter', explanation: 'Precision divides by the candidate’s own n-grams. Every one of them matches, so it reports 1.0 and sees nothing wrong.' },
+        { text: 'ROUGE, because its denominator is the reference, so the dropped n-grams stay in the denominator and lower the score', explanation: 'Correct. A missing thing leaves no trace in the candidate, so only a score measured against the reference can register the loss.' },
+        { text: 'The brevity penalty', explanation: 'The brevity penalty belongs to BLEU and only scales a precision score by length. It does not look at which content was lost, and ROUGE does not use it at all.' },
       ],
-      correct: 2,
+      correct: 1,
     },
     {
-      question: 'A language model scores perplexity 1.0 on your held-out set. Most likely explanation?',
+      question: 'Two translation systems score 32.4 and 32.8 BLEU on the same test set. What is the right conclusion?',
       options: [
-        { text: 'A genuinely perfect model — celebrate', explanation: 'Perplexity 1.0 means probability 1.0 for every single token. Natural language has irreducible entropy; this is not achievable honestly.' },
-        {
-          text: 'Data leakage — the model has memorised the evaluation text',
-          explanation: 'Correct. Perplexity 1.0 = zero surprise = the model already knows the text. Check the eval set against the training corpus before checking anything else.',
-        },
-        { text: 'The vocabulary is too small', explanation: 'A small vocabulary lowers perplexity somewhat, but never to the floor of 1.0 — that requires certainty on every token.' },
+        { text: 'The second system is better and should ship', explanation: 'A 0.4 gap is typically smaller than the disagreement between two random halves of the same test set. The gap sits inside the measurement noise.' },
+        { text: 'The gap is too small to support a claim either way — BLEU is an alarm for large drops, not evidence for small gains', explanation: 'Correct. Use it to catch a build that fell from 32.4 to 21.0. Do not use it to rank two systems separated by a fraction of a point.' },
+        { text: 'The systems are identical', explanation: 'They may well differ a lot; BLEU simply cannot tell you how, since it prefers a negated sentence to a correct paraphrase.' },
       ],
       correct: 1,
     },
   ],
   interviewQuestions: [
     {
-      question: 'Explain KL divergence and why calling it a "distance" is wrong.',
+      question: 'What is perplexity, and what does a perplexity of 30 mean in plain words?',
       answer:
-        'KL(P || Q) = Σ P(x) log(P(x)/Q(x)) — the expected number of extra bits you pay per event by encoding data that really comes from P using a code built for Q. It is non-negative (Gibbs) and zero only when P = Q. It is not a distance for two reasons: it is asymmetric, KL(P||Q) ≠ KL(Q||P) — on a peaked P versus a uniform Q over 4 outcomes the two directions come out 0.63 and 0.94 bits — and it violates the triangle inequality. That asymmetry is not a defect to apologise for, it is a design choice you exploit: forward KL, the expectation over P, punishes Q for putting no mass where P has some, so Q is mass-covering and blurs across modes (this is what maximum likelihood does); reverse KL, the expectation over Q, only punishes Q where Q itself has mass, so Q is mode-seeking and collapses onto one peak (this is what variational objectives do). If you need a symmetric quantity, use Jensen-Shannon divergence, whose square root is a genuine metric.',
+        'Perplexity is the model’s average surprise on real text, rewritten as a number of choices. You take the probability the model assigned to each word that actually appeared, take the log of each, average them, flip the sign, and raise 2 to that average. A perplexity of 30 means the model was, on average, as unsure as someone picking blindly among 30 equally likely words at every step. Lower is better and the floor is 1.0, which would mean it gave probability 1 to every word it saw. Worked small: probabilities 0.5, 0.25, 0.125, 0.25 give surprises of 1, 2, 3, 2 bits, average 2, so perplexity is 4. Because the underlying combination is a product of probabilities, one shocking word dominates: change that 0.125 to 0.001 and perplexity jumps from 4 to 13.4.',
       isCaseBased: false,
     },
     {
-      question: 'Why do we train classifiers and language models with cross-entropy rather than directly with KL divergence?',
+      question: 'Why can you not compare your model’s perplexity against a perplexity printed in a paper?',
       answer:
-        'Because they are the same optimisation. H(P, Q) = H(P) + KL(P || Q), and during training P is the fixed empirical data distribution, so H(P) is a constant with zero gradient — minimising cross-entropy IS minimising KL(P || Q). Cross-entropy is just the form you can actually compute: it needs only log Q evaluated at the observed labels, whereas writing KL explicitly requires P(x) terms that cancel out anyway. Two things worth adding: the loss floor is not zero but roughly H(P), the data\'s own entropy, which is why a well-trained model plateaus at a positive loss and why you should not chase zero; and the same identity is why perplexity, exp of the average cross-entropy, is a KL-based quality measure in disguise.',
+        'Two reasons, both structural. First, perplexity is measured per word-piece, and models chop text into pieces differently. A model with a larger vocabulary makes fewer, harder predictions over the same text, so its per-piece surprise is not the same quantity as that of a model splitting the same text into twice as many pieces. Change only the chopping and the number moves with no change in quality. Second, perplexity depends entirely on the text you measure it on — a number from a news corpus and a number from a code corpus are unrelated quantities. Perplexity is valid for comparing checkpoints of your own model on your own held-out set, which is the job it is genuinely good at. If you need a cross-model number, bits per character removes the chopping problem, but the corpus problem stays.',
       isCaseBased: false,
     },
     {
-      question: 'Case: a teammate reports "our new LM hits perplexity 8.2 versus the 11.5 baseline — a 29% improvement, ship it." What do you check before agreeing?',
+      question: 'Explain the difference between BLEU and ROUGE, and why each was built the way it was.',
       answer:
-        'Four checks, in order. (1) Tokenizer: if the new model changed vocabulary or tokenization at all, the numbers count different units and the comparison is void — force a re-evaluation under identical tokenization, or compare bits-per-character. (2) Evaluation corpus and protocol: same held-out set, same context-window handling, same treatment of document boundaries and special tokens? Any of these moves perplexity by more than the claimed gain. (3) Contamination: was the eval text in the new model\'s training data? Suspiciously low perplexity is a leakage signal before it is a quality signal. (4) Relevance: perplexity measures probability assigned to reference text — it says nothing about instruction-following, factuality, or safety. Plenty of models with better perplexity produce worse assistant behaviour. The business point: perplexity is a valid internal tracking signal across checkpoints of one model on one corpus, and nearly useless as a cross-model claim. I would gate the ship decision on a task eval and an LLM-judge run against the baseline, with perplexity as supporting evidence only.',
+        'Both count how many n-grams — runs of n adjacent words — the candidate and the reference share. They differ in one place: the denominator. BLEU divides by the candidate’s n-grams, which makes it precision: of what you produced, how much belongs. ROUGE divides by the reference’s n-grams, which makes it recall: of what the human wrote, how much survived. That follows from the tasks. A translation must not add anything, so you police what the candidate contains. A summary must not drop anything, so you police what the reference lost. Worked example: reference "the board approved the merger on friday", candidate "the board approved the merger". Precision is 5/5 = 1.0 and calls the summary flawless; ROUGE-1 is 5/7 = 0.71 and correctly notices the date is gone. BLEU also carries two repairs ROUGE does not need: clipping and a brevity penalty.',
+      isCaseBased: false,
+    },
+    {
+      question: 'What are clipping and the brevity penalty, and which cheat does each one stop?',
+      answer:
+        'They stop two different ways of scoring well without translating. Clipping stops repetition: without it, a candidate of "the the the the the the" has every word present in the reference and scores a perfect 1.0. Clipping caps credit for an n-gram at the number of times the reference contains it, so if the reference has "the" twice, only two of the six copies count and precision falls to 2/6 = 0.33. The brevity penalty stops truncation: outputting just "the mat" gives perfect 1-gram and 2-gram precision on a two-word non-answer. So when the candidate is shorter than the reference, BLEU multiplies by e^(1 - r/c) — with r = 6 and c = 2 that is e to the minus 2, or 0.1353, which destroys the score. Long candidates need no penalty, because every extra unmatched word already enlarges the precision denominator.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Case: your summarisation model’s ROUGE-2 rose from 0.31 to 0.44 after a change, but human reviewers say the summaries got worse. Diagnose it.',
+      answer:
+        'First hypothesis, before asking anything: the model learned to copy. ROUGE measures how many of the reference’s n-grams survive in the candidate, and the most reliable way to make reference n-grams survive is to lift sentences verbatim out of the source document, since the human reference was itself written from that document. Extraction beats abstraction on this metric by construction. The check is cheap and decisive: measure, for each output, the length of the longest run of words copied word-for-word from the source article, and compare the distribution before and after the change. If the copied runs got longer, that is the whole story. Second hypothesis: output length grew. ROUGE is pure recall with no length penalty at all, so a longer summary can only ever score the same or better — a model that pastes three whole paragraphs approaches ROUGE-2 of 1.0. Check mean output length. If either is true, the metric is not broken, it is being maximised. The repair is to stop using recall alone as the target: report a precision-and-recall pair or an F-measure so that padding costs something, cap the output length, and validate against human ratings on a fixed sample before trusting any future move in the number. Said plainly: a 0.13 rise in ROUGE-2 with human ratings falling is the proxy and the goal disagreeing, and when they disagree the humans are the ground truth.',
       isCaseBased: true,
     },
     {
-      question: 'What does BLEU capture, what does it miss, and why is it still everywhere?',
+      question: 'Case: a teammate wants to fine-tune a translation model by directly maximising BLEU. What do you tell them?',
       answer:
-        'It captures clipped n-gram precision (n = 1–4, geometric mean) against one or more references, multiplied by a brevity penalty that stops a model from gaming precision by emitting three confident words. So it measures surface overlap with a human answer. It misses meaning entirely: a perfect paraphrase using different words scores near zero, a sentence with the negation flipped scores nearly as high as the correct one, and word order beyond a 4-gram window is invisible. It is corpus-level — sentence BLEU is very noisy since 4-grams rarely match. It survives because it is cheap, deterministic and comparable across a decade of papers on the same test set, which no neural metric offers. Professional usage: a regression alarm between builds, never proof that system A beats system B on a small gap, and never a training objective — optimising BLEU or ROUGE directly teaches models to copy source text verbatim.',
-      isCaseBased: false,
-    },
-    {
-      question: 'BLEU versus ROUGE — why did the field need both, and what are ROUGE-1, ROUGE-2 and ROUGE-L?',
-      answer:
-        'The split is precision versus recall, driven by task shape. A translation must not add content, so BLEU divides matches by n-grams in the candidate (precision) and bolts on a brevity penalty to stop short outputs from cheating. A summary must not drop content, so ROUGE divides matches by n-grams in the reference (recall). ROUGE-1 is unigram overlap — did the right words survive; ROUGE-2 is bigram overlap and correlates best with human judgement of the three; ROUGE-L uses the longest common subsequence as an F-measure, so it rewards preserving content in the right order without committing to a fixed n and tolerates gaps. Both share the fatal limitation: they count strings, so a factually wrong summary made of the right words scores well and a correct abstractive summary in fresh words scores badly. That is why summarisation evaluation has largely moved to faithfulness checks and LLM judges, with ROUGE kept as the cheap regression tripwire.',
-      isCaseBased: false,
-    },
-    {
-      question: 'Case: you own a customer-support summarisation feature. Design its evaluation, end to end, and say what each layer costs.',
-      answer:
-        'Start from the failure that costs money: a summary that invents a refund promise or drops the customer\'s actual issue. So the primary metric is faithfulness — decompose each summary into atomic claims and check each against the source transcript, reporting the unsupported-claim rate — plus a coverage check on the handful of fields agents actually need (issue, action taken, next step). Layer it by cost: per-commit, ROUGE-2/ROUGE-L against a small frozen reference set purely as a regression tripwire, milliseconds and free, and I would never report those numbers as quality; per-release-candidate, a pinned-version LLM judge running pairwise comparisons against the current production model with a written rubric, randomised order, both orderings averaged — cents per example, hours to run; per-quarter or on any judge upgrade, 300–500 human-labelled examples with an annotation guideline and inter-annotator agreement, used to validate that the judge still tracks human preference. In production, add operational signals no offline metric captures: agent edit rate on the generated summary, and thumbs-down rate. The tradeoff to name: the judge is the only layer that is both affordable and correlated with what users want, and it is the layer most likely to silently drift — hence pinning the version and treating a judge upgrade as invalidating historical numbers.',
+        'Two separate objections, one mechanical and one about the goal. Mechanical: BLEU is built by counting matched n-grams, and a count only changes when a word changes, so as a function of the model’s weights it is a staircase — flat almost everywhere, with jumps. Gradient descent sizes each step by a slope, and a slope of zero produces a step of zero, so you cannot descend it directly. Getting a usable signal requires sampling-based methods that are far noisier and slower than ordinary training. Second, and more important: even if you could, you would be optimising the wrong thing. We can show BLEU scoring a meaning-flipped sentence at 0.7559 and a correct paraphrase at 0.0000 against the same reference. A model pushed hard against that target learns to reproduce the reference’s surface words, which means copying source phrasing and avoiding legitimate rewording. The productive framing: BLEU is a regression alarm you run on every build to catch a large drop, not a target. Train on cross-entropy, and if you want to optimise for judged quality, use human ratings or a judge you have validated against human ratings as the signal.',
       isCaseBased: true,
     },
     {
-      question: 'Sell me on LLM-as-judge, then attack it.',
+      question: 'Why do teams still use BLEU and ROUGE when everyone agrees they miss meaning?',
       answer:
-        'The case for: on open-ended generation there is no reference answer to overlap with, and a strong model given a rubric correlates with human preference far better than any n-gram metric, at cents per example instead of hours of annotator time — that is why it went from a hack to standard practice in about a year. The case against, all measured: position bias (swap the two candidates and verdicts flip a meaningful fraction of the time, with the first slot favoured); verbosity bias (longer, more confident answers win regardless of correctness); self-preference (a judge scores its own family\'s outputs higher); non-determinism, so your metric moves when nothing else did; plus cost and latency at scale. Mitigations, all cheap: pairwise comparison rather than absolute 1–10 scores, since models are much better at ranking than at calibrated scoring; randomise order and evaluate both directions, discarding or flagging pairs where the verdict flips; a concrete rubric instead of "rate the quality"; pin the judge model version and temperature and treat any upgrade as a metric change that invalidates history; and above all validate against a few hundred human labels and report the agreement rate. A judge never checked against humans is a vibe, not a metric.',
+        'Because they have three properties that nothing better has all of. They are cheap — milliseconds on a CPU, so you can run them on every commit. They are deterministic — the same input gives the same number today and in three years, so a build that drops is a real signal and not measurement drift. And they are comparable — a result from 2016 and a result from 2025 on the same test set can be placed side by side, which no metric depending on a model version can promise, because upgrading the judge or the embedding model silently invalidates every historical number. The professional position is not that they are good, it is that they are a stable, free tripwire. Use them to detect that something broke. Use human ratings, or a judge validated against human ratings, to decide that something improved.',
       isCaseBased: false,
     },
     {
-      question: 'Explain IoU and mAP@[.5:.95] to a product manager who asked why detection accuracy is "only 42%".',
+      question: 'Case: two chatbot versions are evaluated. Version A has lower perplexity on held-out chat logs; version B is preferred by 70% of human raters. Which ships?',
       answer:
-        'IoU is how we decide whether a predicted box counts as correct: the overlap area between the predicted and true box divided by their combined area. Perfect match is 1.0, no overlap is 0. We pick a cutoff — historically 0.5 — and anything above it counts as a hit. mAP is then ordinary precision/recall machinery on top: for each object class we sweep the confidence threshold and take the area under its precision-recall curve (average precision), then average across classes. The 42% is mAP@[.5:.95], which does all of that at ten different IoU cutoffs from 0.50 up to 0.95 and averages the ten. So it is not "42% of objects found" — it is an average that includes near-pixel-perfect strictness levels almost nothing passes. The same model is probably around 60–65% at the lenient 0.5 cutoff. The point for the PM: which convention a number uses matters more than the number, so we always state it, and if the business only needs "roughly where is the object", mAP@0.5 is the honest metric to track.',
-      isCaseBased: false,
-    },
-    {
-      question: 'Case: your detector scores mAP@0.5 = 0.62 but mAP@[.5:.95] = 0.31. What does the gap tell you, and what do you do about it?',
-      answer:
-        'The gap is a localisation diagnosis: the model finds the objects (good performance at the lenient threshold) but draws sloppy boxes that fall apart as strictness rises. Classification and recall are fine; box regression is not. Concrete moves, roughly in order of cost: check the annotations first, because loose or inconsistent human boxes cap achievable IoU no matter what the model does — re-measure agreement on a sample before touching the model; then switch the localisation loss from smooth-L1 to an IoU-family loss (GIoU/DIoU/CIoU) that optimises the thing you are measuring; raise input resolution or add higher-resolution feature levels, since small objects dominate the strict-threshold losses; and re-tune the NMS IoU cutoff, since aggressive suppression can delete a well-localised box in favour of a higher-confidence sloppy one. Also break mAP down per class and per object size before doing any of this — the gap is usually concentrated in small objects or one or two classes, and fixing the aggregate blindly wastes a cycle. Business framing: if the product only needs to know an object is present (counting, alerting), the strict metric may be the wrong thing to optimise at all; if a robot has to grasp the object, it is the only metric that matters.',
+        'Version B, and the interesting part is why the two numbers can disagree without either being wrong. Perplexity measures one thing only: the probability the model assigns to text that already exists. It rewards a model for predicting the logged conversations well, and those logs were produced by whatever system was running at the time, so a model that imitates the old system’s style scores well by construction. Nothing in perplexity asks whether an answer is correct, helpful, or safe — those properties are invisible to it. Human preference measures the thing the product is for. So when they conflict, preference wins. Before shipping I would run three checks. First, confirm the preference result is real and not noise: 70% over how many comparisons, with what confidence interval, and were the two versions shown in randomised order. Second, check whether B’s higher perplexity comes from a deliberate change such as instruction tuning, which is known to raise perplexity on generic text while improving answers — that would explain the gap completely. Third, look for a regression that preference ratings would not surface, such as a rise in refusals on harmless requests or a fall in factual accuracy on a fixed probe set. If those are clean, ship B, and keep perplexity as a training-health signal rather than a quality metric.',
       isCaseBased: true,
-    },
-    {
-      question: 'Where does KL divergence show up in modern GenAI training, and what job does it do in each place?',
-      answer:
-        'Four places, same quantity, different jobs. (1) Ordinary training: minimising cross-entropy is minimising KL between the data distribution and the model — the base case everything else generalises. (2) VAEs: the ELBO is reconstruction quality minus KL(q(z|x) || p(z)), which pulls each example\'s latent posterior toward the N(0, I) prior so the latent space is continuous and samplable; weight that term too heavily and you get posterior collapse, where the decoder ignores z entirely. (3) Knowledge distillation: the student minimises KL between the teacher\'s temperature-softened output distribution and its own, so it learns the teacher\'s relative beliefs over wrong answers ("cat 0.7, dog 0.2, fox 0.1"), which carries far more information per example than a hard label — that is why distillation works with less data. (4) RLHF: the PPO objective is reward minus β·KL(policy || reference model), a leash keeping the tuned policy near the SFT model; without it the policy finds degenerate text that maximises the reward model and is useless to humans, and β is the knob trading alignment strength against capability drift. Naming all four shows the concept is one thing, not four coincidences.',
-      isCaseBased: false,
-    },
-    {
-      question: 'What is NMS, and what would happen to your detection metrics without it?',
-      answer:
-        'Non-maximum suppression: a detector fires many overlapping boxes for the same object, so per class you sort by confidence, keep the top box, delete every remaining box whose IoU with it exceeds a cutoff (typically 0.5–0.7), and repeat. Without it, matching is one-to-one — the first box to match a ground-truth object claims it, and every duplicate becomes a false positive — so precision would collapse and mAP with it, on a model whose actual detections were correct. It matters as a tuning knob too: too aggressive a cutoff deletes genuinely separate objects in crowded scenes (hurting recall), too lenient leaves duplicates (hurting precision), and in a strict mAP@[.5:.95] regime it can keep a high-confidence sloppy box over a better-localised lower-confidence one. Worth naming the alternatives: Soft-NMS decays neighbouring scores instead of deleting, and DETR-style set-prediction models drop NMS entirely by learning one-to-one matching in the loss.',
-      isCaseBased: false,
     },
   ],
   flashcards: [
-    { front: 'KL divergence in one line', back: 'KL(P||Q) = Σ P log(P/Q) — the EXTRA bits you pay encoding data from P with a code built for Q. ≥ 0, zero iff P = Q.' },
-    { front: 'KL asymmetry: why it is not a distance, and why that is useful', back: 'KL(P||Q) ≠ KL(Q||P), no triangle inequality (need symmetry → Jensen-Shannon). Forward KL = mass-covering, blurs across modes (MLE). Reverse KL = mode-seeking, collapses to one peak (variational).' },
-    { front: 'Cross-entropy = ?', back: 'H(P, Q) = H(P) + KL(P||Q). P is fixed in training, so minimising cross-entropy IS minimising KL. Loss floor ≈ H(P), not 0.' },
-    { front: 'KL in the wild (3 places)', back: 'VAE ELBO: pull posterior to the prior. Distillation: match the teacher’s softened distribution. RLHF: β·KL leash against the reference model.' },
-    { front: 'ELBO — the two terms', back: 'ELBO = E_q[log p(x|z)] − KL(q(z|x) || p(z)). Term 1: decode z back to x (reconstruction). Term 2: keep the encoder\'s latent near N(0, I) so the space is continuous and samplable. It is a LOWER BOUND on the intractable log p(x); the gap equals KL(q || true posterior). β-VAE scales term 2: higher β = cleaner latent, blurrier output. Failure: posterior collapse — KL wins, decoder ignores z.' },
-    { front: 'GAN non-saturating trick — why', back: 'Original: G minimises log(1 − D(G(z))); gradient through D\'s logit is proportional to D(G(z)), so it VANISHES exactly when G is bad (D(G(z))≈0.01 → grad 0.01). Fix: G maximises log D(G(z)); gradient is proportional to 1 − D(G(z)) ≈ 0.99. Same fixed point, 99x the signal when you need it. Identical at D = 0.5.' },
-    { front: 'Why MSE reconstruction gives blurry images', back: 'Under squared error the optimal output is the CONDITIONAL MEAN of all plausible reconstructions — hedging beats committing, because a sharp guess landing slightly wrong is penalised quadratically twice. The average of many sharp images is a blurry image. Same mass-covering behaviour as forward KL, in pixel space. GANs and diffusion sidestep it by not averaging.' },
-    { front: 'Perplexity', back: 'exp(average negative log-likelihood per token) = exp(cross-entropy). PPL = N means "as confused as picking uniformly among N tokens". Lower better, floor 1.0.' },
-    { front: 'The perplexity comparability trap', back: 'It is per TOKEN and per corpus — different tokenizer or eval set = incomparable number. Valid across your own checkpoints only. Bits-per-character avoids it.' },
-    { front: 'BLEU vs ROUGE — and why weak metrics survive', back: 'BLEU: clipped n-gram PRECISION (candidate denominator) × brevity penalty — translation must not add. ROUGE: n-gram RECALL (reference denominator) — summary must not omit; ROUGE-L uses LCS. Both survive because they are cheap, deterministic and comparable across years: regression alarms, never proof of superiority, never a training objective.' },
-    { front: 'LLM-as-judge: risks and fixes', back: 'Position bias, verbosity bias, self-preference, cost, non-determinism → pairwise comparison, randomised order, explicit rubric, pinned judge version, validated against human labels.' },
-    { front: 'IoU', back: 'overlap area ÷ union area. A THRESHOLD (conventionally 0.5) that turns a box into TP/FP, not a score. 10×10 box vs one shifted 5 right → 50/150 = 0.33 → false positive.' },
-    { front: 'mAP@[.5:.95]', back: 'AP per class (area under its PR curve), averaged over classes, then averaged over IoU thresholds 0.50→0.95 in steps of 0.05. Always far below mAP@0.5; a big gap means sloppy localisation.' },
+    { front: 'Perplexity, in one line', back: '2 raised to the average per-word surprise. Reads as "as unsure as picking blindly among this many options". Probabilities 0.5, 0.25, 0.125, 0.25 give surprises 1, 2, 3, 2 bits, average 2, perplexity 4. Floor is 1.0, lower is better.' },
+    { front: 'Why perplexity punishes one bad word so hard', back: 'It equals 1 divided by the geometric average of the probabilities, and a geometric average is a product. One tiny factor drags the whole product down. Changing 0.125 to 0.001 in a four-word sentence moves perplexity from 4.00 to 13.37.' },
+    { front: 'n-gram', back: 'A run of n adjacent words. "the cat sat on the mat" has six 1-grams, five 2-grams, four 3-grams. A sentence of L words has L - n + 1 n-grams. Pairs and triples are how a word-counting metric sees word order at all.' },
+    { front: 'BLEU vs ROUGE, the one difference', back: 'Same matched-n-gram numerator, different denominator. BLEU divides by the CANDIDATE (precision — a translation must not add). ROUGE divides by the REFERENCE (recall — a summary must not drop).' },
+    { front: 'Clipping', back: 'An n-gram gets credit at most as many times as the reference contains it. Stops "the the the the the the" from scoring 1.0: the reference has "the" twice, so 2/6 = 0.3333.' },
+    { front: 'Brevity penalty', back: 'Multiply BLEU by e^(1 - r/c) when the candidate length c is at most the reference length r, otherwise by 1. Candidate "the mat" against a six-word reference: e^(1-3) = 0.1353, which kills its perfect precisions.' },
+    { front: 'The blind spot, in numbers', back: 'Reference "the meeting was postponed to friday". A correct paraphrase using different words scores BLEU 0.0000. The same sentence with "not" inserted, meaning reversed, scores 0.7559.' },
+    { front: 'Honest use of BLEU and ROUGE', back: 'A regression alarm: a drop from 32.4 to 21.0 means something broke. Not evidence: 32.4 versus 32.8 sits inside the noise. And never a training target — maximising ROUGE teaches a summariser to copy sentences verbatim.' },
   ],
-  mindmapMarkdown: `- GenAI & Vision Metrics
+  mindmapMarkdown: `- Text generation metrics
   - The problem
-    - no confusion-matrix cell for a paragraph
-    - three moves: score probabilities / score vs reference / define "close enough"
-  - KL divergence
-    - extra bits for using Q when truth is P
-    - Σ P log(P/Q)
-    - ≥ 0, zero iff P = Q
-    - asymmetric → NOT a distance
-    - forward = mass-covering (MLE, blurry)
-    - reverse = mode-seeking (variational, sharp)
-    - cross-entropy = H(P) + KL
-    - so minimising CE = minimising KL
-    - loss floor ≈ H(P)
-    - shows up: VAE ELBO, distillation, RLHF β·KL leash
+    - correct paraphrase shares 1 word of 6
+    - flipped meaning shares 6 words of 7
+    - counting words cannot see meaning
   - Perplexity
-    - exp(avg negative log-likelihood per token)
-    - "as confused as choosing among N"
-    - lower better, floor 1.0 (1.0 = leakage)
-    - tail-sensitive: one shocked token doubles it
-    - trap: depends on TOKENIZER and corpus
-    - cross-model quotes are not portable
-    - bits-per-character sidesteps it
-  - Generative-model objectives
-    - autoencoder: reconstruction loss only
-    - MSE for continuous data, per-pixel BCE for [0,1]
-    - bottleneck is what stops the identity function
-    - pixel MSE = conditional mean of plausible outputs -> BLUR
-    - VAE: ELBO = E_q[log p(x|z)] - KL(q(z|x) || p(z))
-    - term 1 reconstruct, term 2 keep latent near N(0, I)
-    - lower bound on intractable log p(x); gap = KL to true posterior
-    - beta-VAE knob: higher beta = cleaner latent, worse reconstruction
-    - posterior collapse: KL wins, decoder ignores z
-    - GAN: min_G max_D E[log D(x)] + E[log(1 - D(G(z)))]
-    - D maximises (real vs fake), G minimises (fool D)
-    - non-saturating trick: G maximises log D(G(z))
-    - gradient D vs 1-D: 0.01 vs 0.99 at D=0.01, 99x
-    - mode collapse; no readable loss curve
-    - hence FID / IS as EXTERNAL metrics
-    - easy to train: AE, VAE (blurry). hard: GAN (sharp)
-  - Text vs reference
-    - BLEU: clipped n-gram precision + brevity penalty
-    - misses meaning, paraphrase, long-range order
-    - ROUGE: recall-oriented overlap
-    - ROUGE-1 / ROUGE-2 / ROUGE-L (LCS)
-    - both survive: cheap, deterministic, comparable
-    - use as regression alarm, never as objective
-  - Modern eval
-    - BERTScore: embedding similarity, fixes paraphrase
-    - LLM-as-judge: best human correlation on open-ended
-    - risks: position, verbosity, self-preference, cost, non-determinism
-    - fixes: pairwise, randomised order, rubric, pinned version
-    - human eval = the ground truth everything approximates
-  - Task-specific GenAI evals
-    - faithfulness / groundedness (RAG)
-    - hallucination rate
-    - refusal rate (both directions)
-  - Computer vision
-    - IoU = intersection / union
-    - threshold (0.5), not a score
-    - 50/150 = 0.33 → false positive
-    - AP = area under PR curve per class
-    - mAP = mean AP over classes
-    - mAP@[.5:.95] = averaged over 10 IoU thresholds
-    - gap vs mAP@0.5 = sloppy localisation
-    - NMS kills duplicate boxes → saves precision
-    - segmentation: pixel IoU / mIoU, Dice
-  - Senior framing
-    - every metric is a proxy — name its failure mode
-    - cheap metric per commit, judge per release, humans as anchor`,
+    - probabilities 0.5 0.25 0.125 0.25
+    - surprises 1 2 3 2 bits, average 2
+    - perplexity = 2^2 = 4
+    - = 1 / geometric average of the probabilities
+    - one shocked word: 4.00 to 13.37
+    - per word-piece, so not comparable across models
+  - KL divergence, briefly
+    - cross-entropy = unavoidable surprise + KL
+    - toy: 0.4690 + 0.5310 = 1.0000 bits
+    - zero only when the two distributions match
+  - n-grams
+    - runs of n adjacent words
+    - "the cat sat on the mat": 6 unigrams, 5 bigrams
+    - L - n + 1 of them
+  - BLEU
+    - precision: divide by the candidate
+    - 1-gram 5/6, 2-gram 3/5, geometric average 0.7071
+    - clipping stops repetition
+    - brevity penalty stops truncation
+  - ROUGE
+    - recall: divide by the reference
+    - ROUGE-1 5/7 = 0.7143, ROUGE-2 4/6 = 0.6667
+    - precision on the same pair says 1.0 and sees nothing
+  - The classic mistakes
+    - 32.4 vs 32.8 BLEU is noise, not a result
+    - maximising ROUGE teaches copying, not summarising
+  - Beyond the basics
+    - corpus-level BLEU, ROUGE-L
+    - BERTScore, LLM-as-judge, RAG faithfulness
+    - bits per character`,
 }
 
 export default m

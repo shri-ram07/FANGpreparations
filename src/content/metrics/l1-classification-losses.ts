@@ -6,199 +6,332 @@ const m: Module = {
   level: 1,
   title: 'Classification Losses: Cross-Entropy, Focal & Hinge',
   whyItMatters:
-    'Every classifier you will ever ship — logistic regression, a gradient-boosted tree, a 70B language model — is minimising one of these. "Why this loss?" is a guaranteed FAANG question, and the answer is never "because it works better". It is a statement about what you assumed and what you decided a mistake costs. This module gives you the derivation, the numbers, and the sentence.',
-  estMinutes: 55,
+    'Every classifier you will ever train is minimising one of these numbers. This module does not hand you the cross-entropy formula. It starts from one honest question about a single prediction, and the formula falls out of the answer in three steps you can check yourself. Then it shows the three common variations on it, with real numbers for each, so that "why this loss?" becomes a question you answer from arithmetic rather than from memory.',
+  assumes: [
+    'You know what a probability is: a number between 0 and 1, where 1 means certain',
+    'You have seen a Python for loop, a list, and a function definition',
+    'You know what a slope is from school maths: how much a number moves when you nudge its input',
+    'Read *Loss vs Metric* first - it explains what a loss is for and why it must be smooth',
+    'No calculus and no machine-learning background is needed. Every term used here is defined here.',
+  ],
+  estMinutes: 47,
   sections: [
     {
       type: 'intuition',
       title: 'Start from the only honest question',
-      md: `A model looks at one row and outputs **p** — its claimed probability that the label is 1. The true label **y** arrives. How do we score that?
+      md: `A model looks at one email and outputs **p = 0.7**. That means: "I think there is a 70% chance this is spam." Then the true label **y** arrives. How do we score that one prediction?
 
-- Do not invent a formula. Ask instead: **how probable was what actually happened, according to the model?**
-- If y = 1, the model assigned probability **p** to what happened.
-- If y = 0, the model assigned probability **1 − p** to what happened.
-- Call that number **p_t** — the probability the model gave *the true label*. It is the only number that matters.
-- A good model makes p_t large on every row. That is the whole objective, stated before any loss exists.`,
+- Do not invent a formula yet. Ask a simpler question: **how probable was what actually happened, according to the model?**
+- If the email really was spam (y = 1), the model had assigned probability **0.7** to what happened. Good.
+- If it really was not spam (y = 0), the model had assigned probability **1 − 0.7 = 0.3** to what happened. Not so good.
+- Give that number a name: **p_t**, the probability the model gave *the true label*. It is 0.7 in the first case and 0.3 in the second.
+- A good model makes p_t large on every row. That is the whole objective, and we have stated it before any loss exists.
+
+Everything in this module is a re-weighting of p_t. If you hold on to one symbol, hold on to that one.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Four words we need before going further',
+      md: `These four appear on every line from here on, so they get defined now rather than used first and glossed later.
+
+- **log** — written \`log(x)\`. It answers "what power do I raise e ≈ 2.718 to, in order to get x?" You need three facts only: log(1) = 0, the log of a number below 1 is negative, and log turns multiplication into addition because log(a·b) = log(a) + log(b). That third fact is the one we will use.
+- **monotonic** — a function is monotonic increasing if a bigger input always gives a bigger output. log is monotonic: 0.7 > 0.3, and log(0.7) = −0.357 > log(0.3) = −1.204. The consequence that matters: **whatever setting makes a quantity largest also makes its log largest**, so you may take a log without changing which answer wins.
+- **sigmoid** — the function \`sigmoid(z) = 1 / (1 + e^(−z))\`. Feed it any number and it hands back something strictly between 0 and 1. sigmoid(0) = 0.5, sigmoid(2) = 0.881, sigmoid(−3) = 0.047. It is how a model turns an unbounded score into a probability.
+- **logit** — the raw score **z** that goes *into* the sigmoid. It is unbounded: it can be 0.3, or −7, or 1002. It is not a probability, it is the number that becomes one. Whenever you read "logit" below, read "the raw score the model printed, before any squashing".
+
+One more consequence of monotonic, worth naming because we lean on it twice: sigmoid is also monotonic, so **the biggest logit always becomes the biggest probability**. Ranking by logits and ranking by probabilities give the same order.`,
     },
     {
       type: 'intuition',
       title: 'From "probability of the data" to a loss, in three moves',
-      md: `Both cases above collapse into one expression: **p^y · (1−p)^(1−y)**. Check it — set y = 1, the second factor becomes (1−p)⁰ = 1, leaving p. Set y = 0 and only (1−p) survives. One formula, no if-statement.
+      md: `Both cases from the first section collapse into one expression: **p^y · (1−p)^(1−y)**. Check it before believing it. Set y = 1: the second factor becomes (1−p)^0 = 1, leaving p. Set y = 0: the first factor becomes p^0 = 1, leaving (1−p). One formula, no if-statement, and it equals p_t every time.
 
-- **Move 1 — multiply.** Rows are assumed independent, so the probability of the *whole dataset* is the product of those terms. That product is the **likelihood**.
-- **Move 2 — take the log.** A product of 10,000 numbers below 1 underflows to 0.0 in float64. Log turns the product into a *sum*, and log is monotonic, so the maximiser does not move.
-- **Move 3 — negate.** Optimisers minimise. Maximising log-likelihood = minimising negative log-likelihood.
-- What you have written after those three moves **is binary cross-entropy**. It was not designed; it fell out.
-- Payoff sentence, memorise it: ***minimising cross-entropy is exactly maximising likelihood.***`,
+- **Move 1 — multiply.** We assume the rows are independent, meaning one email being spam tells you nothing about the next. Under that assumption the probability of the *whole dataset* is the product of those per-row terms. That product has a name: the **likelihood**.
+- **Move 2 — take the log.** Multiplying 10,000 numbers that are all below 1 gives something so small the computer rounds it to exactly 0.0. Log turns that product into a *sum* of 10,000 manageable numbers. And because log is monotonic, the weights that maximise the product also maximise the sum. Nothing was approximated.
+- **Move 3 — negate.** Optimisers walk downhill, so they minimise. Maximising a number is the same as minimising its negative. Divide by N too, so the value does not grow with the dataset.
+- What you have written after those three moves **is binary cross-entropy**. Nobody designed it. It is the answer to "how probable was what actually happened", rearranged so a computer can descend it.
+- The payoff sentence: **minimising cross-entropy is exactly maximising likelihood.** That is why its outputs behave like real probabilities and not just scores.`,
     },
     {
       type: 'math',
-      intro: 'The three moves, in symbols. Nothing is added between lines — only rewritten.',
+      intro: 'The three moves, in symbols. Nothing new is introduced between lines - each one is the previous one rewritten.',
       latex: [
-        'P(y \\mid p) = p^{\\,y}\\,(1-p)^{\\,1-y}, \\qquad y \\in \\{0, 1\\}',
+        'P(y \\mid p) = p^{\\,y}\\,(1-p)^{\\,1-y} \\;=\\; p_t, \\qquad y \\in \\{0, 1\\}',
         '\\mathcal{L} = \\prod_{i=1}^{N} p_i^{\\,y_i}(1-p_i)^{\\,1-y_i} \\;\\;\\xrightarrow{\\;\\log\\;}\\;\\; \\sum_{i=1}^{N}\\Big[\\, y_i \\log p_i + (1-y_i)\\log(1-p_i) \\Big]',
         '\\text{BCE} = -\\frac{1}{N}\\sum_{i=1}^{N}\\Big[\\, y_i \\log p_i + (1-y_i)\\log(1-p_i) \\Big] \\;=\\; -\\frac{1}{N}\\sum_{i=1}^{N} \\log p_{t,i}',
-        'p_t = \\begin{cases} p & \\text{if } y = 1 \\\\ 1-p & \\text{if } y = 0 \\end{cases} \\qquad\\Longrightarrow\\qquad \\text{BCE} = \\text{mean of } -\\log p_t',
       ],
     },
     {
       type: 'note',
-      md: `That last equality is worth more than the first three lines. **Binary cross-entropy is just the average of −log(p_t)** — one number per row, and the label has already been absorbed into p_t. Every loss in this module is a re-weighting of that single quantity. The maximum-likelihood machinery behind it is derived properly in the **Math** subject's MLE section; the sentence to carry out of it is *"choosing a loss is choosing a noise model"*. Cross-entropy is the loss you get when you assume each label was a Bernoulli draw from the model's own predicted probability.`,
+      md: `That last equality is worth more than the two lines above it. **Binary cross-entropy is just the average of −log(p_t)** — one number per row, with the label already absorbed into p_t. Every other loss in this module changes that single quantity in one small way: label smoothing changes what p_t is compared against, focal loss multiplies it by a weight, hinge replaces it with a distance. Learn −log(p_t) properly and the rest is bookkeeping.`,
     },
     {
       type: 'intuition',
       title: 'The shape of the penalty: gentle when right, brutal when confidently wrong',
-      md: `Feed −log(p_t) some numbers. It is not a straight line and that asymmetry is the entire behaviour of the loss.
+      md: `Feed −log(p_t) some numbers. It is not a straight line, and that curve is the entire behaviour of the loss.
 
-- p_t = 0.9 → penalty **0.105**. You were right; you pay almost nothing.
-- p_t = 0.5 → penalty **0.693**. You shrugged; you pay a fixed, modest fee.
-- p_t = 0.1 → penalty **2.303**. Wrong, and you had said so out loud. 22× the first row.
-- p_t = 0.01 → penalty **4.605**. 44× the first row, and it keeps climbing to infinity as p_t → 0.
-- Read the pattern: being *right* is cheap regardless of how right; being *wrong* is cheap only if you hedged.
-- **The expensive quadrant is confident-and-wrong.** Cross-entropy is a loss that punishes arrogance, not error.`,
+- p_t = 0.9 → penalty **0.105**. You were right, and you pay almost nothing.
+- p_t = 0.5 → penalty **0.693**. You shrugged, and you pay a fixed modest fee.
+- p_t = 0.1 → penalty **2.303**. You were wrong, and you had said so out loud. That is 22 times the first row.
+- p_t = 0.01 → penalty **4.605**. 44 times the first row, and it keeps climbing without limit as p_t approaches 0.
+- Read the pattern: being *right* is cheap no matter how right you were. Being *wrong* is cheap only if you had hedged.
+- The expensive corner is **confident and wrong**. Cross-entropy charges for overconfidence, not merely for error.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'The penalty table, computed rather than quoted',
+      code: `import math
+
+for pt in [0.9, 0.5, 0.1, 0.01]:
+    print(pt, round(-math.log(pt), 3))
+
+# ---- real output ----
+# 0.9 0.105
+# 0.5 0.693
+# 0.1 2.303
+# 0.01 4.605`,
+      annotations: {
+        1: 'math is Python\'s standard maths module. math.log(x) is the natural log defined two sections ago.',
+        3: 'Loop over four values of p_t, from "very sure and right" down to "very sure and wrong".',
+        4: 'Compute the penalty for this row and print it. round(x, 3) cuts the float to 3 decimal places so the numbers line up.',
+      },
     },
     {
       type: 'note',
-      md: `This is also why one mislabelled row can dominate a training batch. If the label is wrong and the model is (correctly) confident, p_t ≈ 0.001 and that single row contributes ~6.9 while a thousand well-classified rows contribute ~0.05 each. Practical consequence: **cross-entropy is not robust to label noise**. If your labels come from crowdsourcing or weak supervision, label smoothing (below) or an explicitly robust loss is not optional decoration — it is what stops a handful of bad annotations from steering the model.`,
+      md: `This unbounded tail is also why one mislabelled row can dominate a training batch. If a human typed the wrong label and the model is (correctly) confident, p_t lands near 0.001 and that single row contributes about 6.9, while a thousand well-classified rows contribute about 0.05 each. So **cross-entropy is not robust to label noise**. If your labels came from a crowd of annotators, label smoothing (below) is not decoration — it is what stops a handful of typos from steering the model.`,
     },
     {
       type: 'intuition',
-      title: 'More than two classes: softmax + categorical cross-entropy',
-      md: `The model now emits **K raw scores** (logits) — unbounded, not probabilities. **Softmax** turns them into one: exponentiate each, divide by the sum. Everything positive, everything sums to 1.
+      title: 'Why not squared error? Measure both slopes and see',
+      md: `Squaring the gap between the prediction and the label is the obvious first idea, and it is a bad loss for classification. The reason is mechanical, and we can measure it instead of asserting it.
 
-- With a **one-hot** label, the categorical cross-entropy sum −Σ y_k log p̂_k has K−1 terms multiplied by zero.
-- So only the true class's term survives: the loss is **−log(p̂ of the correct class)**. The same −log(p_t) as before.
-- The other classes are not ignored, though — they sit in softmax's denominator, so pushing one score up pushes every other probability down. Classes *compete*.
-- With K = 2 softmax collapses algebraically to the sigmoid. Binary and categorical cross-entropy are one object, not two.
-- Sanity check for interviews: a random model on K classes has loss ln(K) — **0.693 for 2 classes, 2.303 for 10, 6.908 for 1000**. If your training loss starts near that, initialisation is fine. If it starts at 40, something is broken.`,
+- Take one row whose true label is 1, and let the model be **confidently wrong**: logit z = −6, so p = sigmoid(−6) = **0.0025**. About as wrong as a model gets.
+- Training needs the *slope* of the loss with respect to z: how much does the loss fall if we nudge z upward? A big slope means a big correction.
+- We can measure a slope without calculus, exactly as in *Loss vs Metric*: evaluate the loss at z, evaluate it again at z + 0.001, and divide the change by 0.001.
+- Do that for cross-entropy and for squared error on the same row, and compare the two numbers.
+- Squared error's slope carries a factor of **p·(1−p)**, which at p = 0.0025 is about 0.0025 — so it shrinks the correction by roughly 400 times exactly when the model is most wrong.
+- Cross-entropy is built so that factor cancels. Its slope stays close to −1: full-strength correction, no throttle.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Slope of cross-entropy vs slope of squared error, on the same row',
+      code: `import math
+
+def sigmoid(z):
+    return 1 / (1 + math.exp(-z))
+
+def ce(z):
+    return -math.log(sigmoid(z))
+
+def mse(z):
+    return 0.5 * (sigmoid(z) - 1) ** 2
+
+print('   z   CE slope   MSE slope   ratio')
+for z in [-6.0, 0.0, 2.0]:
+    ce_slope = (ce(z + 0.001) - ce(z)) / 0.001
+    mse_slope = (mse(z + 0.001) - mse(z)) / 0.001
+    print('%5.1f %10.5f %11.5f %7.1f' % (z, ce_slope, mse_slope, ce_slope / mse_slope))
+
+# ---- real output ----
+#    z   CE slope   MSE slope   ratio
+#  -6.0   -0.99753    -0.00246   405.2
+#   0.0   -0.49988    -0.12497     4.0
+#   2.0   -0.11915    -0.01251     9.5`,
+      annotations: {
+        1: 'The standard maths module, for exp and log.',
+        3: 'Define the sigmoid from the earlier section: turn a raw score z into a probability.',
+        4: 'The formula itself. math.exp(-z) is e raised to the power minus z.',
+        6: 'Cross-entropy for a row whose true label is 1. When y = 1 the true-label probability p_t is just sigmoid(z).',
+        7: 'Minus the log of that probability - the only loss formula we have so far.',
+        9: 'Squared error on the same row: how far the probability is from the label, squared.',
+        10: 'The 0.5 in front is the usual convention. It only scales the whole loss, so it cannot change which z is best.',
+        12: 'A header row so the printed columns have names.',
+        13: 'Three settings: confidently wrong (z = −6), completely unsure (z = 0), mildly right (z = 2).',
+        14: 'Rise over run for cross-entropy: how much the loss changed, divided by how far we moved z. That is the slope, measured rather than derived.',
+        15: 'The identical measurement for squared error. Same row, same nudge, different loss.',
+        16: 'Print all four numbers. The %5.1f style codes only fix column widths and decimal places.',
+      },
+    },
+    {
+      type: 'note',
+      md: `Read the first output row. At z = −6 the model is about as wrong as it can be, and cross-entropy answers with a slope of **−0.998** — nearly the strongest correction it ever gives. Squared error answers with **−0.0025**, which is **405 times weaker**. Squared error is quietest precisely where you need it loudest, because the p·(1−p) factor collapses toward zero at both extremes. That is the whole argument, and you just measured it. There is a second, smaller reason: squared error wrapped around a sigmoid has more than one local low point, so descent can settle in the wrong one, while cross-entropy around a sigmoid has exactly one.`,
+    },
+    {
+      type: 'intuition',
+      title: 'More than two classes: softmax and categorical cross-entropy',
+      md: `Now the model must pick one of K classes, say K = 3. It emits **three logits** — three raw scores, for example **2.0, 1.0, 0.0**. They are not probabilities: they do not sit inside 0 to 1 and they do not add to 1. **Softmax** fixes both problems in two steps.
+
+- **Step 1 — exponentiate each score.** e^2.0 = 7.389, e^1.0 = 2.718, e^0.0 = 1.000. Everything is now positive, and the gaps have been stretched.
+- **Step 2 — divide each by the total.** The total is 11.107, giving **0.665, 0.245, 0.090**. All positive, and they sum to 1. That is a probability distribution.
+- The true label is written **one-hot**: a list with 1 in the correct slot and 0 everywhere else, so class 0 is written (1, 0, 0).
+- Categorical cross-entropy is minus the sum over classes of y_k · log p_k. Every term whose y_k is 0 vanishes, so only the true class survives: the loss is **−log(0.665) = 0.408**. The same −log(p_t) as before.
+- The other classes are not ignored, though: they sit in that shared total of 11.107. Pushing one score up pushes every other probability down. The classes **compete**.
+- With K = 2, softmax reduces algebraically to the sigmoid. Binary and categorical cross-entropy are one object seen from two sides, not two different losses.`,
     },
     {
       type: 'math',
-      intro: 'Softmax, categorical cross-entropy, and the log-sum-exp rewrite that makes it computable.',
+      intro: 'Softmax and categorical cross-entropy, with the one-hot collapse made explicit.',
       latex: [
-        '\\hat{p}_k = \\text{softmax}(z)_k = \\frac{e^{z_k}}{\\sum_{j=1}^{K} e^{z_j}} \\qquad \\text{CCE} = -\\sum_{k=1}^{K} y_k \\log \\hat{p}_k \\;\\overset{\\text{one-hot}}{=}\\; -\\log \\hat{p}_c',
-        '\\log \\text{softmax}(z)_k = z_k - \\underbrace{\\Big( M + \\log \\textstyle\\sum_{j} e^{\\,z_j - M} \\Big)}_{\\text{log-sum-exp}}, \\qquad M = \\max_j z_j',
-        '\\text{Subtracting } M \\text{ changes nothing mathematically: } e^{z_k - M} / \\textstyle\\sum_j e^{z_j - M} = e^{z_k}/\\sum_j e^{z_j}.',
+        '\\hat{p}_k = \\text{softmax}(z)_k = \\frac{e^{z_k}}{\\sum_{j=1}^{K} e^{z_j}} \\qquad\\Longrightarrow\\qquad \\sum_k \\hat{p}_k = 1',
+        '\\text{CCE} = -\\sum_{k=1}^{K} y_k \\log \\hat{p}_k \\;\\overset{\\text{one-hot}}{=}\\; -\\log \\hat{p}_c \\quad (c = \\text{the true class})',
+        '\\text{A model that guesses uniformly scores } -\\log\\tfrac{1}{K} = \\log K: \\;\\; 0.693\\,(K{=}2),\\;\\; 2.303\\,(K{=}10),\\;\\; 6.908\\,(K{=}1000).',
       ],
+    },
+    {
+      type: 'note',
+      md: `That third line is a free diagnostic and costs nothing to remember. A freshly initialised model knows nothing, so it should spread its probability evenly and score **log K** on the first batch. If a 10-class model's loss starts near 2.303, the wiring is fine. If it starts at 40, the model is confidently wrong about everything on step one, which points at the initialisation, a missing input normalisation, or the double-softmax bug diagnosed later in this module.`,
     },
     {
       type: 'intuition',
       title: 'The numerical trap: never softmax then log',
-      md: `A confident network produces logits in the hundreds or thousands. \`exp(1000)\` is **inf** in float64. inf/inf is **nan**, and log(nan) is nan — your loss dies before it ever reaches the optimiser.
+      md: `A confident model produces logits in the hundreds or thousands. That breaks the two-step softmax recipe on a real computer, and it breaks it silently.
 
-- The fix is one line: subtract the largest logit before exponentiating. The largest term becomes e⁰ = 1, everything else is smaller, nothing overflows.
-- The ratio is unchanged, so this is not an approximation — it is algebra.
-- In practice you never write it. Pass **logits** to \`nn.CrossEntropyLoss\` / \`BCEWithLogitsLoss\` / \`from_logits=True\` and the framework does the stable fused version.
-- The bug this prevents is the classic: applying softmax in your model's \`forward\` **and** using \`CrossEntropyLoss\` — you softmax twice, the gradients flatten, and training silently underperforms rather than crashing.
-- Interview one-liner: *"logits in, never probabilities — log-sum-exp is stable, softmax-then-log is not."*`,
+- \`e^1000\` is larger than any number a 64-bit float can hold. Python raises an error; a numeric library quietly returns **inf** instead.
+- Then inf divided by inf is **nan** ("not a number"), and log(nan) is nan. Your loss is nan before the optimiser ever sees it, and every weight it touches becomes nan too.
+- The fix is one line: **subtract the largest logit from all of them before exponentiating.** With 1000, 1001, 1002 you get −2, −1, 0.
+- This changes nothing mathematically. Multiplying the top and bottom of a fraction by the same number leaves the fraction alone, and subtracting M inside the exponent is exactly that: e^(z−M) = e^z · e^(−M), and the e^(−M) cancels between top and bottom.
+- Now the largest term is e^0 = 1 and every other term is smaller, so nothing can overflow. Combining this shift with the log is called **log-sum-exp**, and it is what every framework runs internally.
+- In practice you never write it. Hand your model's **logits** to the loss function, not your own softmax output, and the framework uses the stable fused version.`,
     },
     {
       type: 'code',
       lang: 'python',
       title: 'The overflow, and the one-line fix',
-      code: `import numpy as np
+      code: `import math
 
-z = np.array([1000.0, 1001.0, 1002.0])          # logits from a very confident model
+z = [1000.0, 1001.0, 1002.0]
 
-with np.errstate(over='ignore', invalid='ignore'):
-    naive = np.log(np.exp(z) / np.exp(z).sum())  # softmax FIRST, then log
-shift = z - z.max()                              # the whole trick: subtract the max
-stable = shift - np.log(np.exp(shift).sum())     # log-softmax in one pass
+try:
+    total = sum(math.exp(v) for v in z)
+except OverflowError as problem:
+    print('naive denominator failed:', problem)
 
-print('naive  log-softmax:', naive)
-print('stable log-softmax:', stable.round(3))
-print('cross-entropy if class 0 is the label: %.3f' % -stable[0])
+biggest = max(z)
+shifted = [v - biggest for v in z]
+denom = sum(math.exp(v) for v in shifted)
+log_softmax = [v - math.log(denom) for v in shifted]
+print('stable log-softmax:', [round(v, 3) for v in log_softmax])
+print('cross-entropy if class 0 is the true label:', round(-log_softmax[0], 3))
 
 # ---- real output ----
-# naive  log-softmax: [nan nan nan]
-# stable log-softmax: [-2.408 -1.408 -0.408]
-# cross-entropy if class 0 is the label: 2.408`,
+# naive denominator failed: math range error
+# stable log-softmax: [-2.408, -1.408, -0.408]
+# cross-entropy if class 0 is the true label: 2.408`,
       annotations: {
-        6: 'exp(1000) overflows to inf, inf/inf is nan, and the nan propagates through every weight in the backward pass.',
-        7: 'The entire fix. Largest logit becomes 0, so the biggest exponential is exp(0) = 1.',
-        15: 'nan. Not a warning, not a bad number — an unusable loss. This is what a hand-rolled softmax gives you.',
-        16: 'Correct values, from logits a naive implementation cannot even represent.',
+        1: 'The standard maths module, for exp, log, and the overflow error it raises.',
+        3: 'Three logits from a very confident model. Perfectly ordinary numbers on their own.',
+        5: 'try starts a block that Python runs while watching for a specific failure.',
+        6: 'The softmax total, computed naively. "math.exp(v) for v in z" is a generator expression: it produces e raised to v for each v in turn, and sum adds them up.',
+        7: 'except catches that specific failure. "as problem" gives the error object a name so we can print it.',
+        8: 'Print it instead of crashing. A numeric library would return inf here rather than raising, which is worse: nothing tells you anything went wrong.',
+        10: 'max returns the largest logit, 1002.0. This one line is the entire fix.',
+        11: 'A list comprehension: build a new list by subtracting biggest from every entry. The result is [-2.0, -1.0, 0.0].',
+        12: 'The same total as line 6, but on the shifted values, so the largest term is e^0 = 1 and nothing overflows.',
+        13: 'log-softmax in one pass: the shifted score minus the log of the total. Subtracting a log is the same as dividing, then taking the log.',
+        14: 'Print the three results, each rounded to 3 places by a second list comprehension.',
+        15: 'The loss if class 0 were the true label: minus its log-probability. Class 0 had the smallest logit, so it pays the most.',
       },
     },
     {
       type: 'intuition',
       title: 'Label smoothing: stop demanding certainty',
-      md: `Cross-entropy with a hard target of 1.0 can never be satisfied. To drive −log(p) to zero the model needs p = 1, which needs a logit of **+∞**. So it keeps growing weights forever, chasing a target it cannot reach.
+      md: `Cross-entropy with a hard target of 1.0 can never be satisfied. To drive −log(p) all the way to zero the model needs p = 1 exactly, and sigmoid only reaches 1 at a logit of **infinity**. So the model keeps inflating its weights forever, chasing a target it cannot reach, and every prediction drifts toward 0.999.
 
-- **Label smoothing** replaces the hard target with a soft one. The recipe spreads ε mass uniformly over all K classes: the true class gets (1 − ε) + ε/K, every other class gets ε/K. Binary with ε = 0.2 gives **(0.9, 0.1)**; ε = 0.1 would give (0.95, 0.05).
-- Now the loss has a **finite minimum at a finite logit**. With targets 0.9/0.1 the best achievable loss is 0.325, reached at p = 0.9 exactly. Overshooting to p = 0.99 makes the loss *worse* (0.470).
-- Effects: a regulariser on logit magnitude, better **calibration** (the model's 0.9 starts to mean 90%), and typically a small accuracy gain — it is standard in Inception-v3, Transformers, and most ImageNet recipes.
-- Bonus that matters with noisy labels: an occasional wrong label can now only cost so much.
-- **The cost:** you have deliberately destroyed some confidence separation. The model's top scores get compressed toward each other, which hurts anything that consumes the *margin* — knowledge distillation, retrieval by score, and thresholding at extreme operating points.
-- Rule of thumb: ε = 0.1 on a many-class problem. Skip it if you need maximally separated confidence scores downstream.`,
+- **Label smoothing** replaces the hard target with a soft one. Spread a small amount of belief ε evenly over all K classes: the true class keeps **(1 − ε) + ε/K** and each other class gets **ε/K**.
+- Two classes, ε = 0.1: the true class gets 0.9 + 0.05 = **0.95** and the other gets **0.05**. Ten classes, ε = 0.1: the true class gets 0.9 + 0.01 = **0.91** and each of the nine others gets **0.01**. Check that they still sum to 1 in both cases.
+- Now the loss has a **finite lowest value at a finite logit**. With targets 0.95 and 0.05 the best possible loss is **0.1985**, reached exactly at p = 0.95. Overshooting to p = 0.99 makes the loss *worse*: 0.2398.
+- Effects: it holds the logits to a sensible size, it improves **calibration** (the model's 0.9 starts to mean 90% rather than 99%), and it limits how much a single mislabelled row can cost.
+- The cost, which is real: you have deliberately compressed the gap between the top scores. Anything downstream that reads that gap — ranking items by score, or thresholding at a very extreme confidence — loses information.
+- Rule of thumb: ε = 0.1 when you have many classes or noisy labels. Skip it when you need maximally separated confidence scores.`,
     },
     {
       type: 'math',
-      intro: 'The smoothed target, and why the loss now has a floor.',
+      intro: 'The smoothed target and the floor it creates. Check both arithmetic examples against the section above.',
       latex: [
-        'y^{\\text{LS}}_k = (1 - \\varepsilon)\\, y_k + \\frac{\\varepsilon}{K} \\qquad (\\varepsilon = 0.1,\\; K = 10 \\;\\Rightarrow\\; 0.91 \\text{ true},\\; 0.01 \\text{ each other})',
-        '\\varepsilon = 0.1,\\; K = 2 \\;\\Rightarrow\\; (0.95,\\, 0.05). \\qquad \\varepsilon = 0.2,\\; K = 2 \\;\\Rightarrow\\; (0.9,\\, 0.1) \\;\\text{— the pair used below.}',
-        '\\min_{p}\\; -\\Big[\\, 0.9 \\log p + 0.1 \\log(1-p) \\Big] \\;=\\; 0.325 \\quad\\text{at } p = 0.9',
-        '\\text{Hard targets: the minimiser is } p = 1 \\Leftrightarrow z = +\\infty. \\text{ Smoothed: a finite logit is optimal.}',
+        'y^{\\text{LS}}_k = (1 - \\varepsilon)\\, y_k + \\frac{\\varepsilon}{K}',
+        '\\varepsilon = 0.1,\\; K = 2 \\;\\Rightarrow\\; (0.95,\\, 0.05). \\qquad \\varepsilon = 0.1,\\; K = 10 \\;\\Rightarrow\\; 0.91 \\text{ true},\\; 0.01 \\text{ each other.}',
+        '\\min_{p}\\; -\\Big[\\, 0.95 \\log p + 0.05 \\log(1-p) \\Big] \\;=\\; 0.1985 \\quad\\text{at } p = 0.95 \\;\\; (\\text{a finite logit } z = 2.944)',
       ],
     },
     {
       type: 'intuition',
-      title: 'Focal loss: when 99.9% of your rows are boring',
-      md: `Object detection reality: a single-stage detector scores ~100,000 candidate boxes per image and maybe 20 contain an object. The other 99,980 are trivially-classified background.
+      title: 'Focal loss: when almost every row is already easy',
+      md: `Imagine a dataset where the interesting class is very rare — one row in a thousand — and the other 999 are not merely common, they are **obvious**. The model separates them correctly after the first epoch. Fraud among ordinary card swipes, a defect among clean parts, one relevant document among a million.
 
-- Each easy background box has p_t ≈ 0.99, so cross-entropy charges it only 0.010 — *individually* negligible.
-- But 99,980 × 0.010 = 1,000, while 20 hard boxes at 2.3 each contribute 46. **The easy majority owns 95% of the gradient.**
-- The model is not confused; it is *drowned*. It spends its capacity getting already-correct background slightly more correct.
-- **Focal loss** fixes it with one multiplier: scale each row's cross-entropy by **(1 − p_t)^γ**.
-- p_t = 0.99, γ = 2 → multiplier 0.0001. That row is now worth 1/10,000 of what it was.
-- p_t = 0.1 (hard, wrong) → multiplier 0.81. The hard rows keep almost everything.
-- It is a **soft, continuous hard-example miner** — no sampling, no ratios, no discarded data, one extra term in the loss. From the RetinaNet paper (Lin et al., 2017), which used it to make a one-stage detector match two-stage accuracy.`,
+- Each easy row is cheap on its own: at p_t = 0.99, cross-entropy charges only **0.010**.
+- But there are so many of them. A thousand easy rows at 0.010 contribute 10.0, while ten genuinely hard rows at 1.204 each contribute 12.0. The easy majority is roughly half the total signal despite being individually trivial.
+- Scale that up. At 100,000 easy rows against 20 hard ones, the easy side owns well over 95% of the total. The model is not confused, it is **outvoted**. It spends its capacity making already-correct rows slightly more correct.
+- **Focal loss** fixes this with one multiplier: scale each row's cross-entropy by **(1 − p_t)^γ**, where γ (gamma) is usually 2.
+- p_t = 0.99 → multiplier (0.01)² = **0.0001**. That row now counts for one ten-thousandth of what it did.
+- p_t = 0.1 → multiplier (0.9)² = **0.81**. The hard rows keep nearly everything.
+- So focal loss is a volume knob that turns itself down as a row becomes easy. Nothing is sampled, nothing is discarded, and there is one extra term in the loss.`,
     },
     {
       type: 'math',
-      intro: 'Focal loss. The whole idea is the factor in front of the cross-entropy you already have.',
+      intro: 'Focal loss. The whole idea is the factor sitting in front of the cross-entropy you already have.',
       latex: [
-        '\\text{FL}(p_t) = -\\alpha_t\\,(1 - p_t)^{\\gamma}\\,\\log(p_t), \\qquad \\gamma \\ge 0,\\;\\; \\alpha_t \\in (0, 1)',
-        '\\gamma = 0 \\;\\Longrightarrow\\; \\text{FL} = \\text{cross-entropy}. \\quad \\text{RetinaNet default: } \\gamma = 2,\\; \\alpha = 0.25.',
+        '\\text{FL}(p_t) = -\\,(1 - p_t)^{\\gamma}\\,\\log(p_t), \\qquad \\gamma \\ge 0',
+        '\\gamma = 0 \\;\\Longrightarrow\\; (1-p_t)^0 = 1 \\;\\Longrightarrow\\; \\text{FL} = \\text{plain cross-entropy}. \\quad \\text{The usual choice is } \\gamma = 2.',
         '\\gamma = 2:\\quad p_t = 0.99 \\to \\times 0.0001, \\quad p_t = 0.9 \\to \\times 0.01, \\quad p_t = 0.5 \\to \\times 0.25, \\quad p_t = 0.1 \\to \\times 0.81',
       ],
     },
     {
-      type: 'note',
-      md: `**γ and α do different jobs — do not conflate them.** **γ (focusing)** down-weights by *how easy the example is*, regardless of class; γ = 0 is plain cross-entropy, γ = 2 is the standard, γ > 5 starves the model of signal because even moderately-hard rows get crushed. **α (balancing)** down-weights by *which class it is* — a plain class weight, exactly what \`class_weight='balanced'\` does. Counter-intuitively RetinaNet uses α = 0.25 on the *rare* foreground class: γ has already suppressed the easy background so hard, that the usual "boost the minority" weight would now overcorrect. That interaction is the detail interviewers probe.`,
+      type: 'code',
+      lang: 'python',
+      title: 'Who owns the loss: 1000 easy rows against 10 hard ones',
+      code: `import math
+
+easy = [0.95] * 1000
+hard = [0.30] * 10
+bce_easy = sum(-math.log(pt) for pt in easy)
+bce_hard = sum(-math.log(pt) for pt in hard)
+foc_easy = sum((1 - pt) ** 2 * -math.log(pt) for pt in easy)
+foc_hard = sum((1 - pt) ** 2 * -math.log(pt) for pt in hard)
+print('easy rows own %.1f%% of the BCE total' % (100 * bce_easy / (bce_easy + bce_hard)))
+print('easy rows own %.1f%% of the focal total' % (100 * foc_easy / (foc_easy + foc_hard)))
+
+# ---- real output ----
+# easy rows own 81.0% of the BCE total
+# easy rows own 2.1% of the focal total`,
+      annotations: {
+        1: 'The maths module, for log.',
+        3: '[0.95] * 1000 repeats the one-item list a thousand times, giving 1000 rows the model already gets right with p_t = 0.95.',
+        4: 'Ten rows it finds difficult: it gives the true label only 30% probability.',
+        5: 'Total plain cross-entropy from the easy rows. Each term is small, and there are a thousand of them.',
+        6: 'Total plain cross-entropy from the ten hard rows.',
+        7: 'The same easy rows under focal loss: each term multiplied by (1 − p_t) squared, which is 0.0025 here.',
+        8: 'The same hard rows under focal loss: multiplied by (1 − 0.30) squared = 0.49, so most of the penalty survives.',
+        9: 'What share of the total signal the easy rows own under cross-entropy. %.1f%% prints one decimal place and then a literal percent sign.',
+        10: 'The same share under focal loss. Same data, same model, same predictions - only the loss changed.',
+      },
     },
     {
-      type: 'intuition',
-      title: 'Focal loss versus resampling and class weights',
-      md: `The **ML** subject's imbalance module ranks the three classic fixes: threshold moving, class weights, resampling. Focal loss is a fourth option, and it is not always the right one.
-
-- Class weights split rows by **label**. Focal splits them by **difficulty**. Those are different axes, and difficulty is usually the one you actually meant.
-- Prefer **focal** when the negatives are overwhelming *and* mostly trivial: dense detection, per-pixel segmentation, retrieval with in-batch negatives, ad-click models with billions of impressions.
-- Prefer **class weights or threshold moving** on ordinary tabular imbalance (1% fraud, 100k rows). They are one keyword argument, they do not need tuning, and focal's γ is another hyperparameter to search.
-- Never reach for focal to fix **label noise**: a mislabelled row looks exactly like a hard example, so focal *amplifies* it. That is its main failure mode.
-- Honest caveat: focal loss decalibrates probabilities badly. If a downstream system consumes the score as a probability, you will need to recalibrate.
-- One-line answer: *"class weights ask which class, focal asks how hard — I use focal when the imbalance is between easy and hard, not between labels."*`,
+      type: 'note',
+      md: `Two honest warnings about focal loss, both worth more than the formula. **First: never reach for it when your labels are noisy.** A mislabelled row looks exactly like a hard row — low p_t — so focal loss turns its volume *up*. It amplifies precisely the rows you wish it would ignore. **Second: it breaks calibration.** Once rows have been reweighted, the output is no longer maximising likelihood, so a score of 0.7 no longer means 70%. If something downstream reads the score as a probability, you must recalibrate afterwards. For ordinary imbalance on tabular data — 1% fraud in 100,000 rows, clean labels — plain class weights and moving your decision threshold are the cheaper first move, and often the whole fix.`,
     },
     {
       type: 'intuition',
       title: 'Hinge loss: the margin, not the probability',
-      md: `Switch to labels **y ∈ {−1, +1}** and let the model output a raw score **f(x)**. The hinge loss is **max(0, 1 − y·f(x))**. Read it as a demand, not a formula.
+      md: `Hinge loss stops talking about probabilities entirely. Write the labels as **y = +1 or y = −1**, and let the model output a raw score **f(x)** that can be any number.
 
-- y·f(x) > 0 means "correct side of the boundary". Not enough.
-- Hinge pays nothing only once **y·f(x) ≥ 1** — correct *and* at least a full margin's distance clear of the boundary.
-- Anything short of that is charged, **linearly**, by how far short it fell. Wrong side by 3 → penalty 4.
-- The consequence that defines SVMs: points comfortably past the margin have **exactly zero** loss and therefore **exactly zero** gradient. Delete them and the model is unchanged.
-- The points that remain — on or inside the margin — are the **support vectors**. Sparsity is not a trick bolted on; it is what a loss with a flat zero region does.
-- Compare cross-entropy: −log(p_t) is *never* zero. Every point pulls forever, however tiny. That is why logistic regression has no support vectors.`,
+- First define **margin**. The model's decision boundary is where f(x) = 0; positives should sit above it, negatives below. The margin is the empty strip you insist on keeping on either side of that boundary, so the two groups are not merely separated but separated with room to spare. Hinge loss fixes the width of that strip at 1.
+- The quantity to watch is **y · f(x)**. If the label and the score agree in sign, this is positive; if they disagree, it is negative. It packs "which side?" and "how far?" into one number.
+- The loss is **max(0, 1 − y·f(x))**. Read it as a demand: *be correct, and clear the boundary by at least 1.*
+- y·f(x) = 2.0 → loss max(0, −1) = **0**. Past the margin. Nothing is owed.
+- y·f(x) = 0.4 → loss **0.6**. Correct side, but inside the strip, so it is still charged.
+- y·f(x) = −3.0 → loss **4.0**. Wrong side by 3, charged **in a straight line** by how far short it fell.
+- The consequence that defines support vector machines: points comfortably past the margin have exactly zero loss and therefore exactly zero slope. Delete them from the dataset and the trained model does not change at all. The points that remain — on or inside the strip — are the **support vectors**.
+- Contrast with cross-entropy, which is **never** exactly zero: −log(0.999) is still 0.001. Every point keeps pulling forever, which is why logistic regression has no support vectors.`,
     },
     {
       type: 'math',
-      intro: 'Hinge, squared hinge, and the zero condition.',
+      intro: 'Hinge loss and its zero condition. Compare the last line with the never-zero behaviour of minus log p_t.',
       latex: [
         '\\ell_{\\text{hinge}}\\big(y, f(x)\\big) = \\max\\!\\big(0,\\; 1 - y\\,f(x)\\big), \\qquad y \\in \\{-1, +1\\}',
-        '\\ell_{\\text{sq-hinge}} = \\max\\!\\big(0,\\; 1 - y\\,f(x)\\big)^{2} \\quad \\text{— smooth at the kink, but punishes outliers quadratically.}',
-        '\\ell = 0 \\iff y\\,f(x) \\ge 1 \\quad\\Longrightarrow\\quad \\text{zero gradient} \\;\\Longrightarrow\\; \\text{that point is not a support vector.}',
+        '\\ell = 0 \\iff y\\,f(x) \\ge 1 \\quad\\Longrightarrow\\quad \\text{zero slope} \\;\\Longrightarrow\\; \\text{this point does not affect the model at all.}',
+        '\\text{Cross-entropy: } -\\log p_t > 0 \\text{ for every } p_t < 1, \\text{ and } p_t = 1 \\text{ is unreachable.}',
       ],
     },
     { type: 'visual', component: 'PointerBoxDiagram', props: {
@@ -208,7 +341,7 @@ print('cross-entropy if class 0 is the label: %.3f' % -stable[0])
       rightLabel: 'what it pays',
       frames: [
         {
-          note: 'Four predictions, the four quadrants. Nothing charged yet — just how much probability each one put on the correct answer.',
+          note: 'Four predictions covering the four situations. Nothing is charged yet - this is only how much probability each one put on the correct answer.',
           stack: [
             { name: 'A confident-right', value: 'p_t = 0.95', to: 'a' },
             { name: 'B unsure-right', value: 'p_t = 0.60', to: 'b' },
@@ -223,7 +356,7 @@ print('cross-entropy if class 0 is the label: %.3f' % -stable[0])
           ],
         },
         {
-          note: 'Cross-entropy = -log(p_t). D pays 59x what A pays. But notice A still pays something — cross-entropy never reaches zero.',
+          note: 'Cross-entropy = -log(p_t). D pays 59 times what A pays. But notice A still pays something: cross-entropy never reaches zero.',
           stack: [
             { name: 'A confident-right', value: 'p_t = 0.95', to: 'a' },
             { name: 'B unsure-right', value: 'p_t = 0.60', to: 'b' },
@@ -238,7 +371,7 @@ print('cross-entropy if class 0 is the label: %.3f' % -stable[0])
           ],
         },
         {
-          note: 'Focal, gamma = 2: multiply each row by (1 - p_t)^2. A shrinks 400x, D barely moves. The ratio D:A explodes from 59x to over 21,000x.',
+          note: 'Focal, gamma = 2: multiply each row by (1 - p_t) squared. A shrinks 400-fold, D barely moves. The gap between D and A grows from 59x to over 21,000x.',
           stack: [
             { name: 'A confident-right', value: 'x (1-0.95)^2 = 0.0025', to: 'a' },
             { name: 'B unsure-right', value: 'x (1-0.60)^2 = 0.16', to: 'b' },
@@ -253,7 +386,7 @@ print('cross-entropy if class 0 is the label: %.3f' % -stable[0])
           ],
         },
         {
-          note: 'Hinge on the margin score y*f(x). A is past the margin, so it pays EXACTLY zero — it has no gradient and can be deleted. Cross-entropy charged it 0.051 forever.',
+          note: 'Hinge, on the margin score y*f(x). A is past the margin so it pays EXACTLY zero: no slope, and deleting it changes nothing. Cross-entropy charged it 0.051 forever.',
           stack: [
             { name: 'A confident-right', value: 'y*f = 2.0', to: 'a' },
             { name: 'B unsure-right', value: 'y*f = 0.4', to: 'b' },
@@ -271,217 +404,115 @@ print('cross-entropy if class 0 is the label: %.3f' % -stable[0])
     } },
     {
       type: 'note',
-      md: `Compare frames 2 and 4 on row **D**. Cross-entropy charges 2.996 and would charge 4.6 at p_t = 0.01, 6.9 at 0.001 — it grows without bound. Hinge charges 4.0 and grows only *linearly*, so a single catastrophic outlier can drag a cross-entropy model much harder than a hinge model. That is hinge's quiet robustness advantage. Frame 3 is the opposite trade: focal deliberately widens the gap between easy and hard until the easy rows effectively stop existing.`,
+      md: `Compare frames 2 and 4 on row **D**. Cross-entropy charges 2.996, and would charge 4.6 at p_t = 0.01 and 6.9 at 0.001 — it grows without limit. Hinge charges 4.0 and grows only in a straight line, so one catastrophic outlier drags a cross-entropy model much harder than a hinge model. That is hinge's quiet robustness advantage, and the price is that its output is a score with no probability meaning attached.`,
     },
     {
       type: 'code',
       lang: 'python',
-      title: 'BCE, focal and hinge on the same six predictions',
-      code: `import numpy as np
+      title: 'All three losses on the same six predictions',
+      code: `import math
 
-y = np.array([1, 1, 1, 0, 0, 0])                  # true labels
-z = np.array([3.0, 1.2, 0.3, -3.0, -0.3, 2.5])    # raw model scores (logits)
-p = 1 / (1 + np.exp(-z))                          # sigmoid -> P(class 1)
-pt = np.where(y == 1, p, 1 - p)                   # probability given to the TRUE label
+y = [1, 1, 1, 0, 0, 0]
+z = [3.0, 1.2, 0.3, -3.0, -0.3, 2.5]
 
-bce = -np.log(pt)                                 # cross-entropy, per sample
-focal = (1 - pt) ** 2 * bce                       # focal loss, gamma = 2
-hinge = np.maximum(0, 1 - (2 * y - 1) * z)        # SVM hinge, labels mapped to +-1
-
-print(' y      z    p_t     BCE   focal  x-mult   hinge')
-for i in range(len(y)):
-    print('%2d %6.1f %6.3f %7.3f %7.3f %7.3f %7.3f'
-          % (y[i], z[i], pt[i], bce[i], focal[i], focal[i] / bce[i], hinge[i]))
-
-pt_big = np.r_[np.full(1000, 0.95), np.full(10, 0.30)]   # 1000 easy + 10 hard
-b, f = -np.log(pt_big), (1 - pt_big) ** 2 * -np.log(pt_big)
-print('1000 easy + 10 hard -> easy rows own %.1f%% of BCE, but %.1f%% of focal'
-      % (100 * b[:1000].sum() / b.sum(), 100 * f[:1000].sum() / f.sum()))
+print(' y      z    p_t     BCE   focal   hinge')
+for i in range(6):
+    p = 1 / (1 + math.exp(-z[i]))
+    pt = p if y[i] == 1 else 1 - p
+    bce = -math.log(pt)
+    focal = (1 - pt) ** 2 * bce
+    signed = 1 if y[i] == 1 else -1
+    hinge = max(0.0, 1 - signed * z[i])
+    print('%2d %6.1f %6.3f %7.3f %7.3f %7.3f' % (y[i], z[i], pt, bce, focal, hinge))
 
 # ---- real output ----
-#  y      z    p_t     BCE   focal  x-mult   hinge
-#  1    3.0  0.953   0.049   0.000   0.002   0.000
-#  1    1.2  0.769   0.263   0.014   0.054   0.000
-#  1    0.3  0.574   0.554   0.100   0.181   0.700
-#  0   -3.0  0.953   0.049   0.000   0.002   0.000
-#  0   -0.3  0.574   0.554   0.100   0.181   0.700
-#  0    2.5  0.076   2.579   2.202   0.854   3.500
-# 1000 easy + 10 hard -> easy rows own 81.0% of BCE, but 2.1% of focal`,
+#  y      z    p_t     BCE   focal   hinge
+#  1    3.0  0.953   0.049   0.000   0.000
+#  1    1.2  0.769   0.263   0.014   0.000
+#  1    0.3  0.574   0.554   0.100   0.700
+#  0   -3.0  0.953   0.049   0.000   0.000
+#  0   -0.3  0.574   0.554   0.100   0.700
+#  0    2.5  0.076   2.579   2.202   3.500`,
       annotations: {
-        6: 'One line collapses both label cases. Everything after this is a function of p_t alone.',
-        9: 'Focal is literally cross-entropy times (1-p_t)^2. Two characters of code, an entire paper.',
-        10: '2*y-1 maps {0,1} to {-1,+1}; hinge needs the signed margin, not a probability.',
-        29: 'The disaster row: the model gave the true label only 7.6%. BCE charges 2.579 against 0.049 for an easy row — 53x.',
-        30: 'The punchline. Same data, same model: cross-entropy hands 81% of the gradient to rows it already gets right; focal hands them 2.1%.',
+        1: 'The maths module, for exp and log.',
+        3: 'Six true labels, written as 0 and 1.',
+        4: 'The six raw scores the model produced. Positive leans towards label 1, negative towards label 0.',
+        6: 'A header row so the six printed lines have column names.',
+        7: 'Walk through the six rows one at a time. range(6) gives i = 0, 1, 2, 3, 4, 5.',
+        8: 'Sigmoid: turn this row\'s raw score into the probability that the label is 1.',
+        9: 'The probability given to the TRUE label. "a if test else b" is Python\'s conditional expression: it becomes p when the label is 1 and 1 − p when it is 0.',
+        10: 'Cross-entropy for this row: minus the log of that number.',
+        11: 'Focal loss is literally cross-entropy multiplied by (1 − p_t) squared. Two characters of maths, one whole paper.',
+        12: 'Hinge wants labels written as +1 and −1, so translate 1 to +1 and 0 to −1.',
+        13: 'The hinge formula, applied to the raw score directly. No sigmoid appears - hinge never asks for a probability.',
+        14: 'Print the row. The format codes only control column width and decimal places.',
       },
     },
     {
       type: 'note',
-      md: `Read the \`x-mult\` column — that is focal's multiplier per row. The two easy rows are scaled by **0.002** (500× cheaper); the confidently-wrong row keeps **0.854** of its penalty. Then read the last line: at a realistic ratio of 1000 easy to 10 hard, cross-entropy spends **81%** of its signal on rows that are already correct while focal spends **2.1%**. Nothing about the data, the model, or the sampling changed — only the loss.`,
+      md: `Read the last output row, the confident mistake: the model gave the true label only **7.6%**. Cross-entropy charges 2.579 against 0.049 for an easy row — 53 times more. Focal keeps 2.202 of that 2.579, about 85% of it, while cutting the easy rows to 0.000. And hinge charges 3.500, growing in a straight line rather than a curve. Three losses, one set of predictions, three different opinions about which rows deserve attention.`,
     },
     {
       type: 'intuition',
-      title: 'Cross-entropy vs hinge: probabilities or margins, pick one',
-      md: `They optimise genuinely different objects, and the difference shows up the moment someone downstream asks "how sure are you?".
+      title: 'Worked case: five spam predictions, computed by hand',
+      md: `A spam model scores five emails. Its probabilities that each is spam are **0.90, 0.80, 0.60, 0.30, 0.05**, and the truth is **spam, spam, not-spam, not-spam, spam** — written as **1, 1, 0, 0, 1**.
 
-- **Cross-entropy** produces a **calibrated probability**. 0.7 means roughly "70% of rows like this are positive" — because minimising it is maximum likelihood.
-- **Hinge** produces a **score**, not a probability. Its optimum only cares that y·f ≥ 1; the actual value carries no distributional meaning. SVMs need Platt scaling bolted on to fake probabilities.
-- That matters whenever the output feeds a **threshold, an expected-cost calculation, or another model**. "Refund if fraud probability × ₹8,000 > ₹50 review cost" needs a real probability.
-- **Hinge is sparse** (zero loss past the margin → support vectors → a compact model). Cross-entropy touches every point forever.
-- **Hinge is robust to extreme outliers** (linear growth); cross-entropy's log growth is unbounded.
-- **Hinge has a kink at the margin** — non-differentiable at one point, so classic SVMs are solved by quadratic programming, not plain gradient descent. Squared hinge smooths it at the price of outlier sensitivity.`,
-    },
-    {
-      type: 'note',
-      md: `**Why cross-entropy dominates deep learning, in four reasons.** (1) Probabilities compose — you can multiply them, threshold them, feed them to a downstream expected-cost decision; margins cannot. (2) Its gradient is exactly (p̂ − y)·x, which flows cleanly through arbitrarily deep stacks; hinge contributes *nothing* from every satisfied point, so a deep net gets zero signal from most of its batch late in training. (3) It extends to K classes in one line via softmax; multi-class hinge needs an awkward one-vs-rest or Crammer-Singer construction. (4) Sparsity — hinge's headline benefit — is worthless when you are training 100M dense parameters anyway. Hinge earns its place where the margin *is* the product: SVMs on small-to-mid tabular data, and \`SGDClassifier(loss='hinge')\` on very wide sparse text features. Depth and detail live in the **ML** subject's SVM module.`,
-    },
-    {
-      type: 'intuition',
-      title: 'And never MSE — the one-line version',
-      md: `Squared error on 0/1 labels is the classic beginner move. It is wrong for a reason worth being able to state in ten seconds.
+- **Step 1 — write down p_t for each row.** Rows 1, 2 and 5 have y = 1, so p_t is p itself: 0.90, 0.80, 0.05. Rows 3 and 4 have y = 0, so p_t is 1 − p: 0.40 and 0.70.
+- **Step 2 — take minus the log of each.** 0.1054, 0.2231, 0.9163, 0.3567, **2.9957**. The sum is 4.5972, so cross-entropy is **4.5972 / 5 = 0.9194**.
+- **Step 3 — see who is paying.** That fifth row alone is 2.9957 of the 4.5972, which is **65.2%** of the total loss from one email out of five. It is the row where the model said "5% chance of spam" about a spam email.
+- **Step 4 — now apply focal loss with γ = 2.** The multipliers are (1 − p_t) squared: 0.01, 0.04, 0.36, 0.09, **0.9025**.
+- **Step 5 — multiply through.** 0.0011, 0.0089, 0.3299, 0.0321, **2.7036**. The sum is 3.0756, so focal loss is **0.6151**.
+- **Step 6 — see who is paying now.** The fifth row is 2.7036 of 3.0756 = **87.9%** of the total. Focal moved that row's share from 65% to 88% by squeezing the four easy rows almost out of existence.
 
-- MSE's gradient through a sigmoid carries an extra **σ′(z) = p(1−p)** factor. That factor goes to zero at both tails.
-- "Confidently wrong" means |z| is large, which means σ′(z) ≈ 0, which means **the update is ~0 exactly when the model is most wrong**.
-- Cross-entropy is constructed so σ′ cancels: what survives is (p̂ − y)·x, with no throttle.
-- Secondary reason: MSE composed with a sigmoid is **non-convex**, so gradient descent can park in a local minimum. Cross-entropy with a sigmoid is convex.
-- The full derivation with numbers (400× weaker gradients at z = −6) is in the **ML** subject's logistic-regression module — do not re-derive it here, just name it.`,
+Two things to take from the arithmetic. Focal loss does not make anything more expensive — every multiplier is at most 1, so every single row got cheaper. What it changes is the *proportion*: the hard row now dominates. And the total dropped from 0.9194 to 0.6151, which is why you can never compare a focal-loss number against a cross-entropy number and call one model better.`,
     },
     {
       type: 'intuition',
-      title: 'A different question: are these two the same thing?',
-      md: `Every loss so far answers **which class is this?** — a fixed set of K classes, one output unit each, softmax competing across them. Some problems do not have that shape.
+      title: 'The classic mistake, walked into on purpose',
+      md: `A team builds a 3-class classifier. They apply softmax at the end of the model, because a classifier should output probabilities, and then pass that output to a loss function called \`CrossEntropyLoss\`. Training runs. The loss falls from 1.08 to 0.79 and then flattens. Accuracy is mediocre and nobody can see why.
 
-- Face verification, speaker ID, person re-identification, image retrieval: the real question is **are these two inputs the same thing?**
-- Softmax cannot express it. A door-access system would need one class per employee, with 1–2 photos each, and a new employee joins next Tuesday.
-- Every new person means a new output unit and a full retrain. That is not a model that can be operated.
-- So stop classifying. Learn an **embedding** instead — a function mapping each input to a vector where **distance means dissimilarity**.
-- Same identity → vectors close. Different identities → vectors far. Verification becomes a threshold on a distance; identification becomes a nearest-neighbour lookup.
-- The family name is **metric learning**: the loss shapes the geometry of a space, rather than drawing a decision over a fixed label set.`,
+- The bug: \`CrossEntropyLoss\` **applies its own softmax internally**. It expects logits. So the softmax ran twice.
+- Follow the numbers. Logits 2.0, 1.0, 0.0. The first softmax gives **0.665, 0.245, 0.090** — correct, and if the true class is 0 the loss should be −log(0.665) = **0.408**.
+- Now the loss applies softmax a second time, treating those probabilities as if they were raw scores. e^0.665 = 1.945, e^0.245 = 1.278, e^0.090 = 1.094, total 4.316.
+- Divide through: **0.451, 0.296, 0.254**. The loss reported is −log(0.451) = **0.797**, nearly double the true value.
+- Look at what happened to the spread. The model's real confidence in class 0 was 0.665 against 0.090 for the worst class, a ratio of 7.4. After the second softmax it is 0.451 against 0.254, a ratio of 1.8. **Every difference has been flattened.**
+- That flattening is the real damage. The correction the model trains on is roughly "predicted minus true", and predictions squeezed into a narrow band around 1/K produce a weak, near-identical correction for every class. The model still learns, only slowly and badly.
+- The diagnostic that catches it in ten seconds: a 3-class model must start near **log 3 = 1.0986**. This one started at 1.08, close enough to look fine, but it **cannot get far below about 0.55 no matter what**, because a doubly-softmaxed probability can never approach 1. A loss curve that flattens well above zero at a suspiciously fixed number is the signature.
+
+The rule that prevents it: **hand the loss function your logits, never your probabilities.** The framework's loss does the softmax and the log together, stably, and doing the softmax yourself first is the most common way to break training without crashing it.`,
     },
     {
       type: 'intuition',
-      title: 'Contrastive loss: pull, push, then stop pushing',
-      md: `Train on **pairs**. Each pair carries a label y — 1 if the two inputs are the same thing, 0 if not. Let d be the distance between their two embeddings. The loss is \`y*d^2 + (1-y)*max(0, margin - d)^2\`: two halves, exactly one active per pair.
+      title: 'Practice problems',
+      md: `Pen and paper first. All the arithmetic is small, and the log values you need are: log(0.2) = −1.609, log(3) = 1.099, log(10) = 2.303.
 
-- **Same pair (y = 1):** the loss is d², so the gradient pulls the two embeddings together until d = 0. No margin, no mercy — two photos of one person should land on top of each other.
-- **Different pair (y = 0):** the loss is (margin − d)², which pushes them apart *only while d < margin*.
-- Once d ≥ margin the term is clipped to zero. Exactly zero loss, exactly zero gradient — the same flat region hinge loss has, for the same reason.
-- **That clipping is the entire point**, not a detail. Without it the model would keep shoving already-distant pairs toward infinity, spending its capacity on negatives it solved in epoch one.
-- The margin is the one real hyperparameter, and it is scale-dependent. L2-normalise the embeddings onto the unit sphere first; then a margin near 1 is sane and transfers between datasets.`,
-    },
-    {
-      type: 'math',
-      intro: 'Contrastive loss on a pair. y = 1 means same, y = 0 means different, m is the margin.',
-      latex: [
-        'd = \\lVert f(x_1) - f(x_2) \\rVert_2 \\qquad y \\in \\{0, 1\\}',
-        '\\ell_{\\text{contrastive}} = y\\,d^{2} \\;+\\; (1 - y)\\,\\max\\!\\big(0,\\; m - d\\big)^{2}',
-        'y = 0,\\; d \\ge m \\;\\Longrightarrow\\; \\ell = 0 \\;\\Longrightarrow\\; \\text{zero gradient: this pair is already far enough apart.}',
-      ],
+1. A model outputs p = 0.2 for a row whose true label is 1. Compute p_t, the cross-entropy penalty, and the focal-loss penalty with γ = 2.
+2. You are training a 5-class classifier with label smoothing at ε = 0.1. Write out the full target list for a row whose true class is class 2, and check that it sums to 1.
+3. A model scores f(x) = 0.7 on a row. Compute the hinge loss if the true label is y = +1, and again if it is y = −1.
+4. A colleague's 10-class model prints a training loss of 0.0004 after one epoch, on 50,000 images. What would you check, and why?
+5. You have 100,000 rows of tabular data with 1% fraud and clean, carefully reviewed labels. A teammate proposes switching from cross-entropy to focal loss with γ = 2. Give two reasons to try something else first.`,
     },
     {
       type: 'intuition',
-      title: 'Triplet loss: relative, never absolute',
-      md: `Contrastive commits to absolute numbers — same-pairs at distance 0, different-pairs at least m apart — in a space whose scale you never chose. Triplet loss drops both demands.
+      title: 'Worked solutions',
+      md: `Check each step against your own working, not only the final number.
 
-- Feed **three** inputs: an **anchor** a, a **positive** p (same identity as a), a **negative** n (a different identity).
-- The loss is \`max(0, d(a,p) - d(a,n) + margin)\`. One demand, in words: *the positive must be closer than the negative by at least the margin.*
-- Nothing absolute is required. d(a,p) may be 0.2 or 20 — only the **gap** d(a,n) − d(a,p) matters, and it only has to clear m.
-- Why that is better: a genuinely blurry photo can sit far from its own identity without being punished, as long as it still sits nearer that identity than any stranger. Contrastive would keep hammering it toward zero distance and distort the space to comply.
-- Satisfied triplets pay exactly zero. Same flat region again — and here it becomes the central practical problem, not a bonus.
-- The bill: you now have to *choose* triplets, and there are O(N³) of them.`,
-    },
-    {
-      type: 'math',
-      intro: 'Triplet loss. Anchor a, positive p, negative n, margin m. Compare the zero condition to hinge.',
-      latex: [
-        '\\ell_{\\text{triplet}} = \\max\\!\\big(0,\\; d(a, p) - d(a, n) + m \\big)',
-        '\\ell = 0 \\iff d(a, n) \\ge d(a, p) + m \\qquad \\text{(a relative demand — no absolute distance appears)}',
-        '\\text{FaceNet: } f(x) \\in \\mathbb{R}^{128},\\quad \\lVert f(x) \\rVert_2 = 1,\\quad m = 0.2',
-      ],
-    },
-    {
-      type: 'code',
-      lang: 'python',
-      title: 'Both losses on three 2-D points — and the margin switching itself off',
-      code: `import numpy as np
-
-a = np.array([0.0, 0.0])        # anchor  : a photo of Ana
-p = np.array([0.3, 0.4])        # positive: another photo of Ana
-n = np.array([0.8, 0.6])        # negative: a photo of Bo
-margin = 1.5
-
-d = lambda u, v: np.linalg.norm(u - v)
-contrastive = lambda u, v, y: y * d(u, v) ** 2 + (1 - y) * max(0.0, margin - d(u, v)) ** 2
-triplet = lambda a, p, n: max(0.0, d(a, p) - d(a, n) + margin)
-
-print('d(a,p) = %.2f   d(a,n) = %.2f   margin = %.1f' % (d(a, p), d(a, n), margin))
-print('contrastive, same pair  (y=1) : %.3f' % contrastive(a, p, 1))
-print('contrastive, diff pair  (y=0) : %.3f' % contrastive(a, n, 0))
-print('triplet (a, p, n)             : %.3f' % triplet(a, p, n))
-
-n_far = np.array([2.4, 1.8])    # same direction, shoved out past the margin
-print('--- push the negative out to d(a,n) = %.2f ---' % d(a, n_far))
-print('contrastive, diff pair  (y=0) : %.3f' % contrastive(a, n_far, 0))
-print('triplet (a, p, n_far)         : %.3f' % triplet(a, p, n_far))
-print('gradient on this negative     : none - the loss is flat at exactly 0')
-
-# ---- real output ----
-# d(a,p) = 0.50   d(a,n) = 1.00   margin = 1.5
-# contrastive, same pair  (y=1) : 0.250
-# contrastive, diff pair  (y=0) : 0.250
-# triplet (a, p, n)             : 1.000
-# --- push the negative out to d(a,n) = 3.00 ---
-# contrastive, diff pair  (y=0) : 0.000
-# triplet (a, p, n_far)         : 0.000
-# gradient on this negative     : none - the loss is flat at exactly 0`,
-      annotations: {
-        9: 'Both halves in one line. y picks which one survives: d squared for same-pairs, the clipped push for different-pairs.',
-        10: 'No absolute distance appears — only d(a,p) compared against d(a,n). That is the whole difference from contrastive.',
-        13: 'Same pair, d = 0.5, so it pays 0.25 and keeps being pulled inward. There is no margin on this half.',
-        17: 'The only change in the whole script: Bo moves out to distance 3.0, twice the margin. Anchor and positive are untouched.',
-        29: 'Exactly 0.000, not 0.001. Contrastive has stopped pushing: this negative is far enough and contributes nothing.',
-        30: 'Triplet also exactly 0 — the positive is 2.5 nearer than the negative, and only 1.5 was demanded. A batch of triplets like this trains nothing at all.',
-      },
+1. The label is 1, so **p_t = p = 0.2**. Cross-entropy is −log(0.2) = **1.609**. The focal multiplier is (1 − 0.2)² = 0.64, so focal loss is 0.64 × 1.609 = **1.030**. Note that it went *down*: focal loss never charges more than cross-entropy, it only charges less, and it charges far less on the easy rows.
+2. Each class gets ε/K = 0.1/5 = **0.02**, and the true class additionally keeps 1 − ε = 0.9, so it gets 0.92. The target list is **(0.02, 0.02, 0.92, 0.02, 0.02)**. Sum: 0.92 + 4 × 0.02 = 0.92 + 0.08 = **1.0**. Correct.
+3. With y = +1, the margin score y·f(x) = +0.7, so the loss is max(0, 1 − 0.7) = **0.3**. It is on the correct side but inside the margin strip, so it is still charged. With y = −1, the margin score is −0.7, so the loss is max(0, 1 + 0.7) = **1.7**. Wrong side, and charged in a straight line by how far.
+4. A 10-class model starts at log(10) = 2.303 when it knows nothing, and 0.0004 after one epoch means it is essentially perfect already. That is not learning, it is **leakage**: the label, or something computed from it, has ended up among the input features. Check the feature list for a column that could only have been filled in after the label was known, and check that the validation split was made before any preprocessing that looked at the whole dataset. A loss far *below* what the problem should allow is as much of a red flag as one far above it.
+5. First, this is ordinary **label imbalance**, not easy-versus-hard imbalance: 1,000 fraud rows against 99,000 normal ones, where plenty of the normal rows are genuinely borderline. Focal loss targets datasets where the majority is overwhelming *and* trivially easy, which is not this. Second, focal loss adds a hyperparameter (γ) to tune and **breaks calibration**, and a fraud system usually needs a real probability for a cost decision such as "review it if the fraud probability times ₹8,000 exceeds the ₹50 review cost". Cheaper first moves: class weights, and sweeping the decision threshold against a cost-aware metric. Change the loss only when those are not enough.`,
     },
     {
       type: 'intuition',
-      title: 'The payoff: adding an employee to the door system',
-      md: `FaceNet (Schroff et al., 2015) is the story that makes the loss obvious. One network, trained with triplet loss, maps any face to a single 128-dimensional unit vector — no per-person parameters anywhere.
+      title: 'Beyond the basics - skip this on your first read',
+      md: `Everything above stands on its own. This section names ideas you will meet later, so the words are not new when you get there.
 
-- **Verification** — *is this the person on the badge?* Embed both faces, take the distance, compare to a threshold. One number, one comparison.
-- **Recognition** — *who is this?* Embed the face, find the nearest vector in a bank of known embeddings, accept only if it is inside the threshold.
-- **Enrolment is the payoff.** New employee joins: one photo, one forward pass, one row of 128 floats inserted into a database. Done in a second.
-- **No retraining, no new output unit, nothing touched in the model.** A softmax-over-employees classifier would need a new class, a resized head, and a full retrain on every hire.
-- The same shape covers speaker verification, product image search, and re-identifying a person across store cameras — anywhere the label set is open and keeps growing.
-- The threshold is a business decision, not a model one: tighten it and staff get locked out, loosen it and a lookalike walks in. That is the ROC trade from *ROC, AUC & PR Curves: Threshold-Free Judgement*, run on distances instead of scores.`,
-    },
-    {
-      type: 'intuition',
-      title: 'Triplet mining: why the naive version does not train',
-      md: `Sample triplets at random after one epoch and nearly all of them already satisfy the margin. Loss zero, gradient zero, nothing learned — and the printed loss looks beautiful while the model sits still. Mining is not an optimisation; it is what makes the loss work at all.
-
-- **Hard negatives** — the negative closest to the anchor, argmin d(a,n) over other identities. Maximum gradient per triplet.
-- But the hardest negative is very often a **mislabelled photo or a genuine twin**. Training on those pulls the space inside out and collapses every embedding to one point — a documented, reproducible failure of naive hard mining.
-- **Semi-hard negatives** (FaceNet's choice): farther than the positive but still inside the margin — \`d(a,p) < d(a,n) < d(a,p) + m\`. Wrong enough to produce gradient, not so wrong that it is probably noise.
-- **Online / batch-hard mining:** build each batch as P identities × K images, embed once, then mine triplets *inside* the batch from its distance matrix. No offline triplet index, and the negatives stay fresh as the model moves.
-- Interview sentence: *"with triplet loss the mining strategy matters more than the loss — random triplets give zero gradient and the hardest ones give a collapsed embedding."*`,
-    },
-    {
-      type: 'note',
-      md: `**Honest status: you would rarely hand-write a triplet loss today.** Two families replaced it, and both keep the same goal — a space where distance means similarity. (1) **Margin-based softmax** — ArcFace, CosFace, SphereFace — keeps a softmax over all training identities but adds an angular margin to the true class's logit. It gets the margin geometry *and* a full-batch gradient with **no mining at all**, which is why it owns face-recognition benchmarks. (2) **InfoNCE / multiple-negatives contrastive** — one positive scored against every other item in a large batch as negatives, then a softmax over those similarities. That is triplet loss with hundreds of negatives at once, which is exactly where the mining problem dissolves, and it is what trains CLIP, SimCLR and every modern sentence-embedding model. What such an embedding space *is* belongs to the DL module *Embeddings: Meaning as Vectors*; how the vectors are then indexed and searched belongs to the GenAI module *Embeddings, Vector Databases & Semantic Search*. Do not re-derive either here — carry the loss, and point at those two.`,
-    },
-    {
-      type: 'intuition',
-      title: 'The decision table you can recite',
-      md: `Six questions, and the loss falls out. This is what the interviewer is actually testing.
-
-- **Do I need calibrated probabilities downstream?** Yes → cross-entropy. It is the only one here that gives them for free.
-- **Is my imbalance between easy and hard, not just between labels?** Yes → focal (γ = 2, tune α second). Dense detection, segmentation, huge-negative retrieval.
-- **Is my imbalance ordinary label imbalance on tabular data?** → class weights and a moved threshold before you touch the loss function.
-- **Are my labels noisy or crowdsourced?** → label smoothing (ε = 0.1). Never focal — it amplifies noise.
-- **Is the margin the product, and the model must stay compact?** → hinge, and accept that the score is not a probability.
-- **Is the question "are these two the same thing?" with an open, growing label set?** → contrastive or triplet in an embedding space, and budget for the mining strategy.
-- The senior version of any of these answers ends with a cost sentence: *"a false negative here costs 160× a false alarm, so the loss is only half the decision — the threshold is the other half."*`,
+- **The α term in focal loss.** The full formula is −α·(1 − p_t)^γ·log(p_t). α is a plain per-class weight doing a different job from γ: γ down-weights by how *easy* a row is, α by *which class* it is. The two interact, so tune γ first. The paper that introduced focal loss puts α = 0.25 on the rare class, which looks backwards until you notice γ has already crushed the common one.
+- **Squared hinge.** max(0, 1 − y·f(x)) squared, which smooths the sharp corner at the margin. The corner matters because a corner has no single slope, so plain hinge is solved with a different family of optimisers. The price of smoothing it is that outliers are punished by a square again, losing the robustness you chose hinge for.
+- **Temperature scaling.** If your model is accurate but overconfident, fit a single number T on validation data and divide every logit by it. It cannot change any prediction, because dividing all logits by the same positive number leaves their order alone, so it is a free calibration fix that needs no retraining.
+- **Perplexity.** Language models are trained with categorical cross-entropy over the vocabulary, and perplexity is simply e raised to that loss. A cross-entropy of 2.303 is a perplexity of 10, which reads as "the model is as unsure as if it were choosing uniformly among 10 words".
+- **Losses that ask a different question.** Everything here answers "which class is this?" over a fixed set of classes. When the real question is "are these two inputs the same thing?" — face verification, image search — you need contrastive and triplet loss instead, taught in *Contrastive & Triplet Loss: Learning What "Similar" Means*.`,
     },
   ],
   quiz: [
@@ -490,122 +521,76 @@ print('gradient on this negative     : none - the loss is flat at exactly 0')
       options: [
         {
           text: 'It was chosen because logarithms are numerically convenient',
-          explanation: 'The log is a step in the derivation, not the reason. Convenience does not explain why THIS expression and not another.',
+          explanation: 'The log is a step in the derivation, not the reason for it. Convenience does not explain why this expression and not some other one.',
         },
         {
-          text: 'It is the negative log-likelihood of a Bernoulli model: write P(data), take the log, negate',
-          explanation: 'Correct. p^y(1−p)^(1−y) per row, multiplied across rows, logged into a sum, negated so an optimiser can minimise. Minimising cross-entropy IS maximum likelihood.',
+          text: 'Write the probability of what actually happened, multiply it across rows, take the log, and negate',
+          explanation: 'Correct. p^y(1−p)^(1−y) per row, multiplied over rows, logged so the product becomes a sum, negated so an optimiser can walk downhill. Minimising cross-entropy is exactly maximising likelihood.',
         },
         {
           text: 'It is the squared distance between the predicted probability and the label',
-          explanation: 'That is Brier score / MSE on probabilities — a different loss, with the vanishing-gradient problem cross-entropy was built to avoid.',
+          explanation: 'That is squared error, a different loss, and the one with the collapsing-slope problem measured earlier in this module.',
         },
       ],
       correct: 1,
     },
     {
-      question: 'Your model outputs 0.01 probability for a row whose true label is 1. What cross-entropy does that single row contribute?',
+      question: 'Your model outputs 0.01 for a row whose true label is 1. What cross-entropy does that single row contribute?',
       options: [
-        { text: '0.01 — the loss is just the probability gap', explanation: 'Cross-entropy is −log(p_t), not a linear gap. A linear penalty would make confident errors cheap, which is the opposite of the design.' },
-        { text: '0.99 — one minus the probability', explanation: 'Also linear, also wrong. It would cap the penalty at 1 no matter how catastrophically confident the error was.' },
+        { text: '0.01 - the loss is just the probability gap', explanation: 'Cross-entropy is minus the log of p_t, not a linear gap. A linear penalty would make confident mistakes cheap, which is the opposite of what the loss is for.' },
+        { text: '0.99 - one minus the probability', explanation: 'Also linear, also wrong. It would cap the penalty at 1 however catastrophic the confident error was.' },
         {
-          text: '4.605 — and it grows without bound as the probability approaches 0',
-          explanation: 'Correct: −log(0.01) = 4.605, about 44× the 0.105 charged at p_t = 0.9. Confident-and-wrong is the expensive quadrant, by construction.',
+          text: '4.605 - and it keeps growing without limit as the probability approaches 0',
+          explanation: 'Correct: minus log of 0.01 is 4.605, about 44 times the 0.105 charged at p_t = 0.9. Confident and wrong is the expensive corner, by construction.',
         },
       ],
       correct: 2,
     },
     {
-      question: 'With focal loss at γ = 2, by how much is a well-classified example at p_t = 0.9 down-weighted relative to plain cross-entropy?',
+      question: 'At logit z = −6 on a row whose true label is 1, the measured slope of cross-entropy was −0.998 and of squared error −0.0025. What does that mean in practice?',
       options: [
         {
-          text: '100× cheaper — the multiplier is (1 − 0.9)² = 0.01',
-          explanation: 'Correct. And at p_t = 0.99 the multiplier is 0.0001, a 10,000× suppression. That is how focal makes an easy majority effectively disappear from the gradient.',
+          text: 'Squared error gives a correction about 400 times weaker exactly where the model is most wrong, because its slope carries a p(1−p) factor that collapses at the extremes',
+          explanation: 'Correct. Cross-entropy is built so that factor cancels, leaving a full-strength correction. That is the mechanical reason it is used for classification and squared error is not.',
         },
-        { text: '2× cheaper — γ = 2 halves the loss', explanation: 'γ is the exponent on (1 − p_t), not a divisor. It has no fixed effect; the suppression depends entirely on how easy the example is.' },
-        { text: '10× cheaper — the multiplier is 1 − p_t', explanation: 'That would be γ = 1. The default γ = 2 squares it, giving 0.01 rather than 0.1.' },
+        { text: 'Squared error is 400 times more numerically stable there', explanation: 'Stability is not the issue; both computed fine. The problem is that squared error is nearly silent on the row that needs the loudest correction.' },
+        { text: 'Cross-entropy is 400 times larger in value at that point', explanation: 'The comparison was between slopes, not values. The value tells you how bad the row is; the slope tells you how hard training will push on it.' },
       ],
       correct: 0,
     },
     {
       question: 'Why do frameworks want logits rather than probabilities passed to the loss function?',
       options: [
-        { text: 'Logits are smaller numbers, so they train faster', explanation: 'Logits are unbounded and often larger than probabilities. Speed is not the issue.' },
-        { text: 'The loss cannot be computed from probabilities at all', explanation: 'It can — the formula is defined on probabilities. The problem is that computing them first destroys precision.' },
+        { text: 'Logits are smaller numbers, so they train faster', explanation: 'Logits are unbounded and often much larger than probabilities. Speed is not what is at stake.' },
+        { text: 'The loss cannot be computed from probabilities at all', explanation: 'It can - the formula is defined on probabilities. The problem is that computing them first either overflows or, worse, applies softmax twice.' },
         {
-          text: 'softmax-then-log overflows: exp(large logit) is inf, inf/inf is nan. The fused log-sum-exp form subtracts the max and is stable',
-          explanation: 'Correct. Subtracting the max is exact algebra, not an approximation. It also prevents the classic double-softmax bug of applying softmax in forward() and again in the loss.',
+          text: 'e raised to a large logit overflows to infinity, and the fused log-sum-exp form subtracts the largest logit first, which is exact and stable',
+          explanation: 'Correct. Subtracting the maximum is algebra, not an approximation. It also prevents the double-softmax bug of squashing inside the model and again in the loss.',
         },
       ],
       correct: 2,
     },
     {
-      question: 'What is the real cost of label smoothing with ε = 0.1?',
+      question: 'With label smoothing at ε = 0.1 on a two-class problem, what are the targets, and what is the real cost?',
       options: [
-        { text: 'It reduces accuracy, which you trade for faster training', explanation: 'Accuracy usually improves slightly. Training speed is unaffected — it is one change to the target vector.' },
+        { text: 'Targets (0.9, 0.1); the cost is slower training', explanation: 'Two errors. The formula gives the true class (1 − ε) + ε/K = 0.9 + 0.05 = 0.95, not 0.9. And training speed is untouched - it is one change to the target list.' },
         {
-          text: 'It compresses confidence separation, which hurts anything consuming the score margin — distillation, score-based retrieval, extreme thresholds',
-          explanation: 'Correct. Capping the target below 1 caps how far apart the top logits can grow. Calibration improves; margin information is deliberately given up.',
+          text: 'Targets (0.95, 0.05); the cost is compressed confidence separation, which hurts anything that reads the gap between the top scores',
+          explanation: 'Correct on both. Capping the target below 1 caps how far apart the logits can grow. Calibration improves, and the score gap is deliberately given up.',
         },
-        { text: 'It makes the loss non-convex', explanation: 'Convexity is untouched — smoothing only changes the target vector, not the shape of the objective in the logits.' },
+        { text: 'Targets (0.95, 0.05); the cost is that the loss can no longer reach a minimum', explanation: 'Backwards. Smoothing is what gives the loss a reachable minimum, 0.1985 at p = 0.95, where a hard target needs an infinite logit.' },
       ],
       correct: 1,
     },
     {
-      question: 'A training point sits comfortably past the SVM margin, at y·f(x) = 2.5. What does it contribute?',
+      question: 'A training point sits comfortably past the margin, at y·f(x) = 2.5. What does it contribute under hinge loss?',
       options: [
         {
-          text: 'Exactly zero loss and exactly zero gradient — delete it and the model is identical',
-          explanation: 'Correct. max(0, 1 − 2.5) = 0. That flat region is precisely why only support vectors define an SVM, and why the trained model can discard most of the data.',
+          text: 'Exactly zero loss and exactly zero slope - delete it and the trained model is identical',
+          explanation: 'Correct. max(0, 1 − 2.5) = 0. That flat region is precisely why only the support vectors define an SVM, and why the trained model can discard most of the data.',
         },
-        { text: 'A small positive loss that shrinks as the margin grows', explanation: 'That describes cross-entropy, which is never exactly zero — which is why logistic regression has no support vectors.' },
-        { text: 'A negative loss, since the model is more than correct', explanation: 'The max(0, ·) floors it at zero. No loss in common use rewards being extra-correct.' },
-      ],
-      correct: 0,
-    },
-    {
-      question: 'You have 1% fraud in a 100k-row tabular dataset, mostly clean labels. Which loss change do you reach for first?',
-      options: [
-        { text: 'Focal loss with γ = 2 — it is the imbalance loss', explanation: 'Focal targets easy-vs-hard imbalance in the millions-of-trivial-negatives regime. On ordinary tabular imbalance it adds a hyperparameter to tune and decalibrates your probabilities for no clear gain.' },
-        { text: 'Hinge loss — margins handle imbalance better', explanation: 'Hinge has no imbalance mechanism at all, and it throws away the calibrated probabilities a fraud system needs for expected-cost decisions.' },
-        {
-          text: 'None yet — class weights and a moved decision threshold, keeping cross-entropy',
-          explanation: 'Correct. One keyword argument, no new hyperparameter, nothing invented or discarded, and the threshold sweep often turns out to be the whole fix. Change the loss only when that is not enough.',
-        },
-      ],
-      correct: 2,
-    },
-    {
-      question: 'Why can an SVM not hand you a probability, while logistic regression can?',
-      options: [
-        { text: 'SVMs are not trained by gradient descent, so probabilities never appear', explanation: 'The optimiser is irrelevant. It is the objective that determines whether the output has probabilistic meaning.' },
-        {
-          text: 'Hinge only requires y·f(x) ≥ 1; the objective assigns no meaning to the score beyond that, so it is not a likelihood',
-          explanation: 'Correct. Cross-entropy is a negative log-likelihood, so its minimiser IS a probability estimate. Hinge optimises a margin, so SVM scores need Platt scaling to be interpreted as probabilities at all.',
-        },
-        { text: 'SVM outputs are unbounded, and probabilities must lie in [0,1]', explanation: 'Close but shallow — a sigmoid would bound them instantly. The point is that squashing a margin score produces a number with no calibration guarantee behind it.' },
-      ],
-      correct: 1,
-    },
-    {
-      question: 'A building uses face recognition at the door. Why train it with triplet loss instead of a softmax over employees?',
-      options: [
-        {
-          text: 'Because the label set is open — new employees keep arriving with 1–2 photos each. Triplet loss learns an embedding, so enrolling someone is one forward pass and one database row',
-          explanation: 'Correct. Softmax needs a fixed K and a new output unit plus a full retrain per hire. The embedding never changes: verification is a threshold on a distance, recognition is nearest neighbour in the embedding bank.',
-        },
-        {
-          text: 'Because softmax cannot handle more than a few hundred classes',
-          explanation: 'It handles far more — every language model runs a softmax over a 50k-token vocabulary at each step. The blocker is not the class count, it is that the class set keeps changing.',
-        },
-        {
-          text: 'Because triplet loss gives better-calibrated probabilities than softmax',
-          explanation: 'Backwards. Triplet loss outputs a distance, not a probability at all — losing calibration is the price you pay. Cross-entropy is the calibrated one.',
-        },
-        {
-          text: 'Because every triplet contributes gradient, so training converges faster',
-          explanation: 'The exact opposite is its main weakness: most randomly sampled triplets already satisfy the margin and contribute exactly zero gradient. That is why semi-hard or batch-hard mining is mandatory, not optional.',
-        },
+        { text: 'A small positive loss that shrinks as the margin grows', explanation: 'That describes cross-entropy, which is never exactly zero, which is exactly why logistic regression has no support vectors.' },
+        { text: 'A negative loss, since the model is more than correct', explanation: 'The max(0, ·) floors it at zero. No loss in common use pays you for being extra-correct.' },
       ],
       correct: 0,
     },
@@ -614,152 +599,113 @@ print('gradient on this negative     : none - the loss is flat at exactly 0')
     {
       question: 'Derive binary cross-entropy from first principles, out loud.',
       answer:
-        'For one row the model claims probability p that y = 1. The probability of what actually happened is p if y = 1 and (1−p) if y = 0, which compresses to p^y(1−p)^(1−y) — check both cases, one factor always collapses to 1. Rows are independent, so the dataset likelihood is the product over i. A product of thousands of sub-1 numbers underflows, and products are awkward to differentiate, so take the log: it becomes Σ[y log p + (1−y) log(1−p)], and log is monotonic so the maximiser does not move. Optimisers minimise, so negate and divide by N. That is binary cross-entropy — nothing was designed, it fell out. Close with the payoff: minimising cross-entropy IS maximum likelihood, which is why its outputs are calibrated probabilities and not just scores. Bonus framing that scores: choosing a loss is choosing a noise model — Bernoulli gives you cross-entropy, Gaussian gives you MSE.',
+        'For one row the model claims probability p that y = 1. Ask how probable the thing that actually happened was: p if y = 1, and 1 − p if y = 0. Those two cases compress into p^y(1−p)^(1−y) — check both, one factor always collapses to 1. Rows are assumed independent, so the probability of the whole dataset is the product over rows, called the likelihood. A product of thousands of numbers below 1 underflows to zero on a computer, so take the log: it becomes a sum, and because log is monotonic the setting that maximises the product also maximises the sum, so nothing is approximated. Optimisers minimise, so negate and divide by N. That is binary cross-entropy. Nothing was designed; it fell out. The payoff: minimising cross-entropy is exactly maximising likelihood, which is why its outputs behave like calibrated probabilities rather than arbitrary scores.',
       isCaseBased: false,
     },
     {
-      question: 'Why cross-entropy and not MSE for classification? Give me the gradient argument.',
+      question: 'Why cross-entropy and not squared error for classification? Give me the mechanical argument.',
       answer:
-        'MSE through a sigmoid has gradient (p̂ − y)·σ′(z)·x, and σ′(z) = p̂(1 − p̂) collapses to ~0 at both tails. So when the model is confidently wrong — large |z| on the wrong side — the update is nearly zero, exactly when it should be largest. Concretely at z = −6 with true label 1 the cross-entropy gradient is 0.998 while MSE gives 0.0025, about 400× weaker. Cross-entropy is built so σ′ cancels in the chain rule, leaving (p̂ − y)·x with no throttle. Second reason: MSE composed with a sigmoid is non-convex in the weights, so descent can park in a local minimum, while cross-entropy with a sigmoid is convex. Third, the framing reason: MSE assumes Gaussian noise around a real-valued target, which is a false statement about a 0/1 label — the Bernoulli assumption is the honest one, and it hands you cross-entropy automatically.',
+        'Squared error through a sigmoid has a slope carrying an extra p(1−p) factor, and that factor collapses toward zero at both extremes of the sigmoid. So on a row where the model is confidently wrong, meaning a large logit on the wrong side, the correction is nearly zero exactly when it should be largest. Concretely, at logit −6 with true label 1 the cross-entropy slope is about −0.998 while squared error gives about −0.0025, roughly 400 times weaker. Cross-entropy is constructed so that factor cancels, leaving a full-strength correction. Two smaller reasons: squared error wrapped around a sigmoid has more than one local low point, so descent can settle in the wrong one; and squared error implicitly assumes the target is a real-valued measurement with symmetric noise, which is a false description of a 0/1 label. Assuming a coin flip instead hands you cross-entropy automatically.',
       isCaseBased: false,
     },
     {
-      question: 'Explain focal loss and tell me when you would use it instead of class weights or resampling.',
+      question: 'Explain focal loss and tell me when you would use it instead of class weights.',
       answer:
-        'Focal loss is cross-entropy scaled by (1 − p_t)^γ, plus an optional class-balancing α. The multiplier is near-zero for well-classified rows — at γ = 2 and p_t = 0.99 it is 0.0001 — and near-one for hard ones, so it is a soft, continuous hard-example miner that needs no sampling and discards no data. It came from RetinaNet, where a one-stage detector scores ~100k anchors per image against ~20 objects and the trivially-easy background dominates the gradient. The distinction that matters: class weights split rows by LABEL, focal splits them by DIFFICULTY. Use focal when the imbalance is easy-vs-hard and the easy side is enormous — dense detection, semantic segmentation, in-batch-negative retrieval, ad-click at web scale. Use class weights and threshold moving for ordinary tabular imbalance: one keyword, no extra hyperparameter, calibration intact. Two costs to name: focal decalibrates probabilities, and because a mislabelled row is indistinguishable from a hard row, focal amplifies label noise — so never use it on noisy labels.',
+        'Focal loss is cross-entropy multiplied by (1 − p_t) to the power gamma. The multiplier is near zero for rows the model already gets right — at gamma = 2 and p_t = 0.99 it is 0.0001 — and near one for hard rows, so it is a volume knob that turns itself down as a row becomes easy. Nothing is sampled and nothing is discarded. The distinction that matters: class weights split rows by which label they carry, focal splits them by how hard they are. Use focal when the majority is both enormous and trivially easy: dense object detection, per-pixel segmentation, retrieval against millions of obvious non-matches. Use class weights and a moved decision threshold for ordinary tabular imbalance, since that is one keyword argument, no new hyperparameter, and calibration stays intact. Two costs to name out loud: focal breaks calibration, and because a mislabelled row looks exactly like a hard row, focal amplifies label noise.',
       isCaseBased: false,
     },
     {
-      question: 'Case: your single-stage object detector trains to a low loss but predicts background almost everywhere. mAP is near zero. Diagnose and fix.',
+      question: 'Case: a detector for a rare defect trains to a low loss but predicts "no defect" almost everywhere. The business metric is near zero. Diagnose and fix.',
       answer:
-        'Classic easy-negative domination. Each image has ~100k anchors and maybe 20 positives, so 99.98% of the loss terms are trivially-classified background. Each contributes almost nothing individually — around 0.01 of cross-entropy — but 100k × 0.01 dwarfs 20 hard positives at ~2.3 each, so the model minimises total loss by perfecting background. The falling loss is real; it is just measuring the wrong thing. First diagnostic: split the loss into a positive-anchor component and a negative-anchor component and log both — if the negative component is 90%+ of the total, that is your answer. Fixes in order: (1) focal loss with γ = 2, α = 0.25, which reweights by difficulty and was designed for exactly this; (2) hard-negative mining or a fixed 3:1 negative:positive sampling ratio, the older OHEM-style approach — cruder because the cutoff is a hard threshold rather than a smooth weight; (3) check the anchor design itself, since bad IoU assignment thresholds can leave true objects labelled as background, which no loss can fix. Also verify the classification bias is initialised so the model starts predicting the prior foreground rate — RetinaNet does this deliberately, and skipping it makes early training diverge.',
+        'Classic easy-majority domination. Each image contains a huge number of candidate regions and perhaps one defect, so nearly all the loss terms come from obviously-clean background. Each contributes almost nothing individually, around 0.01 of cross-entropy, but a hundred thousand of them at 0.01 dwarfs twenty hard regions at 2.3 each. The model minimises the total by perfecting the background. The falling loss is real; it is just measuring the wrong thing. First diagnostic, before changing anything: split the loss into a positive-region component and a negative-region component and log both separately. If the negative component is over 90% of the total, that is your answer. Fixes in order: focal loss with gamma = 2, which reweights by difficulty and was designed for exactly this; or hard-negative mining with a fixed negative-to-positive sampling ratio, which is cruder because the cutoff is a hard threshold rather than a smooth weight. Then check the labelling rule itself, since a region-assignment threshold that is too strict can leave true defects labelled as background, and no loss function can fix a wrong label. Finally, initialise the output bias so the model starts out predicting the true defect rate rather than 50/50, which stops early training from diverging.',
       isCaseBased: true,
     },
     {
-      question: 'Case: a shipped classifier is 94% accurate, but every prediction comes back at 0.999 confidence, including the wrong ones. Product wants to show users a confidence number. What is happening and what do you do?',
+      question: 'Case: a shipped classifier is 94% accurate but every prediction comes back at 0.999 confidence, including the wrong ones. Product wants to display a confidence number. What is happening, and what do you do?',
       answer:
-        'The model is accurate but badly calibrated — its confidences carry no information. Cause: hard 1/0 targets under cross-entropy have their optimum at infinite logits, so a network trained long enough with enough capacity keeps inflating logit magnitude to chase a loss floor it can never reach, especially once training accuracy hits 100% and the only remaining way to reduce loss is more confidence. Measure it before fixing it: reliability diagram plus Expected Calibration Error, bucketing predictions by confidence and comparing each bucket to its actual accuracy. Fixes in cost order: (1) temperature scaling — fit a single scalar T on a validation set and divide the logits by it; it cannot change accuracy at all because it preserves the argmax, so it is a free win and should be the first thing tried; (2) label smoothing at ε = 0.1 in the next training run, which gives the loss a finite minimum at a finite logit and improves calibration by construction; (3) earlier stopping, since calibration degrades over the long tail of training after accuracy plateaus. Cost to state out loud: label smoothing compresses confidence separation, so if anything downstream consumes the score margin — distillation, score-based ranking — prefer temperature scaling, which leaves the ordering untouched.',
+        'The model is accurate but badly calibrated, so its confidences carry no information. Cause: with hard 1/0 targets, cross-entropy has its minimum at an infinite logit, so a model with enough capacity keeps inflating logit magnitude chasing a floor it can never reach, especially once training accuracy hits 100% and the only remaining way to lower the loss is more confidence. Measure before fixing: bucket the predictions by confidence and compare each bucket to its actual accuracy, which is a reliability diagram, and summarise the gap as expected calibration error. Then fix in cost order. First, temperature scaling: fit one number T on a validation set and divide every logit by it. It cannot change any prediction, because dividing all logits by the same positive number preserves their order, so it is a free win and should always be tried first. Second, label smoothing at epsilon = 0.1 in the next training run, which gives the loss a reachable minimum at a finite logit. Third, stop training earlier, since calibration degrades over the long tail after accuracy has plateaued. One cost to state: label smoothing compresses the gap between top scores, so if anything downstream ranks by score, prefer temperature scaling, which leaves the ordering untouched.',
       isCaseBased: true,
     },
     {
-      question: 'Cross-entropy versus hinge loss — when would you actually choose hinge?',
+      question: 'Cross-entropy versus hinge loss - when would you actually choose hinge?',
       answer:
-        'Hinge, max(0, 1 − y·f(x)), is zero once a point is correct AND a full margin clear, so satisfied points contribute no loss and no gradient. That gives sparsity — only support vectors define the model — a genuinely compact predictor, and linear rather than logarithmic growth on extreme errors, so it is more robust to a single catastrophic outlier. Choose it when the margin is the product and the model must stay small: a classic SVM on small-to-mid tabular data, or SGDClassifier(loss="hinge") on very wide sparse text features where it is fast and strong. Refuse it when you need probabilities. Hinge is not a likelihood, so its score has no calibrated meaning; you would need Platt scaling on top, which is a second model fitted to patch the first. Any expected-cost decision — "flag if P(fraud) × 8000 > 50" — needs a real probability, so cross-entropy wins by default. Also mention the kink: hinge is non-differentiable at the margin, which is why SVMs are solved by quadratic programming; squared hinge smooths that at the cost of punishing outliers quadratically and losing the robustness you came for.',
+        'Hinge is max(0, 1 − y·f(x)) with labels written as +1 and −1. It is exactly zero once a point is correct and a full margin clear, so satisfied points contribute no loss and no slope at all. That buys three things: sparsity, since only the points on or inside the margin affect the model, giving a genuinely compact predictor; growth that is a straight line rather than a curve on extreme errors, so one catastrophic outlier drags the fit less; and a decision rule that is about geometry rather than probability. Choose it when the margin is the product and the model must stay small, such as a support vector machine on small to mid-size tabular data, or a linear model on very wide sparse text features. Refuse it when you need probabilities: hinge is not a likelihood, so its score has no calibrated meaning, and any cost-based decision would need a second model fitted on top to convert scores into probabilities.',
       isCaseBased: false,
     },
     {
-      question: 'Why does cross-entropy dominate deep learning so completely?',
+      question: 'What does "minimising cross-entropy equals maximising likelihood" buy you in practice?',
       answer:
-        'Four reasons, in order of weight. (1) Gradient flow: ∂L/∂z = p̂ − y with no saturating factor, so signal survives through very deep stacks; hinge contributes exactly zero from every satisfied point, which late in training means most of the batch sends no signal at all. (2) Probabilities compose — they can be thresholded, multiplied, fed into an expected-cost decision, distilled into another model, or used as soft targets; a margin score cannot do any of that. (3) It generalises to K classes in one line via softmax, whereas multi-class hinge needs an awkward one-vs-rest or Crammer-Singer construction. (4) Sparsity, hinge\'s headline benefit, is worthless when you are training 100M dense parameters that all update anyway. Worth adding: the entire language-model objective is categorical cross-entropy over the vocabulary, and perplexity is just its exponential — so cross-entropy is not merely dominant, it is the thing being reported.',
+        'Three concrete things. First, calibration for free: the setting that minimises the objective is the one whose predicted probabilities match the real conditional probabilities, which is why a well-specified logistic regression\'s 0.7 really does mean about 70%, and why a random forest usually needs a calibration step bolted on. Second, a principled way to choose a loss: the loss follows from what you assume about the labels. Coin-flip labels give cross-entropy, real-valued measurements with symmetric noise give squared error, counts give a Poisson loss. So "why this loss?" becomes "what did I assume about the data?", which is a much stronger answer than a preference. Third, a caveat worth volunteering: class weights, focal loss and resampling all break the likelihood interpretation, so each costs you calibration, and you should recalibrate afterwards if anything downstream reads the score as a probability.',
       isCaseBased: false,
     },
     {
-      question: 'What exactly do γ and α do in focal loss, and why is RetinaNet\'s α = 0.25 counter-intuitive?',
+      question: 'A junior hands you a 10-class model whose training loss starts at 40 and drops to 8 over ten epochs. What do you say?',
       answer:
-        'γ is the focusing parameter: it exponentiates (1 − p_t), down-weighting by how EASY an example is, independent of its class. γ = 0 recovers plain cross-entropy; γ = 2 is the standard; pushing γ much past 5 starves the model because even moderately hard examples get crushed toward zero weight. α is the balancing parameter: a per-class constant, functionally identical to class_weight="balanced" — it down-weights by WHICH CLASS an example is. The counter-intuitive part is that α = 0.25 is applied to the rare foreground class, i.e. the minority gets weight 0.25 and the abundant background gets 0.75, the reverse of what class balancing normally does. The reason is interaction: γ has already suppressed the easy background so aggressively that the surviving loss is dominated by foreground, and the usual minority boost would overcorrect into unstable training. The lesson to state: γ and α are not independent knobs, so tune γ first and α second, and never copy α from a paper whose γ you did not also copy.',
-      isCaseBased: false,
-    },
-    {
-      question: 'Case: two teams solve the same rare-event problem. Team A ships focal loss with tuned γ and α; team B ships plain cross-entropy with class weights and a threshold chosen from the PR curve. Both report the same PR-AUC. Which do you ship?',
-      answer:
-        'Team B, unless there is a specific reason otherwise — and the reasoning is what is being tested, not the answer. Equal PR-AUC means equal ranking quality, so focal bought nothing on the metric that measures the model. What differs is everything else: B has two fewer hyperparameters to maintain and re-tune after each retrain, keeps calibrated probabilities so the threshold can be derived from real costs rather than searched, and its threshold can be moved in production without retraining when the review-team capacity or the fraud rate changes. Focal also decalibrates, so any downstream expected-cost logic would need a separate recalibration step. Questions I would ask before finalising: is the imbalance easy-vs-hard or just label imbalance — if the negatives are millions of trivially-separable rows, focal may win at larger scale even if it ties here; are the labels noisy, in which case focal is actively dangerous since it amplifies mislabelled rows; and is the PR-AUC difference inside fold-to-fold variance, because on rare classes that variance is usually larger than the gap between two models. Principle: prefer the model with fewer knobs and a movable operating point when the measured quality is equal.',
-      isCaseBased: true,
-    },
-    {
-      question: 'What does "minimising cross-entropy equals maximising likelihood" actually buy you in practice?',
-      answer:
-        'Three concrete things. (1) Calibration for free: because the optimum of the objective is the true conditional probability, an unregularised well-specified model\'s 0.7 really does mean about 70% — which is why logistic regression is still shipped where probabilities matter and why a random forest needs Platt or isotonic calibration bolted on. (2) A principled way to choose losses: the loss is determined by the noise model, so Bernoulli labels give cross-entropy, Gaussian noise gives MSE, count data gives Poisson deviance. "Why this loss?" becomes "what distribution did I assume?", which is a much stronger interview answer than a preference. (3) A clean route to regularisation: switching from MLE to MAP adds log p(θ), and a Gaussian prior on the weights becomes exactly the L2 penalty while a Laplace prior becomes L1 — so weight decay is a statement of prior belief, not a hack. Practical caveat worth naming: class weights, focal loss, and resampling all break the likelihood interpretation, so any of them costs you calibration and you should recalibrate afterwards if probabilities are consumed downstream.',
-      isCaseBased: false,
-    },
-    {
-      question: 'A junior hands you a model whose training loss starts at 40 and drops to 8 over ten epochs on a 10-class problem. What do you say?',
-      answer:
-        'Both numbers are wrong and the second is the worse one. A randomly-initialised 10-class classifier should start at ln(10) = 2.303, because a uniform prediction gives −log(1/10). Starting at 40 means the model begins wildly confident about the wrong classes — check initialisation scale, check for a missing normalisation on inputs, and check for a double-softmax (softmax in forward() plus CrossEntropyLoss, which applies its own log-softmax). And 8 is still far above the random-guess baseline of 2.303, so after ten epochs the model is worse than predicting uniformly — this is not slow convergence, it is a broken pipeline. Fastest triage: overfit a single batch of ten examples deliberately; a correct setup will drive that loss to near zero within a few hundred steps, and if it cannot, the bug is in the model or loss wiring rather than in the data or learning rate. The general habit to state: always know your loss\'s random baseline — ln(K) for K-class cross-entropy, 0.693 for binary — because it makes broken training visible in the first printed line.',
+        'Both numbers are wrong, and the second is worse. A freshly initialised 10-class classifier knows nothing, so it should spread probability evenly and score log(10) = 2.303 on the first batch. Starting at 40 means it begins wildly confident about wrong classes: check the initialisation scale, check that the inputs are normalised, and check for a double softmax, meaning softmax applied inside the model and again by a loss function that applies its own. And 8 is still far above the random-guess baseline of 2.303, so after ten epochs the model is doing worse than guessing uniformly. That is not slow convergence, it is a broken pipeline. Fastest triage: take ten examples and deliberately overfit that single batch. A correct setup drives that loss to near zero within a few hundred steps; if it cannot, the bug is in the model or the loss wiring rather than in the data or the learning rate. The habit worth keeping: always know your loss\'s random baseline, log K, so a broken run is visible on the very first printed line.',
       isCaseBased: false,
     },
   ],
   flashcards: [
-    { front: 'p_t in one line', back: 'The probability the model gave the TRUE label: p if y=1, 1−p if y=0. Every loss here is a re-weighting of −log(p_t).' },
-    { front: 'BCE derivation in three moves', back: 'Likelihood p^y(1−p)^(1−y) → multiply over rows → log (product becomes sum, no underflow) → negate. Minimising CE = maximising likelihood.' },
-    { front: 'The −log penalty numbers', back: 'p_t = 0.9 → 0.105 · 0.5 → 0.693 · 0.1 → 2.303 · 0.01 → 4.605. Gentle when right, unbounded when confidently wrong.' },
-    { front: 'Categorical CE with one-hot labels', back: '−Σ y_k log p̂_k collapses to −log(p̂ of the true class). Other classes still compete via softmax\'s denominator.' },
-    { front: 'Random-guess loss baseline', back: 'ln(K): 0.693 for binary, 2.303 for 10 classes, 6.908 for 1000. If training starts far from it, the pipeline is broken.' },
-    { front: 'Why logits, not probabilities, into the loss', back: 'exp(large logit) = inf, inf/inf = nan. log-sum-exp subtracts the max — exact, stable. Also prevents the double-softmax bug.' },
-    { front: 'Label smoothing: gain and cost', back: 'Target = (1−ε)y + ε/K instead of a hard 1/0 — binary at ε = 0.2 gives 0.9/0.1. Gain: finite optimal logit, better calibration, noise tolerance. Cost: compressed confidence separation (hurts distillation and score-based ranking).' },
-    { front: 'Focal loss formula and defaults', back: 'FL = −α_t(1−p_t)^γ log(p_t). γ = 2, α = 0.25 (RetinaNet). γ = 0 is plain cross-entropy.' },
-    { front: 'γ vs α in focal', back: 'γ down-weights by how EASY (any class); α down-weights by WHICH CLASS (a plain class weight). Tune γ first — α depends on it.' },
-    { front: 'Hinge in one sentence', back: 'max(0, 1 − y·f(x)), y ∈ {−1,+1}. Exactly zero once correct AND past the margin → zero gradient → support-vector sparsity, but no calibrated probability.' },
-    { front: 'Contrastive vs triplet loss', back: 'Contrastive scores a PAIR with label y: y·d² + (1−y)·max(0, m−d)² — absolute demands (same at distance 0, different at least m apart). Triplet scores (anchor, positive, negative): max(0, d(a,p) − d(a,n) + m) — purely RELATIVE, it only asks that the positive be closer than the negative by m. Both hit exactly zero once satisfied.' },
-    { front: 'Why triplet mining matters', back: 'Random triplets almost all already satisfy the margin → zero loss, zero gradient, training stalls at a pretty-looking number. The hardest negatives are usually label noise or twins and collapse the embedding to a point. FaceNet uses semi-hard: d(a,p) < d(a,n) < d(a,p)+m. Batch-hard mines inside a P×K batch from its distance matrix.' },
+    { front: 'p_t in one line', back: 'The probability the model gave the TRUE label: p if y = 1, and 1 − p if y = 0. Every loss in this module is a re-weighting of −log(p_t).' },
+    { front: 'Binary cross-entropy, derived in three moves', back: 'Write the probability of what happened, p^y(1−p)^(1−y). Multiply over rows to get the likelihood. Take the log so the product becomes a sum, which is safe because log is monotonic. Negate so an optimiser can walk downhill.' },
+    { front: 'The −log penalty numbers', back: 'p_t = 0.9 gives 0.105, 0.5 gives 0.693, 0.1 gives 2.303, 0.01 gives 4.605. Gentle when right, unbounded when confidently wrong.' },
+    { front: 'Why not squared error for classification', back: 'Its slope carries a p(1−p) factor that collapses at both extremes. At logit −6 with true label 1, cross-entropy\'s slope is −0.998 and squared error\'s is −0.0025, about 400 times weaker: quietest exactly where the model is most wrong.' },
+    { front: 'Random-guess loss baseline', back: 'log K: 0.693 for 2 classes, 2.303 for 10, 6.908 for 1000. If training starts far above it the pipeline is broken; far below it, suspect leakage.' },
+    { front: 'Why logits and not probabilities go into the loss', back: 'e raised to a large logit overflows to infinity, and infinity over infinity is nan. Log-sum-exp subtracts the largest logit first, which is exact and stable. It also prevents applying softmax twice.' },
+    { front: 'Label smoothing: recipe, gain, cost', back: 'Target = (1 − ε)·y + ε/K. At ε = 0.1 and K = 2 that is (0.95, 0.05). Gain: a reachable minimum at a finite logit, better calibration, tolerance to a few wrong labels. Cost: the gap between the top scores is compressed.' },
+    { front: 'Focal loss, and when not to use it', back: 'FL = −(1 − p_t)^γ · log(p_t), usually γ = 2, so p_t = 0.99 is multiplied by 0.0001 and p_t = 0.1 by 0.81. Use it when the majority is enormous AND trivially easy. Never on noisy labels: a wrong label looks like a hard row, so focal amplifies it. It also breaks calibration.' },
   ],
   mindmapMarkdown: `- Classification Losses: Cross-Entropy, Focal & Hinge
+  - The four words first
+    - log: turns multiplication into addition
+    - monotonic: the best setting does not move
+    - sigmoid: raw score to probability
+    - logit: the raw score itself
   - Binary cross-entropy
     - p_t = probability given to the true label
-    - Likelihood p^y(1−p)^(1−y)
-    - Multiply → log → negate
-    - Minimise CE = maximise likelihood (MLE)
-    - Choosing a loss = choosing a noise model
+    - Probability of what happened: p^y(1−p)^(1−y)
+    - Multiply, then log, then negate
+    - Minimise CE = maximise likelihood
   - The penalty shape
-    - 0.9→0.105, 0.5→0.693, 0.1→2.303, 0.01→4.605
-    - Confident-and-wrong is the expensive quadrant
-    - Unbounded → not robust to label noise
+    - 0.9 gives 0.105, 0.5 gives 0.693, 0.01 gives 4.605
+    - Confident and wrong is the expensive corner
+    - Unbounded, so not robust to label noise
+  - Why not squared error
+    - Slope carries a p(1−p) factor
+    - At z = −6: −0.998 against −0.0025, 400x weaker
+    - Weakest exactly where the model is most wrong
   - Multi-class
-    - Softmax turns K logits into a distribution
-    - One-hot: only the true class term survives
-    - Classes compete via the denominator
-    - Random baseline = ln(K)
+    - Softmax: exponentiate, then divide by the total
+    - One-hot label: only the true class term survives
+    - Classes compete through the shared total
+    - Random baseline is log K
   - Numerical stability
-    - exp(1000) = inf → nan
-    - log-sum-exp: subtract the max
+    - e^1000 overflows, inf over inf is nan
+    - Subtract the largest logit first
     - Pass logits, never probabilities
-    - Double-softmax bug
+    - Double softmax flattens every difference
   - Label smoothing
-    - Targets 0.9 / 0.1 instead of 1 / 0
-    - Hard targets need infinite logits
-    - Better calibration + noise tolerance
-    - Cost: compressed confidence separation
+    - Target (1−ε)y + ε/K
+    - ε = 0.1, K = 2 gives 0.95 and 0.05
+    - Reachable minimum, better calibration
+    - Cost: compressed score gap
   - Focal loss
-    - CE × (1 − p_t)^γ
-    - γ = focusing (how easy), α = class balance
-    - RetinaNet γ=2, α=0.25
-    - Easy rows: 81% of BCE → 2.1% of focal
-    - Use when negatives are huge and trivial
-    - Never on noisy labels; decalibrates
+    - Cross-entropy times (1 − p_t)^γ
+    - γ = 2 is standard, γ = 0 is plain CE
+    - Easy rows: 81% of BCE becomes 2.1% of focal
+    - Never on noisy labels; breaks calibration
   - Hinge loss
-    - max(0, 1 − y·f(x)), y = ±1
-    - Zero only past the margin
-    - Zero gradient → support vectors → sparse
-    - Score, not a probability (needs Platt)
-    - Squared hinge: smooth, outlier-sensitive
-  - Cross-entropy vs hinge
-    - Probabilities vs margins
-    - CE never zero, hinge exactly zero
-    - CE unbounded, hinge linear (robust)
-    - CE wins deep learning: gradient flow, softmax, composability
-  - Metric learning: same or different?
-    - Open label set → softmax cannot grow
-    - Learn an embedding: distance = dissimilarity
-    - Contrastive: y·d² + (1−y)·max(0, m−d)²
-    - Push different pairs only until d ≥ m
-    - Triplet: max(0, d(a,p) − d(a,n) + m)
-    - Relative demand, never an absolute distance
-    - FaceNet: 128-d unit vector, m = 0.2
-    - Verify = threshold; recognise = nearest neighbour
-    - New employee = one forward pass + one DB row
-    - Mining: random triplets give zero gradient
-    - Hardest negatives = label noise → collapse
-    - Semi-hard (FaceNet), batch-hard / online
-    - Replaced by ArcFace/CosFace and InfoNCE
-  - Why not MSE
-    - σ′(z) factor kills the gradient when confidently wrong
-    - Non-convex through a sigmoid
-    - Full derivation in the logistic-regression module
+    - max(0, 1 − y·f(x)), labels +1 and −1
+    - Margin: keep a clear strip around the boundary
+    - Exactly zero past the margin, so zero slope
+    - Support vectors are what is left
+    - A score, not a probability
   - Picking one
-    - Need probabilities → cross-entropy
-    - Easy/hard imbalance → focal
-    - Label imbalance, tabular → class weights + threshold
-    - Noisy labels → label smoothing
-    - Compact margin model → hinge`,
+    - Need probabilities: cross-entropy
+    - Enormous and trivially easy majority: focal
+    - Ordinary label imbalance: class weights + threshold
+    - Noisy labels: label smoothing, never focal
+    - Compact margin model: hinge`,
 }
 
 export default m

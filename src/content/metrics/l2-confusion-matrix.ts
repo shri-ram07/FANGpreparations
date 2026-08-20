@@ -513,18 +513,6 @@ print('flag-nothing precision, zero_division=1 -> %.1f' % precision_score(y, not
       correct: 1,
     },
     {
-      question: 'A model predicts "positive" for every single input. What are precision and recall?',
-      options: [
-        {
-          text: 'Recall = 1.0; precision collapses to the base rate of positives',
-          explanation: 'Correct. FN = 0 so recall is perfect, while precision = TP/(everything) = the fraction of the data that is genuinely positive. At 1% positives that is 0.01.',
-        },
-        { text: 'Both = 1.0', explanation: 'Only if literally every sample is positive. Otherwise every negative becomes an FP and precision falls.' },
-        { text: 'Both = 0.0', explanation: 'That describes predicting negative for everything, and even then precision is 0/0 (undefined), not 0.' },
-      ],
-      correct: 0,
-    },
-    {
       question: 'A camera flags 50 bottles; 36 were really cracked, and 60 bottles were cracked in total. What is F1?',
       options: [
         { text: '0.655', explanation: 'Correct. P = 36/50 = 0.720, R = 36/60 = 0.600, F1 = 2 x 0.720 x 0.600 / 1.320 = 0.864/1.320 = 0.655.' },
@@ -532,18 +520,6 @@ print('flag-nothing precision, zero_division=1 -> %.1f' % precision_score(y, not
         { text: '0.937', explanation: 'That is the accuracy, (36 + 526)/600. F1 never uses TN, which is why the two numbers are so far apart here.' },
       ],
       correct: 0,
-    },
-    {
-      question: 'Which pair of metrics shares a denominator, and what follows from that?',
-      options: [
-        { text: 'Precision and recall — both use TP', explanation: 'They share the NUMERATOR (TP), but their denominators differ: TP+FP versus TP+FN. That difference is the entire distinction.' },
-        {
-          text: 'Specificity and FPR — both divide by TN + FP, so they sum to 1',
-          explanation: 'Correct. Both are computed inside the negative row, so FPR = 1 - specificity exactly. FPR is one of the two ROC axes; recall (TPR) is the other.',
-        },
-        { text: 'Accuracy and F1 — both use all four cells', explanation: 'Accuracy uses all four, but F1 uses only TP, FP and FN. F1 never touches TN — which is why it still says something when negatives dominate.' },
-      ],
-      correct: 1,
     },
   ],
   interviewQuestions: [
@@ -560,12 +536,6 @@ print('flag-nothing precision, zero_division=1 -> %.1f' % precision_score(y, not
       isCaseBased: false,
     },
     {
-      question: 'Derive the two forms of F-beta and say what beta squared actually means.',
-      answer:
-        'Start from the weighted harmonic mean: 1/F_beta = w_P (1/P) + w_R (1/R) with w_P = 1/(1+beta^2) and w_R = beta^2/(1+beta^2), which sum to 1. Put both terms over the common denominator (1+beta^2)PR: the first becomes R/((1+beta^2)PR) and the second beta^2 P/((1+beta^2)PR), so 1/F_beta = (beta^2 P + R)/((1+beta^2)PR). Invert and you get the library form F_beta = (1+beta^2) PR/(beta^2 P + R); at beta = 1 both weights are 1/2 and it reduces to 2PR/(P+R). The meaning of beta squared falls straight out of the weights: w_R/w_P = beta^2, so beta squared is exactly how many times more weight recall carries than precision. Be careful about the last step people take: setting beta^2 equal to a cost ratio is a convention for translating costs into weights, not a theorem — F-beta contains no costs.',
-      isCaseBased: false,
-    },
-    {
       question: 'How do you choose beta in practice, and when should you not use F-beta at all?',
       answer:
         'beta > 1 leans recall (screening, fraud, safety), beta < 1 leans precision (spam, auto-takedowns, anything that punishes a user), and the common heuristic is beta = sqrt(cost of a miss / cost of a false alarm) — a miss costing 4x gives beta = 2, a miss costing 100x gives beta = 10. Two caveats matter. First, choose beta before comparing models: the ranking can flip with beta, so picking it afterwards is just picking a winner. Second, if you actually know both costs in currency, drop F-beta and minimise expected cost directly — pick the threshold that minimises C_FN x FN + C_FP x FP, which uses the real numbers instead of squashing them into one dimensionless knob. F-beta earns its place only when you know the direction of the asymmetry but not its price.',
@@ -575,12 +545,6 @@ print('flag-nothing precision, zero_division=1 -> %.1f' % precision_score(y, not
       question: 'What is the accuracy paradox, and how do you detect it in thirty seconds?',
       answer:
         'When one class dominates, a model that always predicts that class scores its share of the data as accuracy while being useless. At 95% genuine mail, always answering "not spam" gives TP=0, FP=0, FN=50, TN=950 on 1,000 emails: accuracy 0.950, recall 0.000, precision undefined (0/0). Accuracy lies because it counts TN, and TN is the free 950. The thirty-second detection: ask for the class split, compute the majority-class baseline (1 minus the positive rate), and put it next to the reported accuracy. If they are close, the model has added nothing. Then ask for the raw four cells — recall and precision contain no TN, so they cannot be inflated by the easy majority, and they separate a real model from the do-nothing one immediately.',
-      isCaseBased: false,
-    },
-    {
-      question: 'When is plain accuracy a perfectly good metric? Give the exact conditions.',
-      answer:
-        'Two conditions, both required. One: classes are roughly balanced, so no class can win the score just by being common. Two: the error types cost about the same, because accuracy weights an FP and an FN identically by construction. Balanced 10-class image classification satisfies both; report accuracy there and move on. It breaks on rare positives (1% fraud: always-negative scores 99%) and on asymmetric costs even at perfect balance — accuracy will happily trade 10 caught tumours for 10 fewer false alarms. The discipline: never quote accuracy without the majority-class baseline beside it, because alone the number is uninterpretable.',
       isCaseBased: false,
     },
     {
@@ -596,21 +560,9 @@ print('flag-nothing precision, zero_division=1 -> %.1f' % precision_score(y, not
       isCaseBased: true,
     },
     {
-      question: 'Recall is also called sensitivity and TPR. Where does specificity fit, and why do doctors quote both?',
-      answer:
-        'Sensitivity, recall and TPR are one formula, TP/(TP+FN), computed entirely inside the positive row: of the sick, how many did the test catch. Specificity = TN/(TN+FP) is computed entirely inside the negative row: of the healthy, how many did it correctly clear. FPR = FP/(FP+TN) = 1 - specificity. Medicine quotes both because they are independent axes — a test can be 99% sensitive and 40% specific and be a useful screening tool, or 60% sensitive and 99% specific and be a confirmatory test. There is also a deeper reason: sensitivity and specificity are properties of the test itself and do not change when you move it to a population where the disease is more or less common. Precision does change. Precision has a medical name, PPV or positive predictive value — the same TP/(TP+FP) — and it depends on prevalence, which just means how common the condition is in the group you are testing. Test 1,000 people in a high-prevalence clinic and a low-prevalence screening drive with the identical test and you get very different PPV, which is why doctors quote the two prevalence-free numbers instead.',
-      isCaseBased: false,
-    },
-    {
       question: 'A colleague reports "precision 1.0" on a rare-disease classifier. What do you check first?',
       answer:
         'How many positives it predicted at all. Precision = TP/(TP+FP) is undefined when the model flags nothing (0/0), and libraries print 0 or 1 depending on a setting — sklearn calls it zero_division — so "precision 1.0" is entirely consistent with a model that flags two obvious cases, or none. Ask for the raw counts: TP, FP, FN, and the number of predicted positives. If it flagged 3 of 400 true cases, precision 1.0 sits next to recall 0.0075 and the model is worthless. The general rule: precision and recall are only meaningful as a pair, because each has a cheat strategy that maximises it — flag nothing for precision, flag everything for recall.',
-      isCaseBased: false,
-    },
-    {
-      question: 'What is the difference between a loss and a metric, and why can F1 not be a loss?',
-      answer:
-        'A loss is what the model optimizes during training and must be differentiable, because gradients — the slopes that tell each weight which way to move — flow backwards through it. A metric is what humans judge with and carries no such requirement. F1 is computed from hard label counts, so it is a step function of the model parameters: flat almost everywhere, with sudden jumps when a prediction crosses the threshold. Its slope is zero or undefined, which gives an optimizer nothing to descend. So you train with cross-entropy, which is smooth, and you judge with F1 at a chosen threshold. The gap between the two is real, and it is why threshold tuning after training exists as a separate step, and why smooth stand-ins for F1 get built when the mismatch actually costs money.',
       isCaseBased: false,
     },
     {
@@ -629,8 +581,6 @@ print('flag-nothing precision, zero_division=1 -> %.1f' % precision_score(y, not
     { front: 'What beta squared means in F-beta', back: 'Weights are 1/(1+b^2) on precision and b^2/(1+b^2) on recall; their ratio is b^2. So b^2 = how many times more recall counts. b>1 recall (screening), b<1 precision (spam).' },
     { front: 'The two cheat strategies', back: 'Flag everything: recall = 1, precision = base rate. Flag nothing: recall = 0, precision = 0/0 undefined. Never quote one without the other.' },
     { front: 'The accuracy paradox', back: '95/5 split, always answer "not spam": TP=0 FP=0 FN=50 TN=950, accuracy 0.950 = the majority-class baseline, recall 0.000. Accuracy counts TN; precision and recall do not.' },
-    { front: 'When accuracy is fine', back: 'Balanced classes AND symmetric error costs. Otherwise it lies. Always print the majority-class baseline (1 - positive rate) next to it.' },
-    { front: 'Micro vs macro vs weighted (multi-class)', back: 'Micro = pooled counts, samples equal, = accuracy in single-label multi-class. Macro = unweighted per-class mean, classes equal, exposes rare-class failure. Weighted = macro by support, lands back near micro.' },
   ],
   mindmapMarkdown: `- The Confusion Matrix: Precision, Recall & F1
   - The four cells

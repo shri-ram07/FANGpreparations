@@ -4,114 +4,186 @@ const m: Module = {
   id: 'metrics-l2-regression-metrics',
   subjectId: 'metrics',
   level: 2,
-  title: 'Regression Metrics: R², Adjusted R² & the MAPE Trap',
+  title: 'Regression Metrics: RMSE, MAE, R-squared and the MAPE Trap',
   whyItMatters:
-    'The loss is what your model optimizes; these are the numbers you put in the results table and defend in a review. Interviewers probe here because almost everyone can recite "R² is variance explained" and almost nobody can say why R² never decreases, why the same model scores differently on a narrower test set, or why MAPE quietly rewards a model that under-forecasts. Get these four numbers right and you can talk to a PM without lying to them.',
-  estMinutes: 45,
+    'When a model predicts a number - a rent, a delivery time, tomorrow\'s units sold - nobody can read the raw errors. You have to compress them into one or two numbers a person can act on. This module builds four of those numbers from five hand-written predictions, using plain Python lists and for loops, so you can compute each one yourself. It also shows, with real printed numbers, the two ways these numbers lie: a percentage error that swings from 13 percent to 123 percent when one row has a small actual, and an R-squared of 0.9968 for a model that knows nothing.',
+  assumes: [
+    'You have read *Regression Losses* in this subject, so you already know MSE (average squared error) and MAE (average absolute error) as things a model minimises while training',
+    'You know what an average is, and what a percentage is',
+    'You have seen a Python list, a for loop, and range(len(x))',
+    'No statistics background is needed. R-squared, adjusted R-squared, MAPE, sMAPE and WAPE are all defined here from scratch.',
+  ],
+  estMinutes: 42,
   sections: [
     {
       type: 'intuition',
-      title: 'Loss is for the optimizer. This module is for the report.',
-      md: `The sibling module **Regression Losses** (MSE / MAE / Huber / quantile) is about what the model *minimizes* during training. Different job.
+      title: 'Five days of sales, five predictions, one pile of errors',
+      md: `A shop sells some number of units each day. A model predicts that number the night before. Five days went like this.
 
-- A **loss** must be differentiable, cheap, and stable — the optimizer has to follow its gradient a million times.
-- A **metric** must be *understandable*. It goes in a slide. A human decides something because of it.
-- They are often the same formula wearing a different hat (MSE trained, RMSE reported) — and sometimes deliberately different (train on Huber, report RMSE and MAE side by side).
-- One rule holds for every metric below: **a metric without a baseline is a number without a meaning.** We come back to that at the end, and it is the single most reusable habit in this module.`,
+- True units sold: **10, 20, 30, 40, 50**.
+- The model predicted: **12, 18, 33, 38, 62**.
+- Subtract, prediction minus truth, one day at a time: **+2, -2, +3, -2, +12**.
+
+Four of the five days are close. The last day is a 12-unit miss on a 50-unit day. Nobody can read five errors out loud in a meeting, so we squash them into a single number. The rest of this module is four different ways of squashing, and what each one hides.
+
+Note what changed since *Regression Losses*. There, MSE and MAE were the numbers the model **minimised while training**. Here they are the numbers you **report afterwards**. Same arithmetic, different job: a reported number does not need a slope, it needs to mean something to a person.`,
     },
     {
       type: 'intuition',
-      title: 'RMSE: the number you actually quote',
-      md: `You predict flat rents. Your MSE is 144,000,000. What does that mean? Nothing — the units are rupees *squared*.
+      title: 'RMSE and MAE: two averages of the same five errors',
+      md: `**MAE**, mean absolute error, is the plain answer: drop the plus and minus signs, then average. (2 + 2 + 3 + 2 + 12) / 5 = 21 / 5 = **4.2 units**. Sentence for a meeting: "on a typical day we are off by about 4 units."
 
-- Take the square root and the units come back: **RMSE = ₹12,000**.
-- Now you have a sentence a PM understands: *"on a typical flat we are off by about ₹12,000 a month."*
-- That translatability is the whole reason RMSE exists. MSE is what the optimizer eats; RMSE is what the room hears.
-- Cost: the square root does **not** undo the squaring inside. RMSE inherits every bit of MSE's outlier sensitivity — it just relabels the axis.
-- So RMSE is a *slightly pessimistic* average error: it sits above the typical miss, pulled up by the worst ones.`,
+**MSE**, mean squared error, squares each error first: (4 + 4 + 9 + 4 + 144) / 5 = 165 / 5 = **33**. That 33 is in *units squared*, which nobody can picture. So take the square root: **RMSE = 5.745 units**. RMSE stands for root mean squared error, and the root exists only to put the number back into units you can say out loud.
+
+Two facts follow from the squaring, and both matter.
+
+- The 12-unit miss contributed 144 out of the 165 total, so **87 percent of MSE comes from one day out of five**. Under MAE that same day contributes 12 out of 21, which is 57 percent. Squaring makes big misses dominate.
+- RMSE is therefore always at least as large as MAE. They are equal only if every error has exactly the same size, which never happens with real data.`,
     },
     {
       type: 'intuition',
-      title: 'MAE, and the gap that is a free diagnostic',
-      md: `**MAE** = average absolute miss. No squaring, so every point pays in proportion to how wrong it is. One catastrophic miss counts once, not 100 times.
+      title: 'The RMSE-to-MAE ratio is a free diagnostic',
+      md: `Because RMSE is pulled up by big errors and MAE is not, the gap between them tells you how the error is spread out. You get it for free, from two numbers you were reporting anyway.
 
-- Both are in the target's units, so both are quotable. RMSE ≥ MAE **always** — squaring lets big errors dominate the average before the root pulls it back.
-- They are only equal when every single error has the same size. That never happens.
-- So the **ratio RMSE / MAE is a diagnostic you get for free**: it measures how concentrated your error is.
-- Near **1.0** → errors are uniform. Your model is evenly mediocre; improving it means improving everything.
-- **1.5 – 2.0** → a normal spread of errors, some points harder than others.
-- Above **~2** → a handful of rows are eating your metric. Do not tune hyperparameters. Go read those rows.
-- Report both. "RMSE ₹19.8k, MAE ₹10.4k" tells a reviewer more than either number alone: the average miss is ₹10k, but some misses are far worse.`,
-    },
-    {
-      type: 'math',
-      intro: 'Both in the target\'s units. The inequality is not a coincidence — it is Cauchy–Schwarz.',
-      latex: [
-        '\\text{RMSE} = \\sqrt{\\frac{1}{n}\\sum_{i=1}^{n}\\left(\\hat{y}_i - y_i\\right)^2} \\qquad \\text{MAE} = \\frac{1}{n}\\sum_{i=1}^{n}\\left|\\hat{y}_i - y_i\\right|',
-        '\\text{RMSE} \\;\\ge\\; \\text{MAE} \\quad \\text{for every dataset; equality iff all } |e_i| \\text{ are identical.}',
-        '\\frac{\\text{RMSE}}{\\text{MAE}} \\approx 1 \\Rightarrow \\text{errors uniform} \\qquad \\frac{\\text{RMSE}}{\\text{MAE}} \\gg 2 \\Rightarrow \\text{a few rows own your error}',
-      ],
-    },
-    {
-      type: 'intuition',
-      title: 'R²: how much better than the laziest model?',
-      md: `RMSE has one fatal flaw for comparison: it is in the target's units. Is RMSE 12,000 good? Depends — rupees of rent, or milligrams? You cannot compare across problems.
+- Here: 5.745 / 4.2 = **1.37**.
+- Ratio close to **1.0** means every day is about equally wrong. The model is evenly mediocre, and improving it means improving everything.
+- Ratio around **1.5 to 2.0** is the normal spread: some rows are harder than others.
+- Ratio above about **2** means a handful of rows own your error. Stop tuning settings and go read those rows - they are usually a distinct situation the model never saw, not random noise.
 
-- Fix: compare your errors against a fixed, universally available opponent — **always predict the mean of y**. That model is free, honest, and knows nothing.
-- **SS_tot** = the squared error that mean-predictor makes. **SS_res** = the squared error *you* make.
-- **R² = 1 − SS_res / SS_tot** = the fraction of the target's variance your model explains, *relative to just predicting the mean*.
-- R² = 0.75 → you removed 75% of the variance the mean-predictor left on the table.
-- It is a **ratio of two errors**, so the units cancel. R² is unitless and comparable across problems in a way RMSE never is.`,
-    },
-    {
-      type: 'math',
-      intro: 'One formula, and the crucial reading of the denominator.',
-      latex: [
-        'R^2 \\;=\\; 1 - \\frac{SS_{res}}{SS_{tot}} \\;=\\; 1 - \\frac{\\sum_i (y_i - \\hat{y}_i)^2}{\\sum_i (y_i - \\bar{y})^2}',
-        'SS_{tot} \\text{ is the error of the dumbest honest model: always predict } \\bar{y}. \\text{ The baseline is built in.}',
-        'R^2 = 1 \\text{ (perfect)} \\qquad R^2 = 0 \\text{ (= the mean)} \\qquad R^2 < 0 \\text{ (worse than the mean)}',
-      ],
-    },
-    {
-      type: 'note',
-      md: `Read the scale properly, because two of the three points get misquoted constantly. **R² = 0 does not mean "no signal at all"** — it means *exactly as good as predicting the mean*. **R² < 0 is not a bug.** On training data with an intercept, least squares can never do worse than the mean, so R² ≥ 0 there. On *test* data it absolutely can go negative, and that is a superb sanity signal: it says your model would help more if you deleted it and returned the training mean. Any time you see a negative test R², suspect leakage, distribution shift, or a scaler fitted on the wrong split — check those before you touch the model.`,
-    },
-    {
-      type: 'intuition',
-      title: 'R²\'s trap: it depends on your test set, not just your model',
-      md: `Look at the denominator again. SS_tot is the **variance of the test set you happened to evaluate on**. Change the test set, change R² — with the model frozen.
-
-- Ship one model. Score it on flats priced ₹8k–₹80k: wide spread, huge SS_tot, R² = 0.88. Impressive.
-- Score the *same* model on flats priced ₹18k–₹24k: tiny SS_tot, R² = 0.31. Identical predictions, identical RMSE, a third of the score.
-- Nothing got worse. Predicting a narrow target is simply a harder game against the mean, because the mean is already a good answer.
-- Practical consequences: never compare R² across two different test sets; be suspicious of R² on a tiny sample; and if someone reports only R², ask what the target's spread was.
-- The complement is also true, and it is the honest defence of RMSE: **RMSE is comparable across models on the same data; R² is comparable across problems.** Report both and neither trap fires.`,
-    },
-    {
-      type: 'intuition',
-      title: 'Adjusted R²: because raw R² can never go down',
-      md: `Here is the property that disqualifies R² for model selection: **adding any feature — including a column of pure random noise — can never decrease R².**
-
-- Why: least squares can always set the new coefficient to 0 and reproduce the old fit exactly. That is the floor.
-- It never actually chooses 0, because the noise column will correlate with the residuals *by chance* on this particular sample. So R² goes up. Slightly, but always up.
-- Consequence: "we added features and R² improved" is not evidence of anything. It is arithmetic.
-- **Adjusted R²** charges rent for parameters: it scales the leftover error term by (n−1)/(n−p−1), so each extra feature p has to earn more than the penalty it costs.
-- A feature that helps → adjusted R² rises. A feature that is noise → adjusted R² *falls*. Now you have a selection signal.
-- Small-sample warning: with n = 30 and p = 25 the denominator n−p−1 is 4, and adjusted R² collapses — correctly. That is the formula screaming that you are fitting noise.`,
-    },
-    {
-      type: 'math',
-      intro: 'The penalty, and the worked example the code below runs for real.',
-      latex: [
-        'R^2_{adj} \\;=\\; 1 - \\left(1 - R^2\\right)\\frac{n - 1}{n - p - 1}',
-        'n = 30, \\quad p: 2 \\rightarrow 5 \\;\\text{(three noise columns added)}',
-        'R^2: 0.6458 \\rightarrow 0.6788 \\;\\uparrow \\qquad R^2_{adj}: 0.6195 \\rightarrow 0.6119 \\;\\downarrow',
-      ],
+So report both numbers, not one. "RMSE 5.7, MAE 4.2" says more than either alone.`,
     },
     {
       type: 'code',
       lang: 'python',
-      title: 'Add three columns of pure noise. Watch R² rise and adjusted R² fall.',
+      title: 'RMSE and MAE with two running totals and one loop',
+      code: `y    = [10, 20, 30, 40, 50]
+pred = [12, 18, 33, 38, 62]
+
+sq_total = 0.0
+abs_total = 0.0
+for i in range(len(y)):
+    error = pred[i] - y[i]
+    sq_total = sq_total + error * error
+    abs_total = abs_total + abs(error)
+
+mse = sq_total / len(y)
+rmse = mse ** 0.5
+mae = abs_total / len(y)
+print('MSE', mse, 'RMSE', round(rmse, 3), 'MAE', mae)
+print('RMSE / MAE =', round(rmse / mae, 2))
+
+# ---- real output ----
+# MSE 33.0 RMSE 5.745 MAE 4.2
+# RMSE / MAE = 1.37`,
+      annotations: {
+        1: 'The five true values, as a plain Python list of whole numbers.',
+        2: 'The five predictions, in the same order, so pred[3] and y[3] describe the same day.',
+        4: 'A running total for the squared errors. Written 0.0 rather than 0 to make clear it will hold decimals.',
+        5: 'A second running total, for the absolute errors. Two totals from one pass over the data.',
+        6: 'len(y) is 5, so range(len(y)) hands out i = 0, 1, 2, 3, 4 - the five positions in both lists.',
+        7: 'Prediction minus truth for day i. Positive means the model guessed too high, negative too low.',
+        8: 'error * error squares it. Squaring throws away the sign and makes a 12 count 36 times as much as a 2.',
+        9: 'abs(error) is the built-in absolute value: it drops the sign and changes nothing else. Here a 12 counts 6 times as much as a 2.',
+        11: 'Divide the squared total by 5 to get the mean squared error: 165 / 5 = 33, in units squared.',
+        12: '** 0.5 raises to the power one half, which is the square root. This is the R in RMSE, and it puts the number back into units.',
+        13: 'Divide the absolute total by 5 to get the mean absolute error: 21 / 5 = 4.2.',
+        14: 'round(x, 3) cuts a float to three decimal places, so 5.744562646538029 prints as 5.745.',
+        15: 'The ratio, printed on purpose. 1.37 means the errors are moderately concentrated - the 12-unit day is doing extra work.',
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'R-squared: how much better are you than the laziest possible model?',
+      md: `RMSE is 5.745. Is that good? You cannot say, because it depends on the problem. Off by 5.7 units on a 50-unit day is respectable; off by 5.7 rupees on a 6-rupee item is a disaster. RMSE carries the units of the target, so it is not comparable across problems.
+
+The fix is to compare yourself against a fixed opponent that is always available: the **mean model**. Ignore every input and predict the average of the true values for each row. Here the average of 10, 20, 30, 40, 50 is 30, so the mean model answers 30 five times. It is free, honest, and knows nothing.
+
+- **SS_res** (residual sum of squares) is the total squared error *you* make: 4 + 4 + 9 + 4 + 144 = **165**.
+- **SS_tot** (total sum of squares) is the total squared error the *mean model* makes: 400 + 100 + 0 + 100 + 400 = **1000**.
+- **R-squared = 1 - SS_res / SS_tot** = 1 - 165/1000 = **0.835**.
+
+In words: the mean model wastes 1000 units of squared error, you waste 165, so you removed **83.5 percent** of the error the lazy model left behind. That is what the phrase "explained variance" means - SS_tot is the target's total spread around its own average, and R-squared is the share of that spread your predictions account for. Being a ratio of two errors, the units cancel, so R-squared is comparable across problems in a way RMSE is not.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'R-squared from two sums, same five rows',
+      code: `y    = [10, 20, 30, 40, 50]
+pred = [12, 18, 33, 38, 62]
+
+mean_y = sum(y) / len(y)
+ss_res = 0.0
+ss_tot = 0.0
+for i in range(len(y)):
+    ss_res = ss_res + (pred[i] - y[i]) ** 2
+    ss_tot = ss_tot + (y[i] - mean_y) ** 2
+
+print('mean of y =', mean_y)
+print('SS_res =', ss_res, '  SS_tot =', ss_tot)
+print('R2 =', round(1 - ss_res / ss_tot, 4))
+
+# ---- real output ----
+# mean of y = 30.0
+# SS_res = 165.0   SS_tot = 1000.0
+# R2 = 0.835`,
+      annotations: {
+        1: 'The same five true values as before.',
+        2: 'The same five predictions, so the R-squared below describes the exact model we already scored.',
+        4: 'sum(y) adds the list up and len(y) counts it, so this is the average: 150 / 5 = 30.0. This one number IS the mean model.',
+        5: 'Running total of our own squared errors.',
+        6: 'Running total of the mean model\'s squared errors. Two competitors, two totals.',
+        7: 'One pass over the five positions, exactly as in the previous snippet.',
+        8: 'Our error on day i, squared, added on. ** 2 means raise to the power 2.',
+        9: 'The mean model\'s error on the same day: truth minus 30, squared. Note it never looks at pred - the baseline ignores the model entirely.',
+        11: 'Prints 30.0, confirming what the mean model predicts.',
+        12: 'Prints 165.0 and 1000.0 - the two numbers added up by hand above.',
+        13: '1 minus the ratio. 165/1000 is the fraction of the baseline error we failed to remove, so 1 minus it is the fraction we did remove: 0.835.',
+      },
+    },
+    {
+      type: 'math',
+      intro: 'The three formulas so far, in symbols. n is the number of rows, y is the true value for row i, y-hat is the prediction, and y-bar is the average of all the true values.',
+      latex: [
+        '\\text{MAE} = \\frac{1}{n}\\sum_{i=1}^{n}\\left|\\hat{y}_i - y_i\\right| = \\frac{21}{5} = 4.2 \\qquad \\text{RMSE} = \\sqrt{\\frac{1}{n}\\sum_{i=1}^{n}(\\hat{y}_i - y_i)^2} = \\sqrt{33} = 5.745',
+        'R^2 = 1 - \\frac{SS_{res}}{SS_{tot}} = 1 - \\frac{\\sum_i (y_i - \\hat{y}_i)^2}{\\sum_i (y_i - \\bar{y})^2} = 1 - \\frac{165}{1000} = 0.835',
+        'R^2 = 1 \\text{ perfect} \\qquad R^2 = 0 \\text{ exactly as good as predicting } \\bar{y} \\qquad R^2 < 0 \\text{ worse than predicting } \\bar{y}',
+      ],
+    },
+    {
+      type: 'note',
+      md: `Two readings that get misquoted constantly. **R-squared = 0 does not mean "no signal"** - it means your squared error exactly equals the mean model's squared error. **R-squared below 0 is not a bug**: it means SS_res is bigger than SS_tot, so your model is worse than a constant. That cannot happen on the data a linear model was fitted on, but on fresh held-out data it happens all the time, and it is a loud alarm. Check whether a scaler or encoder was fitted on the wrong split, or whether the new data simply looks different from the training data.`,
+    },
+    {
+      type: 'intuition',
+      title: 'R-squared depends on the test set, not only on the model',
+      md: `Look at the denominator once more. SS_tot is computed from the true values of whichever rows you evaluated on. Freeze the model, change the rows, and R-squared changes.
+
+- Suppose your predictions are off by the same amounts on two different test sets, so SS_res = 200 on both.
+- Test set A holds flats renting from 8,000 to 80,000 rupees. Wide spread, so SS_tot is large - say 4,000. R-squared = 1 - 200/4000 = **0.95**.
+- Test set B holds only flats renting from 18,000 to 24,000. Narrow spread, so SS_tot is small - say 500. R-squared = 1 - 200/500 = **0.60**.
+- Same model, same errors, same RMSE. Only the opponent changed: when the target barely moves, the mean is already a good answer, and beating it is harder.
+
+Three rules fall out. Never compare R-squared across two different test sets. Be suspicious of R-squared computed on very few rows. And always print RMSE beside it, so a reader can see whether the errors actually changed.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Adjusted R-squared: why raw R-squared cannot choose features',
+      md: `Now a specific defect, and the patch built for it. Suppose you fit a linear model on some input columns, then add one more column - the number of letters in the customer's name, or literally a column of random numbers - and refit. What happens to R-squared measured on the same rows you fitted on?
+
+- It **cannot go down**. The fitting procedure could always set the new column's weight to exactly zero and reproduce the old predictions, so the old R-squared is a floor.
+- It essentially always goes **up a little**, because on a finite sample even a random column lines up with the leftover error slightly by luck, and the fit takes that free gain.
+- So "we added features and R-squared improved" is not evidence of anything. It is arithmetic.
+
+**Adjusted R-squared** exists exactly to fix this. It charges rent for each input column. Write n for the number of rows and p for the number of input columns the model was fitted on. Then adjusted R-squared = 1 - (1 - R-squared) x (n - 1) / (n - p - 1).
+
+The factor (n-1)/(n-p-1) is always at least 1 and grows as p grows, so it inflates the leftover-error fraction (1 - R-squared) before it is subtracted. A column that genuinely helps raises R-squared by more than the penalty costs, so adjusted R-squared rises. A useless column raises R-squared by less than the penalty, so adjusted R-squared **falls**. That fall is the selection signal you wanted.
+
+Because p is a count of fitted parameters, adjusted R-squared can only be quoted when you can honestly name p. The snippet below fits real models, so p there is real: 2, then 5.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Fit twice: two real columns, then the same two plus three columns of pure noise',
       code: `import numpy as np
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import r2_score
@@ -120,23 +192,142 @@ rng = np.random.default_rng(0)
 n = 30
 X = rng.normal(size=(n, 2))
 y = 3 * X[:, 0] - 2 * X[:, 1] + rng.normal(scale=1.5, size=n)
-noise = rng.normal(size=(n, 3))          # pure garbage, zero relation to y
+noise = rng.normal(size=(n, 3))
 
-for tag, Xm in [('2 real features    ', X), ('+ 3 pure noise cols', np.hstack([X, noise]))]:
-    p = Xm.shape[1]
-    r2 = r2_score(y, LinearRegression().fit(Xm, y).predict(Xm))
+for tag, cols in [('2 real  ', X), ('+3 noise', np.hstack([X, noise]))]:
+    p = cols.shape[1]
+    fit = LinearRegression().fit(cols, y)
+    r2 = r2_score(y, fit.predict(cols))
     adj = 1 - (1 - r2) * (n - 1) / (n - p - 1)
-    print('%s  p=%d  R2=%.4f  adjR2=%.4f' % (tag, p, r2, adj))
+    print(tag, 'p =', p, 'R2 = %.4f' % r2, 'adjR2 = %.4f' % adj)
 
 # ---- real output ----
-# 2 real features      p=2  R2=0.6458  adjR2=0.6195
-# + 3 pure noise cols  p=5  R2=0.6788  adjR2=0.6119`,
+# 2 real   p = 2 R2 = 0.6458 adjR2 = 0.6195
+# +3 noise p = 5 R2 = 0.6788 adjR2 = 0.6119`,
       annotations: {
-        9: 'Drawn from the same generator as X and never used to build y. There is nothing here to learn.',
-        13: 'Scored on the SAME data it was fitted on — that is the point. In-sample R² is the quantity that cannot decrease.',
-        14: 'The whole of adjusted R²: inflate the unexplained fraction by (n-1)/(n-p-1). Bigger p, bigger penalty.',
-        18: 'R² gained 0.033 from noise. If you select features on R², you will happily keep all three.',
-        19: 'Adjusted R² fell 0.008 — it charged more rent than the noise paid. That is the signal you wanted.',
+        1: 'numpy is a library for tables of numbers. "as np" gives it the short name np, which is the universal convention.',
+        2: 'LinearRegression is the standard least-squares fitter: give it input columns and true values, it finds the best weights.',
+        3: 'r2_score computes exactly the 1 - SS_res/SS_tot you wrote by hand two snippets ago.',
+        5: 'A random-number generator seeded with 0, so this file prints the same numbers on every machine, forever.',
+        6: 'Thirty rows. Deliberately small, so the parameter penalty is visible.',
+        7: 'A table of 30 rows and 2 columns of random numbers. These are the two genuine input features.',
+        8: 'Build the true values FROM those two columns, plus random wobble. X[:, 0] means "every row, column 0" - the colon is numpy for "all of them". So y really does depend on both columns.',
+        9: 'Three more columns of random numbers, drawn separately and never used to build y. There is nothing here to learn.',
+        11: 'Loop over two experiments. Each list item is a pair (label, columns), and "for tag, cols in" unpacks the pair into two names at once. np.hstack glues tables side by side, giving 5 columns.',
+        12: '.shape is (rows, columns), so .shape[1] is the number of columns - the real, honest p for this fit.',
+        13: 'Create a fresh model and fit it: find the weights that minimise squared error on these columns.',
+        14: 'Score the fitted model on the SAME rows it was fitted on. In-sample R-squared is the quantity that cannot decrease when a column is added.',
+        15: 'The adjusted formula, written out. A bigger p makes n - p - 1 smaller, which makes the whole factor bigger.',
+        16: '%.4f inside a string is a placeholder meaning "put a number here with 4 decimal places", and the % after the string supplies it. Result: R-squared went UP by 0.033 on pure noise, adjusted R-squared went DOWN by 0.008.',
+      },
+    },
+    {
+      type: 'note',
+      md: `That is the whole argument in two printed lines. Selecting features on R-squared would keep all three noise columns. Adjusted R-squared charged more rent than the noise paid, so it correctly rejected them. One caveat to carry: adjusted R-squared is arithmetic on n and p only, so you can compute it whenever you can count fitted parameters - and for a model like a gradient-boosted forest, you cannot. There the honest tool is error measured on held-out rows, which punishes noise automatically with no penalty formula at all.`,
+    },
+    {
+      type: 'intuition',
+      title: 'MAPE: the percentage the business asks for by name',
+      md: `Sooner or later someone says "just tell me the percentage error". The metric they mean is **MAPE - mean absolute percentage error**. For each row, take the size of the error, divide by the size of the true value, and average those fractions.
+
+On our five sales days: 2/10, 2/20, 3/30, 2/40, 12/50 = 20%, 10%, 10%, 5%, 24%, averaging to **13.8%**.
+
+It is genuinely appealing. It is unitless, so it travels across problems, and it treats a 10-rupee miss on a 100-rupee item as equal to a 1,000-rupee miss on a 10,000-rupee item, which is often the right business framing.
+
+It also has two failures that are easy to walk into. Both are visible in printed numbers rather than arguments, and the next two sections show each one.`,
+    },
+    {
+      type: 'intuition',
+      title: 'MAPE failure 1: it divides by the actual, so small actuals detonate it',
+      md: `Three rows. Two normal days with an actual of 100, and one slow day where only 2 units sold.
+
+- Row 1: actual 100, predicted 110. Error 10, so 10/100 = **10%**.
+- Row 2: actual 100, predicted 90. Error 10, so 10/100 = **10%**.
+- Row 3: actual 2, predicted 9. Error 7 - genuinely tiny in units - but 7/2 = **350%**.
+- MAPE = (10 + 10 + 350) / 3 = **123.3%**.
+
+The model's worst mistake was 10 units and MAPE reported 123 percent. Worse, if any actual is exactly 0 then MAPE is not large, it is undefined, because you cannot divide by zero. In demand forecasting, low-volume products sit at 0, 1 or 2 units every single day, so this is the normal case, not an edge case.
+
+**WAPE** - weighted absolute percentage error - is the standard repair. Instead of averaging per-row ratios, add all the errors, add all the actuals, and divide **once at the end**: (10 + 10 + 7) / (100 + 100 + 2) = 27/202 = **13.4%**. No row ever divides by its own tiny actual, so no row can detonate the score. And notice what WAPE really is: total error over total actual is the same thing as MAE divided by the average actual. It is MAE rescaled into a percentage, which is exactly why it behaves.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'MAPE versus WAPE on the same three rows',
+      code: `y    = [100.0, 100.0, 2.0]
+pred = [110.0, 90.0, 9.0]
+
+ape_sum = 0.0
+err_sum = 0.0
+act_sum = 0.0
+for i in range(len(y)):
+    err = abs(pred[i] - y[i])
+    ape_sum = ape_sum + err / y[i]
+    err_sum = err_sum + err
+    act_sum = act_sum + y[i]
+    print('actual', y[i], 'pred', pred[i], 'APE%', round(100 * err / y[i], 1))
+
+print('MAPE %', round(100 * ape_sum / len(y), 1))
+print('WAPE %', round(100 * err_sum / act_sum, 1))
+
+# ---- real output ----
+# actual 100.0 pred 110.0 APE% 10.0
+# actual 100.0 pred 90.0 APE% 10.0
+# actual 2.0 pred 9.0 APE% 350.0
+# MAPE % 123.3
+# WAPE % 13.4`,
+      annotations: {
+        1: 'Three true values. The 2.0 is the slow day that breaks MAPE.',
+        2: 'Three predictions. The errors are 10, 10 and 7 units - all small.',
+        4: 'Running total of the per-row percentage errors, for MAPE.',
+        5: 'Running total of the raw error sizes, for the top of the WAPE fraction.',
+        6: 'Running total of the actuals, for the bottom of the WAPE fraction.',
+        7: 'One pass over the three rows.',
+        8: 'The size of this row\'s error, sign dropped.',
+        9: 'Divide by this row\'s own actual and add it on. THIS is the line that explodes: on row 3 it adds 7/2 = 3.5 all by itself.',
+        10: 'WAPE adds the error itself, undivided.',
+        11: 'WAPE adds the actual separately, so the division happens once, later.',
+        12: 'Print the row and its own percentage error, so you can watch 350.0 appear.',
+        14: 'MAPE: average the three ratios, times 100 to read as a percentage. 123.3.',
+        15: 'WAPE: divide the two totals, times 100. 13.4 - which is an honest description of three misses of 10, 10 and 7 units.',
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'MAPE failure 2: it punishes over-prediction and under-prediction differently',
+      md: `Hold the truth fixed at 100 and slide the prediction. The percentage error is the size of (prediction - 100), divided by 100.
+
+- Predict 50, you are 50 low: **50%**. Predict 150, you are 50 high: **50%**. So far it looks even-handed.
+- Predict **0**. That is as wrong as an under-prediction can physically be, since a count cannot go below nothing. The charge is 100/100 = **100%**.
+- Predict **200**: also **100%**. Predict **400**: **300%**. Predict 1000: 900%.
+
+There is the asymmetry, in numbers. Under-prediction is **capped at 100%** no matter how badly you undershoot. Over-prediction has **no ceiling at all**. So if anyone tunes a forecast to minimise MAPE, shading every prediction downward is a cheap win: it moves error into the half of the scale where the penalty is bounded. The result is a model that systematically forecasts low, and a warehouse that systematically runs out of stock.
+
+**sMAPE** - "symmetric" MAPE - is the usual first patch. It divides by the average of the actual and the prediction, that is (size of actual + size of prediction) / 2, instead of by the actual alone. That gives it a ceiling of 200% and softens the near-zero blow-up. Read the printed column below before trusting the name, though: predicting 150 is charged 40% while predicting 50 is charged 66.7%, so sMAPE is not actually symmetric either. It is a patch, not a fix.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'The truth is 100. Slide the prediction and print both percentages.',
+      code: `truth = 100.0
+for pred in [0.0, 50.0, 100.0, 150.0, 200.0, 400.0]:
+    ape = abs(pred - truth) / truth
+    smape = abs(pred - truth) / ((truth + pred) / 2)
+    print('pred', pred, ' APE%', round(100 * ape, 1), ' sAPE%', round(100 * smape, 1))
+
+# ---- real output ----
+# pred 0.0  APE% 100.0  sAPE% 200.0
+# pred 50.0  APE% 50.0  sAPE% 66.7
+# pred 100.0  APE% 0.0  sAPE% 0.0
+# pred 150.0  APE% 50.0  sAPE% 40.0
+# pred 200.0  APE% 100.0  sAPE% 66.7
+# pred 400.0  APE% 300.0  sAPE% 120.0`,
+      annotations: {
+        1: 'One fixed true value, so every row below differs only in the prediction.',
+        2: 'Six predictions to try: two far below, one exact, three above. The loop variable is the prediction itself, not an index.',
+        3: 'The MAPE ingredient for this row: error size divided by the actual, which is always 100 here.',
+        4: 'The sMAPE ingredient: the same error size divided by the average of actual and prediction. A bigger prediction means a bigger denominator, which is where sMAPE\'s ceiling comes from.',
+        5: 'Print both. Read the APE column first: 0 and 200 both cost 100%, but 400 costs 300% - under-prediction stops at 100, over-prediction keeps climbing. Then read sAPE: 50 costs 66.7 while 150 costs 40.0, so the word "symmetric" is not accurate.',
       },
     },
     {
@@ -144,12 +335,12 @@ for tag, Xm in [('2 real features    ', X), ('+ 3 pure noise cols', np.hstack([X
       component: 'PointerBoxDiagram',
       props: {
         title: 'One set of predictions, scored three ways',
-        notice: 'Five points, five residuals, three metrics. Step through and watch WHICH cell pays the bill each time — that is the whole difference between RMSE, MAE and R².',
+        notice: 'Five days, five errors, three metrics. Step through and watch WHICH row pays the bill each time - that is the whole difference between RMSE, MAE and R-squared.',
         leftLabel: 'predictions',
         rightLabel: 'what the metric charges',
         frames: [
           {
-            note: 'Five predictions of daily units sold. Four are close. Point 5 is a 12-unit miss — the outlier. No metric applied yet.',
+            note: 'The five days. Four are close, day 5 is a 12-unit miss. No metric applied yet.',
             stack: [
               { name: 'y=10   yhat=12', to: 'e1' },
               { name: 'y=20   yhat=18', to: 'e2' },
@@ -162,11 +353,11 @@ for tag, Xm in [('2 real features    ', X), ('+ 3 pure noise cols', np.hstack([X
               { id: 'e2', value: 'e = -2' },
               { id: 'e3', value: 'e = +3' },
               { id: 'e4', value: 'e = -2' },
-              { id: 'e5', value: 'e = +12', label: 'the outlier' },
+              { id: 'e5', value: 'e = +12', label: 'the big miss' },
             ],
           },
           {
-            note: 'RMSE squares first. Point 5 contributes 144 of the 165 total — 87% of the score comes from one row out of five. RMSE = sqrt(165/5) = 5.74.',
+            note: 'RMSE squares first. Day 5 contributes 144 of the 165 total - 87 percent of the score from one row out of five. RMSE = sqrt(165/5) = 5.745.',
             stack: [
               { name: 'y=10   yhat=12', to: 'e1' },
               { name: 'y=20   yhat=18', to: 'e2' },
@@ -183,7 +374,7 @@ for tag, Xm in [('2 real features    ', X), ('+ 3 pure noise cols', np.hstack([X
             ],
           },
           {
-            note: 'MAE takes absolute values. Same outlier now pays 12 of 21 — 57%, not 87%. Every cell is weighted by its size, not its size squared. MAE = 21/5 = 4.20.',
+            note: 'MAE takes absolute values instead. The same day now pays 12 of 21 - 57 percent, not 87. MAE = 21/5 = 4.2, and RMSE/MAE = 1.37.',
             stack: [
               { name: 'y=10   yhat=12', to: 'e1' },
               { name: 'y=20   yhat=18', to: 'e2' },
@@ -192,29 +383,18 @@ for tag, Xm in [('2 real features    ', X), ('+ 3 pure noise cols', np.hstack([X
               { name: 'y=50   yhat=62', to: 'e5' },
             ],
             heap: [
-              { id: 'e1', value: '|e| = 2', label: '10%' },
-              { id: 'e2', value: '|e| = 2', label: '10%' },
-              { id: 'e3', value: '|e| = 3', label: '14%' },
-              { id: 'e4', value: '|e| = 2', label: '10%' },
-              { id: 'e5', value: '|e| = 12', label: '57% of the bill' },
+              { id: 'e1', value: 'abs = 2', label: '10%' },
+              { id: 'e2', value: 'abs = 2', label: '10%' },
+              { id: 'e3', value: 'abs = 3', label: '14%' },
+              { id: 'e4', value: 'abs = 2', label: '10%' },
+              { id: 'e5', value: 'abs = 12', label: '57% of the bill' },
             ],
           },
           {
-            note: 'RMSE 5.74 vs MAE 4.20 — ratio 1.37. The gap IS the outlier, quantified. Above ~2 you stop tuning and start reading rows.',
+            note: 'R-squared divides our squared error by the mean model\'s squared error. Predicting 30 every day costs 1000; we cost 165. R-squared = 1 - 165/1000 = 0.835.',
             stack: [
-              { name: 'RMSE', value: '5.74' },
-              { name: 'MAE', value: '4.20' },
-              { name: 'ratio', value: '1.37', danger: true },
-            ],
-            heap: [
-              { id: 'g', value: 'error is concentrated', label: 'diagnostic' },
-            ],
-          },
-          {
-            note: 'R² divides our error by the mean-predictor\'s error. Predicting 30 for everything costs 1000; we cost 165. R² = 1 - 165/1000 = 0.835 — we removed 83.5% of the variance.',
-            stack: [
-              { name: 'our model SS_res', to: 'res' },
-              { name: 'predict mean(30)', to: 'tot' },
+              { name: 'our SS_res', to: 'res' },
+              { name: 'mean model SS_tot', to: 'tot' },
               { name: 'R2 = 1 - 165/1000', value: '0.835' },
             ],
             heap: [
@@ -222,346 +402,258 @@ for tag, Xm in [('2 real features    ', X), ('+ 3 pure noise cols', np.hstack([X
               { id: 'tot', value: '1000', label: 'baseline pays' },
             ],
           },
-          {
-            note: 'Now bolt on 3 columns of pure noise (the code above, n=30). R² rises because least squares always finds some accidental fit. Adjusted R² falls because it charges for the parameters. Only one of these can select features.',
-            stack: [
-              { name: 'add 3 noise cols', value: 'p: 2 -> 5' },
-              { name: 'R2', to: 'r2', danger: true },
-              { name: 'adjusted R2', to: 'adj' },
-            ],
-            heap: [
-              { id: 'r2', value: '0.6458 -> 0.6788', label: 'UP: never decreases' },
-              { id: 'adj', value: '0.6195 -> 0.6119', label: 'DOWN: sees the cost' },
-            ],
-          },
         ],
       },
     },
     {
       type: 'intuition',
-      title: 'MAPE: the metric the business asks for by name',
-      md: `Someone will say *"just tell me the percentage error"*. That is **MAPE — Mean Absolute Percentage Error**: average of |error| ÷ |actual|.
+      title: 'Worked case: six days, every metric by hand',
+      md: `A bakery forecasts loaves sold. Six days of truth and prediction, computed with a calculator and nothing else.
 
-- It is genuinely attractive: unitless, intuitive, and it makes a ₹10 miss on a ₹100 item count the same as a ₹1,000 miss on a ₹10,000 item — which is often the right business framing.
-- It is also the most dangerous metric in this module, and it has three separate failure modes.
-- **(1) It divides by the actual.** An actual of 0 makes it undefined; an actual of 2 makes it explode. In demand forecasting, slow-moving SKUs sit near zero every single day.
-- **(2) It is asymmetric.** Over-prediction is punished without limit; under-prediction is capped at 100%. Arithmetic next section.
-- **(3) Because of (2), it systematically rewards models that under-forecast.** A team optimizing MAPE quietly ships a model that runs the warehouse short.`,
-    },
-    {
-      type: 'math',
-      intro: 'The asymmetry, done as arithmetic. Truth is 100 in every row.',
-      latex: [
-        '\\text{MAPE} = \\frac{100}{n}\\sum_{i=1}^{n}\\left|\\frac{y_i - \\hat{y}_i}{y_i}\\right|\\%',
-        '\\hat{y} = 50 \\Rightarrow 50\\% \\qquad \\hat{y} = 150 \\Rightarrow 50\\% \\qquad \\text{(so far, symmetric)}',
-        '\\hat{y} = 0 \\Rightarrow 100\\% \\;(\\text{the worst possible under-prediction}) \\qquad \\hat{y} = 200 \\Rightarrow 100\\% \\qquad \\hat{y} = 400 \\Rightarrow 300\\%',
-        '\\hat{y} \\in [0, y] \\Rightarrow \\text{APE} \\le 100\\% \\quad\\text{but}\\quad \\hat{y} \\rightarrow \\infty \\Rightarrow \\text{APE} \\rightarrow \\infty',
-      ],
-    },
-    {
-      type: 'note',
-      md: `Sit with that third line. Predicting **200** when the truth is 100 costs 100%. Predicting **0** — being as wrong as it is physically possible to be while under-forecasting — *also* costs 100%. Under-prediction has a ceiling; over-prediction does not. So when a model tunes itself against MAPE, shading every forecast downward is a free win: it caps the downside penalty. Optimizing MAE gives the conditional **median**; optimizing MAPE gives something *below* the median. That is not a rounding artefact — it is a systematic low bias that ends with empty shelves, and it is exactly what an interviewer wants you to name.`,
+- Truth: **10, 20, 30, 40, 50, 60**. Predictions: **12, 18, 34, 38, 55, 63**.
+- Errors (prediction minus truth): **+2, -2, +4, -2, +5, +3**. Sizes 2, 2, 4, 2, 5, 3, adding to **18**.
+- **MAE** = 18 / 6 = **3.0 loaves**.
+- Squares 4, 4, 16, 4, 25, 9 add to **62**. MSE = 62/6 = 10.333, so **RMSE = 3.214 loaves**.
+- **RMSE / MAE** = 3.214 / 3.0 = **1.07**. Very close to 1, so the error is spread evenly across all six days. There is no single bad row to go and read; improving this model means improving everything.
+- **R-squared.** Mean of the truths = 210/6 = 35. Squared distances from 35 are 625, 225, 25, 25, 225, 625, adding to SS_tot = **1750**. SS_res is the 62 from above. R-squared = 1 - 62/1750 = **0.9646**.
+- **MAPE.** Per row: 2/10 = 20%, 2/20 = 10%, 4/30 = 13.3%, 2/40 = 5%, 5/50 = 10%, 3/60 = 5%. Average = 63.3/6 = **10.6%**.
+- **WAPE** = 18 / 210 = **8.6%**.
+
+What to say out loud: "we are off by about 3 loaves a day, which is 8.6 percent of typical volume; the errors are even, with no bad day carrying the score; and against a bakery that just baked the average every day, we cut squared error by 96 percent." MAPE 10.6% and WAPE 8.6% differ only mildly here, because no actual is near zero. That gap is the thing to watch - when it grows, a small actual is doing the damage.`,
     },
     {
       type: 'intuition',
-      title: 'The usual fixes: sMAPE, WAPE, MASE — and what they cost',
-      md: `Three standard patches, in increasing order of how much I trust them.
+      title: 'The classic mistake: a wonderful R-squared for a model that knows nothing',
+      md: `A health startup predicts daily admissions. Its test set has six rows, three from a large city hospital and three from a small rural clinic. The model is trivial: it predicts each site's historical average and ignores the day entirely. The team reports **R-squared = 0.9968** and everyone applauds.
 
-- **sMAPE** ("symmetric" MAPE) divides by (|actual| + |prediction|)/2 instead of just the actual. That bounds it at 200% and softens the near-zero blow-up.
-- But the name lies: sMAPE is **not actually symmetric**, and it is still undefined when actual and prediction are both 0. It is a patch, not a fix.
-- **WAPE** (weighted APE, a.k.a. WMAPE) = **Σ|error| ÷ Σ|actual|** — one ratio over the whole set instead of an average of per-row ratios.
-- No row-level division, so a single near-zero actual cannot detonate it. Notice the identity: **WAPE = MAE ÷ mean(y)**. It is just MAE rescaled to a percentage. That is why it behaves.
-- **MASE** (mean absolute scaled error) = MAE ÷ MAE of the naive forecast (predict yesterday's value). For time series this is the best of the lot: unitless, no division by actuals, and **MASE < 1 literally means "better than repeating yesterday"** — the baseline is welded into the metric.
-- Honest recommendation: optimize and report **MAE/RMSE**. When the business insists on a percentage, give them **WAPE** and say out loud that it is MAE over the mean. For time series, **MASE**. Reach for raw MAPE only when every actual is comfortably far from zero — and say so.`,
-    },
-    {
-      type: 'code',
-      lang: 'python',
-      title: 'Every metric on one 8-row dataset — with one near-zero actual to detonate MAPE',
-      code: `import numpy as np
-from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+- City hospital truths: **200, 210, 220**. The model predicts 210 for all three. Errors -10, 0, +10.
+- Rural clinic truths: **4, 6, 5**. The model predicts 5 for all three. Errors +1, -1, 0.
+- SS_res = 100 + 0 + 100 + 1 + 1 + 0 = **202**.
+- The overall mean of all six truths is 645/6 = **107.5**. Distances from 107.5 are 92.5, 102.5, 112.5, -103.5, -101.5, -102.5; squared and added, SS_tot = **63,239.5**.
+- R-squared = 1 - 202/63239.5 = **0.9968**.
 
-y    = np.array([120., 95., 130., 110., 105.,  2., 140., 98.])   # units sold that day
-pred = np.array([124., 100., 126., 108., 160.,  9., 137., 95.])  # hand-written, NOT fitted
-n, p = len(y), 3                                 # p = 3 is a SUPPOSITION, not a fitted count
+Now diagnose it. That 63,239.5 is almost entirely the gap between a 200-admission hospital and a 5-admission clinic. The mean model has to answer 107.5 everywhere, which is absurd at both sites, so it racks up an enormous SS_tot. Beating it only requires knowing **which site the row came from** - and the model does exactly that and nothing more.
 
-rmse = mean_squared_error(y, pred) ** 0.5
-mae  = mean_absolute_error(y, pred)
-r2   = r2_score(y, pred)
-adj  = 1 - (1 - r2) * (n - 1) / (n - p - 1)
-ape  = np.abs(pred - y) / np.abs(y)
-print('RMSE   %.2f   MAE %.2f   ratio %.2f' % (rmse, mae, rmse / mae))
-print('R2     %.4f  adjR2 IF p=3 %.4f' % (r2, adj))
-print('MAPE   %.1f%%  (drop the y=2 row -> %.1f%%)' % (100*ape.mean(), 100*np.delete(ape, 5).mean()))
-print('sMAPE  %.1f%%  WAPE %.1f%%' % (100*(2*np.abs(pred-y)/(np.abs(y)+np.abs(pred))).mean(),
-                                       100*np.abs(pred-y).sum()/np.abs(y).sum()))
-print('baseline(mean): RMSE %.2f  MAE %.2f' % (np.sqrt(((y-y.mean())**2).mean()), np.abs(y-y.mean()).mean()))
+The honest test is R-squared computed **within** each site. At the city hospital the truths are 200, 210, 220 and the model predicts their average, 210, which is precisely the mean model for that site. SS_res equals SS_tot there, so within-site R-squared is exactly **0.000**. Same at the clinic. The model has zero day-to-day predictive power and a headline of 0.9968.
 
-# ---- real output ----
-# RMSE   19.85   MAE 10.38   ratio 1.91
-# R2     0.7509  adjR2 IF p=3 0.5641
-# MAPE   52.6%  (drop the y=2 row -> 10.2%)
-# sMAPE  23.4%  WAPE 10.4%
-# baseline(mean): RMSE 39.78  MAE 26.25`,
-      annotations: {
-        4: 'One slow SKU sold 2 units. Everything else is around 100. This single row is the whole demo.',
-        5: 'These predictions are hand-authored so every metric below can be checked with a calculator. No model was fitted, so there is no real parameter count anywhere in this file.',
-        6: 'Which is why p = 3 is a SUPPOSITION, stated so the penalty is visible: "if these numbers had come out of a 3-predictor model on 8 rows, what would adjusted R² do to R²?" Answer below: it takes 0.19 off.',
-        12: 'Per-row absolute percentage error. Row 6 is |9-2|/2 = 350% on its own.',
-        13: 'RMSE 19.85 vs MAE 10.38 — ratio 1.91, right at the "a few rows own your error" line. The 55-unit miss on row 5 is why.',
-        15: '52.6% vs 10.2%. Deleting ONE row of eight moves MAPE by 42 points. No decision should ever rest on a number that unstable.',
-        16: 'sMAPE 23.4% — bounded, so less absurd, but still inflated by the same row. WAPE 10.4% barely notices it.',
-        18: 'The baseline, printed on purpose: predicting the mean gives MAE 26.25. Our 10.38 is a real 2.5x gain. Without this line, 10.38 means nothing.',
-      },
-    },
-    {
-      type: 'note',
-      md: `Two numbers in that output deserve a second look. First, be precise about what the adjusted R² line is: nothing was fitted here — those predictions were typed by hand — so p = 3 is a **supposition**, a "what if these had come from a 3-predictor model on 8 rows". Under that supposition **adjusted R² = 0.5641 against R² = 0.7509**, and the gap is enormous because (n−1)/(n−p−1) = 7/4 = 1.75 inflates the unexplained fraction by 75%. That is the honest reading: adjusted R² is arithmetic on n and p, so you can only quote it when you can name a real p — which for a boosted-tree model, say, you cannot. And **WAPE 10.4% versus MAPE 52.6%** on the identical predictions. Same model, same errors, a 5× difference in the headline percentage — decided entirely by whether you divide per row or once at the end. When someone quotes you a percentage error, ask which one they computed.`,
+- The same trap sits in the percentage column. The city hospital's MAPE is (10/200 + 0 + 10/220)/3 = **3.2%**, which sounds superb - but only because the actuals are around 200. That identical 10-admission error at the clinic would be a 200% row.
+- The rule: when a test set mixes groups of wildly different scale, R-squared measures your ability to tell the groups apart, and MAPE measures how large the actuals happen to be. Neither is measuring the model.
+- The fix costs one line. Compute the metric **within each group**, and compute the same metric for that group's mean model. If the two match, you have built nothing.`,
     },
     {
       type: 'intuition',
-      title: 'Choosing the metric: start from the decision, not the metric list',
-      md: `Do not ask "which metric is best". Ask **what decision does this number drive, and what does each kind of mistake cost?**
+      title: 'Practice problems',
+      md: `Do these on paper before reading the solutions. All the arithmetic is small on purpose.
 
-- **Errors cost roughly the same in both directions, and big misses hurt disproportionately** (capacity planning, pricing) → **RMSE**. Report MAE next to it so the outlier story is visible.
-- **Errors cost the same in both directions, and a big miss is just a big miss** (ETAs, robust baselines) → **MAE**. Note it optimizes toward the median, which is often what you wanted anyway.
-- **The business genuinely thinks in percentages** (forecasting, finance) → **WAPE**, with the caveat stated: "this is MAE divided by the average actual; I avoided MAPE because our low-volume SKUs make it explode."
-- **Time series with any trend or seasonality** → **MASE**, because its baseline is the naive forecast and MASE < 1 is a self-explaining claim.
-- **You need a range, not a point** ("what is the 90th-percentile delivery time?") → not a point metric at all: **pinball / quantile loss**, covered in the Regression Losses module.
-- **Comparing across different problems or reporting to a stats-literate audience** → **R²**, always paired with an RMSE so the units survive, and never compared across different test sets.
-- **Selecting features or comparing models with different parameter counts** → **adjusted R²**, or better, out-of-sample error via cross-validation, which needs no penalty term because the test set already punishes noise.`,
+1. Truths **4, 8, 12, 16**; predictions **5, 7, 14, 15**. Compute MAE, RMSE, the RMSE/MAE ratio, and R-squared.
+2. Same numbers as problem 1. Compute MAPE and WAPE. Which is larger, and why?
+3. A model fitted on n = 20 rows with p = 4 input columns scores R-squared = 0.75. Compute adjusted R-squared. Then recompute it for the same R-squared with p = 15 columns, and say what the second answer means.
+4. The truth is 50. What is the largest absolute percentage error an under-prediction can produce? What prediction would produce an APE of 400 percent? What does the pair of answers tell you?
+5. A frozen model produces SS_res = 200 on two different test sets. Set A has SS_tot = 4000, set B has SS_tot = 500. Give both R-squared values and say which model is better.`,
     },
     {
       type: 'intuition',
-      title: 'The closing discipline: always ship the baseline',
-      md: `Every number above is a *ratio to something*, whether or not the formula shows it. R² makes its baseline explicit. RMSE, MAE and MAPE hide theirs — so you have to add it yourself.
+      title: 'Worked solutions',
+      md: `Check each step against your own working, not just the final number.
 
-- Before reporting any regression result, compute the same metric for the dumb model: **predict the mean** (or the median for MAE, or **last value** for a time series).
-- One extra line of code. It converts "RMSE 19.85" — which is unfalsifiable — into "RMSE 19.85 vs baseline 39.78, a 50% reduction", which is a claim.
-- For time series the last-value baseline is brutal and essential: many "successful" forecasting models never beat *yesterday's number*, and nobody noticed because nobody computed it.
-- This is the regression twin of the majority-class baseline in classification. Same habit, same reason: a metric alone cannot tell you whether you built anything.
-- The senior sentence: *"MAE 10.4 against a mean-baseline of 26.3 and a last-value baseline of 14.1 — so the model is real but the easy win is only about 25% of it."*`,
+1. Errors are +1, -1, +2, -1. Sizes add to 5, so **MAE = 5/4 = 1.25**. Squares are 1, 1, 4, 1, adding to 7, so MSE = 7/4 = 1.75 and **RMSE = 1.323**. Ratio = 1.323/1.25 = **1.06**, so the errors are almost uniform. Mean of the truths = 40/4 = 10; squared distances from 10 are 36, 4, 4, 36, so SS_tot = 80. **R-squared = 1 - 7/80 = 0.9125**.
+2. Per-row percentages: 1/4 = 25%, 1/8 = 12.5%, 2/12 = 16.7%, 1/16 = 6.25%. Average = 60.4/4 = **MAPE 15.1%**. WAPE = total error over total actual = 5/40 = **12.5%**. MAPE is larger because it gives every row an equal vote and the smallest actual (4) carries the largest percentage; WAPE effectively weights each row by its actual, so the small row counts less.
+3. The factor is (n-1)/(n-p-1) = 19/15 = 1.267, so adjusted = 1 - 0.25 x 1.267 = **0.6833**. With p = 15 the factor is 19/4 = 4.75, so adjusted = 1 - 0.25 x 4.75 = **-0.1875**. A negative adjusted R-squared is the formula shouting that 15 parameters on 20 rows is fitting noise: whatever fit you achieved is not worth the parameters it took.
+4. The largest under-prediction error is being 50 too low, which means predicting 0, giving 50/50 = **100%**. For 400% you need an error of 200 on an actual of 50, so the prediction is 50 + 200 = **250**. The pair is the asymmetry: all of under-prediction lives inside 0 to 100 percent, while over-prediction runs off without limit. Any tuning that minimises MAPE will therefore drift low.
+5. Set A: 1 - 200/4000 = **0.95**. Set B: 1 - 200/500 = **0.60**. Neither is better, because it is the same model with the same errors - only SS_tot changed. This is why R-squared must never be compared across test sets, and why RMSE belongs beside it: RMSE would have been identical on both.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Choosing which number to report',
+      md: `Do not ask which metric is best. Ask what decision this number drives, and what each kind of mistake costs.
+
+- **Big misses hurt much more than small ones** (stock levels, capacity, pricing) - report **RMSE**, with MAE next to it so the concentration is visible.
+- **A miss is a miss, cost grows in proportion** (delivery-time error, robust baselines) - report **MAE**.
+- **The audience genuinely thinks in percentages** - report **WAPE**, and say what it is: total error divided by total actual, which is MAE over the average actual. Avoid raw MAPE unless every actual is comfortably far from zero.
+- **Comparing across different problems, or writing for a statistics-literate reader** - **R-squared**, always with an RMSE beside it, and never compared across test sets.
+- **Comparing linear models with different column counts** - **adjusted R-squared**, or better, error measured on held-out rows.
+
+And one habit that outranks all of them: **compute the same metric for the dumb model and print it next to yours.** Predict the mean for every row, or the last known value for a time series. "RMSE 3.21" is unfalsifiable. "RMSE 3.21 against a mean model's 17.1" is a claim.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Beyond the basics - skip this on your first read',
+      md: `Everything above stands alone. This section names ideas you will meet later, so the words are not new when you get there.
+
+- **MASE**, mean absolute scaled error. For data ordered in time, it is MAE divided by the MAE of the naive forecast that just repeats yesterday's value. MASE below 1 literally means "better than repeating yesterday", so the baseline is welded into the number. It is the best default for time series, and many real forecasting models quietly fail it.
+- **Adjusted R-squared can go negative** even when R-squared is comfortably positive, as problem 3 showed. That is not a defect - it is the formula reporting that p is too large for n.
+- **Comparing a model trained on log values with one trained on raw values.** Their metrics are not comparable at all. Convert the log model's predictions back to raw units first, and beware that undoing a log by exponentiating pulls the result below the true average, so the back-transformed model under-predicts unless corrected.
+- **When you need a range, not a point.** "What is the 90th-percentile delivery time?" is not a question any metric here answers. That needs quantile or pinball loss, covered in *Regression Losses*.
+- **Where the RMSE-versus-MAE choice really comes from.** Minimising squared error drives predictions toward the conditional mean; minimising absolute error drives them toward the conditional median. On a skewed target those are different numbers, and which one you want is a business decision, not a statistical one.`,
     },
   ],
   quiz: [
     {
       question: 'You report RMSE = 40 and MAE = 11 on the same predictions. What should you do next?',
       options: [
+        { text: 'Nothing - RMSE is always larger, so this is normal', explanation: 'RMSE is always at least MAE, true. But a ratio of 3.6 is far outside the usual 1 to 2 band, and that is specific information.' },
         {
-          text: 'Nothing — RMSE is always larger, this is normal',
-          explanation: 'RMSE ≥ MAE always, true. But a ratio of 3.6 is far outside the normal 1–2 band and is telling you something specific.',
+          text: 'Go and read the worst-scoring rows, because a few of them are dominating the error',
+          explanation: 'Correct. The ratio measures how concentrated the error is. Above about 2, a handful of rows own the metric, and they are usually a distinct situation rather than noise.',
         },
-        {
-          text: 'Go inspect the worst-scoring rows — a few outliers are dominating the error',
-          explanation: 'Correct. The RMSE/MAE ratio measures error concentration. Above ~2, a handful of rows own your metric; read those rows before tuning anything.',
-        },
-        {
-          text: 'Switch the loss to MAE so the numbers agree',
-          explanation: 'That hides the symptom instead of diagnosing it. The gap is information — you would be deleting your only free diagnostic.',
-        },
+        { text: 'Switch to MAE so the two numbers agree', explanation: 'That hides the symptom. The gap between the two numbers was the only free diagnostic you had.' },
       ],
       correct: 1,
     },
     {
-      question: 'Your model scores R² = −0.12 on the test set. What does that actually mean?',
+      question: 'Your model scores R-squared = -0.12 on held-out data. What does that mean?',
       options: [
-        { text: 'A calculation bug — R² cannot be negative', explanation: 'It can, on any data the model was not fitted on. Only in-sample OLS with an intercept is guaranteed R² ≥ 0.' },
-        { text: 'The model explains 12% of the variance in the negative direction', explanation: 'Not a real reading. R² is not signed variance; it is 1 minus an error ratio, and a ratio above 1 pushes it below zero.' },
+        { text: 'A calculation bug, since R-squared cannot be negative', explanation: 'It can, on any rows the model was not fitted on. Only the in-sample linear-fit case is guaranteed non-negative.' },
+        { text: 'The model explains 12 percent of the variance in the negative direction', explanation: 'Not a real reading. R-squared is 1 minus an error ratio, and a ratio above 1 simply pushes it below zero.' },
         {
-          text: 'Your model has larger squared error than simply predicting the training mean for every row',
-          explanation: 'Correct — SS_res > SS_tot. It is a strong sanity alarm: check for leakage, distribution shift, or a transform fitted on the wrong split.',
+          text: 'Your squared error is larger than the error of just predicting the average of the true values',
+          explanation: 'Correct: SS_res is bigger than SS_tot. Check for a transform fitted on the wrong split, or new data that looks unlike the training data.',
         },
       ],
       correct: 2,
     },
     {
-      question: 'You add a column of random numbers to a linear regression and refit. What happens to in-sample R²?',
+      question: 'You add a column of random numbers to a linear model and refit. What happens to R-squared measured on the fitting data?',
       options: [
         {
-          text: 'It rises slightly — R² can never decrease when a feature is added',
-          explanation: 'Correct. The old fit is always reachable by setting the new coefficient to 0, so R² has a floor; chance correlation with the residuals pushes it above that floor. This is exactly why R² cannot select features.',
+          text: 'It rises slightly, because R-squared can never decrease when a column is added',
+          explanation: 'Correct. Setting the new weight to zero reproduces the old fit, so that is a floor, and chance alignment with the leftover error pushes it a little above the floor.',
         },
-        { text: 'It stays exactly the same, since the column carries no information', explanation: 'Only if the fitted coefficient were exactly 0. On a finite sample the noise column always correlates a little with the residuals, so it gets a non-zero weight.' },
-        { text: 'It falls, because the model wastes capacity on noise', explanation: 'That is what adjusted R² does. Raw in-sample R² has no notion of parameter count at all.' },
+        { text: 'It stays identical, since the column carries no information', explanation: 'Only if the fitted weight came out exactly zero. On a finite sample the random column always lines up with the leftover error a little.' },
+        { text: 'It falls, because the model wastes capacity on noise', explanation: 'That is what adjusted R-squared does. Raw R-squared has no notion of how many columns you used.' },
       ],
       correct: 0,
     },
     {
-      question: 'The truth is 100. Model A predicts 0; model B predicts 200. What does MAPE charge each?',
+      question: 'The truth is 100. Model A predicts 0, model B predicts 200. What does MAPE charge each, and what is the lesson?',
       options: [
-        { text: 'A: 100%, B: 50%', explanation: 'B\'s error is 100 on an actual of 100, which is 100%, not 50%. Check the denominator — it is always the actual.' },
-        { text: 'A: 0%, B: 100%', explanation: 'A is off by the full 100, so it is charged 100%. Predicting 0 is not free.' },
+        { text: 'A gets 100 percent, B gets 50 percent', explanation: 'B is off by 100 on an actual of 100, which is 100 percent. The denominator is always the actual.' },
+        { text: 'A gets 0 percent, B gets 100 percent', explanation: 'A is off by the full 100, so it is charged 100 percent. Predicting zero is not free.' },
         {
-          text: 'Both 100% — and that is the asymmetry, because A is as wrong as under-prediction can possibly be while B can keep getting worse',
-          explanation: 'Correct. Under-prediction saturates at 100%; over-prediction is unbounded (predict 400 and pay 300%). That ceiling is why MAPE-tuned models drift low.',
+          text: 'Both get 100 percent - and that is the asymmetry, because A is as wrong as under-prediction can get while B can keep getting worse',
+          explanation: 'Correct. Under-prediction saturates at 100 percent; over-prediction is unbounded, since predicting 400 costs 300 percent. That ceiling is why MAPE-tuned forecasts drift low.',
         },
       ],
       correct: 2,
     },
     {
-      question: 'A demand dataset has many SKUs selling 0–3 units per day. Which percentage-style metric do you report?',
+      question: 'Two rows have an actual of 100 and one row has an actual of 2. All three errors are about 10 units. Which percentage metric do you report?',
       options: [
-        { text: 'MAPE, since the business asked for a percentage', explanation: 'Those are exactly the rows that break it: division by 0 is undefined and division by 1 or 2 produces 300%+ values that swamp the average.' },
+        { text: 'MAPE, because the business asked for a percentage', explanation: 'That is exactly the row that breaks it: an error of 7 on an actual of 2 is a 350 percent row, which drags the average to 123 percent.' },
         {
-          text: 'WAPE = Σ|error| / Σ|actual| — it divides once at the end, so no single tiny actual can explode it',
-          explanation: 'Correct, and it equals MAE ÷ mean(y), so it inherits MAE\'s stability while reading as a percentage. Say that identity out loud when you present it.',
+          text: 'WAPE - total error divided by total actual - because it divides once at the end, so no single small actual can explode it',
+          explanation: 'Correct, and it equals MAE divided by the average actual, so it inherits MAE\'s stability while still reading as a percentage.',
         },
-        { text: 'sMAPE, since it is symmetric and bounded', explanation: 'Bounded at 200%, yes — but it is not genuinely symmetric despite the name, and it is still undefined when actual and prediction are both 0.' },
+        { text: 'sMAPE, because it is symmetric and bounded', explanation: 'Bounded at 200 percent, yes, but not genuinely symmetric: against a truth of 100 it charges 66.7 percent for predicting 50 and only 40 percent for predicting 150.' },
       ],
       correct: 1,
     },
     {
-      question: 'The same frozen model is evaluated on a wide-price test set (R² = 0.88) and a narrow-price one (R² = 0.31). Why?',
+      question: 'A test set mixes a hospital with 200 admissions a day and a clinic with 5. A model that only predicts each site\'s historical average scores R-squared = 0.9968. What is the correct reading?',
       options: [
         {
-          text: 'R²\'s denominator is the test set\'s own variance — a narrow target makes the mean-baseline hard to beat',
-          explanation: 'Correct. SS_tot shrinks, so the same SS_res is a much larger fraction of it. Predictions and RMSE are unchanged; only the opponent got stronger.',
+          text: 'Almost all of SS_tot is the gap between the two sites, so beating the overall mean only requires knowing which site a row came from - within each site R-squared is 0.000',
+          explanation: 'Correct. The number measures the ability to tell the groups apart, not day-to-day predictive power. Recompute the metric within each group to see it.',
         },
-        { text: 'The model overfits the wide range', explanation: 'Overfitting would change the errors themselves. Here the predictions are identical on both sets — only the reference varies.' },
-        { text: 'R² is unstable and should never be trusted', explanation: 'Too strong. R² is fine — it just must never be compared across different test sets. Report RMSE beside it and the ambiguity disappears.' },
+        { text: 'The model is excellent and should ship', explanation: 'It predicts a constant per site, so it has no day-to-day signal at all. The headline came entirely from the between-site spread.' },
+        { text: 'R-squared is broken and should never be used', explanation: 'Too strong. R-squared did exactly what it says; the mistake was computing it on a test set that mixes wildly different scales.' },
       ],
       correct: 0,
-    },
-    {
-      question: 'A forecasting team reports MASE = 0.92. What have they demonstrated?',
-      options: [
-        { text: 'The model explains 92% of the variance', explanation: 'That is an R²-style reading. MASE is a ratio of absolute errors, not a variance-explained fraction.' },
-        { text: 'The average error is 92% of the actual value', explanation: 'That would be a percentage-error metric like MAPE or WAPE. MASE scales by a baseline\'s error, not by the actuals.' },
-        {
-          text: 'Their MAE is 92% of the naive "predict yesterday" forecast\'s MAE — a genuine but small 8% gain',
-          explanation: 'Correct, and this is why MASE is the good time-series metric: the baseline is inside the number, so MASE < 1 is a self-verifying claim. 0.92 is honest but modest.',
-        },
-      ],
-      correct: 2,
-    },
-    {
-      question: 'With n = 8 rows and p = 3 features, R² = 0.75. What is adjusted R², and what is it saying?',
-      options: [
-        { text: 'About 0.80 — the adjustment rewards a compact model', explanation: 'Adjusted R² is never above R² when p ≥ 1; the factor (n−1)/(n−p−1) is ≥ 1, so it can only pull the score down.' },
-        {
-          text: 'About 0.56 — with only 4 residual degrees of freedom the parameter penalty is severe, and correctly so',
-          explanation: 'Correct: 1 − 0.25 × (7/4) = 0.5625. Three parameters on eight rows is close to fitting noise, and the formula says so loudly.',
-        },
-        { text: 'Also 0.75 — the penalty only applies out of sample', explanation: 'The penalty is purely a function of n and p and applies wherever you compute it. Out-of-sample error needs no penalty at all, which is why CV is the better tool.' },
-      ],
-      correct: 1,
     },
   ],
   interviewQuestions: [
     {
-      question: 'Explain R² to a product manager, then to me.',
+      question: 'Explain R-squared to a product manager, then to me.',
       answer:
-        'To the PM: "if we had no model at all, the best guess for every flat would be the average rent. R² = 0.75 means our model wipes out three quarters of the error that guessing the average would have made." To the interviewer: R² = 1 − SS_res/SS_tot, where SS_tot is the squared error of the mean-predictor, so R² is a normalized comparison against a fixed baseline. Being a ratio of two errors it is unitless, which makes it portable across problems in a way RMSE is not. The cost of that portability is that the denominator is the evaluation set\'s variance, so R² is a property of the model *and* the test set — the same model scores differently on a narrow versus a wide sample. That is why I always report an RMSE beside it.',
+        'To the PM: if we had no model, the best guess for every row would be the overall average. R-squared of 0.75 means we wipe out three quarters of the error that guessing the average would have made. To you: R-squared is 1 minus SS_res over SS_tot, where SS_tot is the squared error of the mean predictor, so it is a normalised comparison against a fixed baseline. Being a ratio of two errors it is unitless, and therefore portable across problems in a way RMSE is not. The cost of that portability is that the denominator is the evaluation set\'s own spread, so R-squared is a property of the model and the test set together. Same model, narrower test set, lower score. That is why I always print RMSE beside it.',
       isCaseBased: false,
     },
     {
-      question: 'Why can raw R² never be used for feature selection, and what do you use instead?',
+      question: 'Why can R-squared not be used to choose features, and what does adjusted R-squared change?',
       answer:
-        'Because adding a feature can never reduce in-sample R²: least squares can always assign the new coefficient 0 and recover the previous fit, so that is a floor — and on a finite sample the new column correlates with the residuals by chance, so R² actually rises even for pure noise. I demonstrated this with 30 rows: adding three random columns moved R² from 0.6458 to 0.6788. Adjusted R² = 1 − (1−R²)(n−1)/(n−p−1) charges for parameters and fell from 0.6195 to 0.6119 on the same data, which is the signal you want. In practice, though, I would select on out-of-sample error via cross-validation: the held-out set penalizes noise automatically, with no penalty term to justify, and it works for models where "p" is not even well defined, like gradient-boosted trees.',
+        'Adding a column can never reduce in-sample R-squared, because the fit can always set the new weight to zero and reproduce the old predictions, so the old value is a floor. On a finite sample the new column lines up with the leftover error by luck, so R-squared actually rises even for pure noise. I ran it on 30 rows: three random columns moved R-squared from 0.6458 to 0.6788. Adjusted R-squared multiplies the unexplained fraction by (n-1)/(n-p-1), which grows with p, so a column must earn more than its rent. On the same data it fell from 0.6195 to 0.6119, which is the signal you wanted. In practice I would still select on held-out error, since that needs no penalty formula and works for models where p is not even defined.',
       isCaseBased: false,
     },
     {
-      question: 'When do you report RMSE and when MAE? Do not say "it depends".',
+      question: 'When do you report RMSE and when MAE? Do not say it depends.',
       answer:
-        'RMSE when large errors are disproportionately expensive — the squaring encodes that, and it is the right default for capacity, inventory and pricing where one huge miss costs far more than several small ones. MAE when a miss is a miss and the cost is linear, such as ETA error, and when the data has genuine outliers you do not want dominating the score. Concretely: RMSE optimizes toward the conditional mean, MAE toward the conditional median — that is the real difference, and it decides which one is right if the target is skewed. My actual practice is to report both, because the ratio RMSE/MAE is a free diagnostic of error concentration: near 1 means uniform errors, above 2 means a few rows own the metric and I should read those rows before touching a hyperparameter.',
+        'RMSE when large errors cost disproportionately more than small ones, which is the usual case for stock levels, capacity and pricing, where one huge miss costs far more than several small ones - the squaring encodes exactly that. MAE when a miss is a miss and cost grows in proportion, such as delivery-time error, and when the data has genuine outliers you do not want dominating the score. Underneath, squared error drives predictions toward the conditional mean and absolute error toward the conditional median, which settles the choice on a skewed target. My real practice is to report both, because their ratio is a free diagnostic: near 1 the errors are uniform, above about 2 a few rows own the metric and I go read those rows before touching a setting.',
       isCaseBased: false,
     },
     {
-      question: 'Walk me through everything wrong with MAPE.',
+      question: 'Walk me through everything wrong with MAPE, and what you would use instead.',
       answer:
-        'Three separate defects. (1) It divides by the actual, so it is undefined at 0 and explodes near 0 — in demand forecasting, low-volume SKUs make it unusable; on an 8-row example of mine, deleting one row where the actual was 2 moved MAPE from 52.6% to 10.2%. (2) It is asymmetric: with truth 100, predicting 0 costs 100% and predicting 200 also costs 100%, but predicting 400 costs 300% — under-prediction is capped at 100% while over-prediction is unbounded. (3) Therefore it systematically favours under-forecasting: shading predictions down caps the penalty, so a MAPE-optimal forecast sits below the conditional median and the warehouse runs short. Fixes in order of quality: sMAPE bounds it at 200% but is not truly symmetric and still breaks at 0; WAPE = Σ|error|/Σ|actual| removes per-row division entirely and is just MAE/mean(y); MASE scales by the naive forecast and is the right default for time series. My recommendation is to optimize MAE or RMSE and, if a percentage is demanded, present WAPE while naming what it is.',
+        'Two defects, both showable in numbers. First, it divides by the actual, so it is undefined at zero and explodes near it. On three rows with errors of 10, 10 and 7 units, where one actual was 2, MAPE reports 123.3 percent while WAPE reports 13.4 percent on the identical predictions. Second, it is asymmetric: with a truth of 100, predicting 0 costs 100 percent and predicting 200 also costs 100 percent, but predicting 400 costs 300 percent. Under-prediction is capped at 100 percent while over-prediction is unbounded, so anything tuned on MAPE drifts low and the warehouse runs short. What I use instead is WAPE, which is total error over total actual and is just MAE rescaled by the average actual; and for time series MASE, which divides by the naive forecast\'s error so that below 1 means better than repeating yesterday.',
       isCaseBased: false,
     },
     {
-      question: 'Case: a vendor pitches you a demand-forecasting model, reporting R² = 0.93 and MAPE = 8%. What do you ask before believing it?',
+      question: 'Case: a vendor pitches a demand-forecasting model reporting R-squared 0.93 and MAPE 8 percent. What do you ask before believing it?',
       answer:
-        'Four questions. (1) What was the variance of the evaluation set? R² is inflated by a wide-spread sample, so if they scored across high- and low-volume SKUs together, 0.93 mostly reflects that some SKUs sell 10,000 and others sell 3 — a model that only distinguishes big from small products would score well. Ask for R² per volume band. (2) Which rows entered the MAPE? An 8% MAPE with any near-zero actuals present is arithmetically implausible, so they have almost certainly filtered low-volume SKUs — exactly the ones I care about for stockouts. Ask for WAPE on the full set. (3) What is the baseline? Give me MASE, or MAE against last-week-repeated; in retail the seasonal-naive baseline is strong and many vendor models do not beat it. (4) Was the split by time? A random split on time-series data leaks the future and produces precisely these numbers. My headline point: R² and MAPE are the two most gameable metrics in the list, and they picked both.',
+        'Four questions, in order of how cheaply they can kill the claim. First, what was the spread of the evaluation set. R-squared is inflated by a wide-spread sample, so if they scored high-volume and low-volume products together, 0.93 may only mean the model can tell a product selling 10,000 from one selling 3. I would ask for R-squared computed within each volume band, and for the score of a model that just predicts each band\'s average - if those two match, the model has no within-band signal at all. Second, which rows entered the MAPE. An 8 percent MAPE with any near-zero actuals present is arithmetically implausible, so they have almost certainly filtered out the low-volume products, which are exactly the ones that cause stockouts. I would ask for WAPE on the unfiltered set. Third, what is the baseline: give me MASE, or MAE against last-week-repeated, because in retail the seasonal naive forecast is strong and many vendor models do not beat it. Fourth, was the split made by time. A random split on time-ordered data lets the model see the future and produces exactly these numbers. The summary point is that R-squared and MAPE are the two most inflatable numbers in the list, and they chose to lead with both.',
       isCaseBased: true,
     },
     {
-      question: 'Your model gets R² = 0.42 on test. Is that good?',
+      question: 'Your model gets R-squared 0.42 on the test set. Is that good?',
       answer:
-        'Unanswerable as stated, and saying so is the point. It depends on (a) the irreducible noise in the target — 0.42 predicting next-quarter revenue is excellent, 0.42 predicting a physical measurement is broken; (b) the test set\'s spread, since a narrow target makes the mean hard to beat and depresses R² with no change to the predictions; and (c) what the alternative is. The number I would actually want is the comparison: what does the current production system or a simple baseline score on the identical set? R² is a comparison against the mean-predictor, which is a very weak opponent — beating it by 42% may or may not be beating the thing you are replacing. I would answer with a table: baseline, current system, new model, on one test set, with both R² and RMSE.',
+        'Unanswerable as stated, and saying so is the point. It depends on how much irreducible noise the target has, since 0.42 predicting next-quarter revenue is excellent while 0.42 predicting a physical measurement means something is broken. It depends on the test set\'s spread, because a narrow target depresses R-squared with no change in the predictions at all. And it depends on what the alternative is: R-squared compares against the mean predictor, which is a very weak opponent and almost never what you are replacing. The number I would actually want is a small table on one identical test set - the mean baseline, whatever is in production today, and the new model - each with both R-squared and RMSE so the units survive.',
       isCaseBased: false,
     },
     {
-      question: 'Adjusted R² decreases when you add a feature. Does that prove the feature is useless?',
+      question: 'Case: a delivery-ETA model shows RMSE 8 minutes, MAE 3 minutes, R-squared 0.61. A PM asks how good it is. What do you say, and what do you do next?',
       answer:
-        'It proves the feature did not pay for its degree of freedom *in this sample under a linear model* — that is weaker than "useless". Adjusted R² is a fixed penalty derived from n and p, not a test of predictive value: with small n the penalty is brutal (8 rows and 3 features gives a factor of 1.75), and a genuinely useful feature can fail it. It is also blind to non-linear or interaction value, since it is computed from a linear fit. And it says nothing about causal usefulness or about feature cost in production. I treat a fall in adjusted R² as a prompt to check the feature with cross-validated error, which is the measurement that actually matters; if held-out error improves and adjusted R² fell, I keep the feature.',
-      isCaseBased: false,
-    },
-    {
-      question: 'How do you compare two models when one predicts in log-space and the other in raw units?',
-      answer:
-        'You cannot compare their metrics directly — R² and RMSE computed on log-targets are answering a different question, and log-space RMSE corresponds roughly to relative rather than absolute error. Bring both back to the same space: exponentiate the log model\'s predictions and score everything in the original units. Watch the retransformation bias: exp(mean of logs) is the geometric mean, which is below the arithmetic mean, so a naively back-transformed log model under-predicts and needs a smearing or variance correction. Then note what the log model was implicitly optimizing — proportional error — and decide whether that is what the business wants; if it is, WAPE or MAPE-style reporting in raw units is the honest comparison, and a log-space model will look good on it by construction.',
-      isCaseBased: false,
-    },
-    {
-      question: 'Case: a delivery-ETA model shows RMSE 8 min, MAE 3 min, and R² 0.61. A PM asks "how good is it?" What do you tell them and what do you do next?',
-      answer:
-        'What I tell them: "typical order is off by about 3 minutes, but the errors are lopsided — a small set of deliveries are off by a lot." The RMSE/MAE ratio of 2.7 is the finding here: with uniform errors that ratio sits near 1.2, so this says a minority of trips dominate the squared error. What I do next: segment the residuals — by city, hour, courier, distance bucket, weather — and find the segment that owns the tail; it is usually a distinct regime (traffic incidents, a new city, orders above some distance) rather than random noise, and it often deserves its own model or a feature the current one lacks. Then the business question: for ETAs, being 15 minutes late is far worse than being 15 minutes early, so a symmetric metric is the wrong objective. I would move to quantile/pinball loss and quote a P90 ETA the customer sees, because the product decision is "what time do we promise", not "what is the mean". Finally I would report the baseline — RMSE of a simple distance/speed heuristic — because R² 0.61 against the mean says nothing about beating the rule the ops team already uses.',
+        'What I say: a typical order is off by about 3 minutes, but the errors are lopsided, with a small set of deliveries off by a lot. The finding is the ratio: 8 over 3 is 2.7, and uniform errors would put that near 1.2, so a minority of trips dominate the squared error. What I do next is segment the errors by city, hour, courier, distance and weather to find the segment that owns the tail. It is usually a distinct regime such as a new city or trips above some distance, not random noise, and it often deserves its own feature or its own model. Then I would question the objective itself: for an ETA, being 15 minutes late is far worse than being 15 minutes early, so a symmetric metric is the wrong target and a quantile objective with a P90 promised time fits the actual product decision better. Finally I would report a baseline, such as the RMSE of a simple distance-over-average-speed rule, because R-squared 0.61 against the mean says nothing about beating the rule the ops team already uses.',
       isCaseBased: true,
     },
     {
-      question: 'Case: your quarterly report shows R² fell from 0.81 to 0.64. The model is unchanged and retraining did not help. What is your investigation order?',
+      question: 'Case: your quarterly report shows R-squared fell from 0.81 to 0.64. The model is unchanged and retraining did not help. What is your investigation order?',
       answer:
-        'First hypothesis, and the cheapest to test: the evaluation population\'s variance changed. R² = 1 − SS_res/SS_tot, so a quarter with a narrower target range shrinks SS_tot and drops R² with identical predictions — check whether RMSE and MAE also moved. If they held steady, this is the answer and there is no model problem at all, just a reporting artefact. Second: if RMSE also rose, it is genuine degradation — split the residuals by segment and by week to see whether the loss is broad (covariate or concept drift; compare feature distributions across quarters) or concentrated in a new segment (a new market, a new product line the model never saw). Third: pipeline damage — a feature silently turning null and defaulting to 0, or a category encoder meeting unseen levels; compare feature-level summary stats quarter over quarter, which usually finds it in minutes. Fourth: label quality, since a change in how the target is recorded raises measured error with no model change. The habit worth naming: a metric with a moving denominator should never be a standalone KPI — I would put RMSE and a baseline-relative number on the dashboard beside it so this class of false alarm cannot happen again.',
+        'First and cheapest: the evaluation population\'s spread changed. R-squared is 1 minus SS_res over SS_tot, so a quarter with a narrower target range shrinks SS_tot and drops the score with identical predictions. I check whether RMSE and MAE also moved. If they held steady, that is the whole answer and there is no model problem, only a reporting artefact. Second, if RMSE also rose, it is real degradation, so I split the errors by segment and by week to see whether the loss is broad, which points to the input distribution shifting, or concentrated in a new segment such as a market the model never saw. Third, pipeline damage: a feature silently going null and defaulting to zero, or an encoder meeting unseen categories. Comparing feature-level summary statistics quarter over quarter usually finds this in minutes. Fourth, label quality, since a change in how the target is recorded raises measured error with no model change at all. The habit worth naming afterwards is that a metric with a moving denominator should not be a standalone dashboard number - I would put RMSE and a baseline-relative number beside it so this class of false alarm cannot recur.',
       isCaseBased: true,
-    },
-    {
-      question: 'Why insist on a baseline when R² already has one built in?',
-      answer:
-        'Because R²\'s baseline is the mean-predictor, which is the weakest opponent available and almost never the thing you are actually replacing. For time series the honest baseline is the last value or the seasonal naive, and beating the mean while losing to "repeat last week" is common and embarrassing — MASE exists precisely to make that comparison unavoidable. For an existing product, the baseline is the current rule or model in production. So the rule I apply: report the metric, then the same metric for the dumbest defensible predictor and for the incumbent, on the identical evaluation set. It costs one line of code, turns an unfalsifiable float into a claim, and it is the regression twin of the majority-class baseline in classification.',
-      isCaseBased: false,
     },
   ],
   flashcards: [
-    { front: 'RMSE vs MSE — why bother with the root?', back: 'RMSE is in the target\'s units, so it is quotable: "off by ₹12,000 on average". The root does NOT remove the squaring\'s outlier sensitivity.' },
-    { front: 'RMSE / MAE ratio', back: 'RMSE ≥ MAE always. Ratio ≈ 1 → uniform errors. 1.5–2 → normal spread. > 2 → a few rows own your error; go read them.' },
-    { front: 'R² in one sentence', back: '1 − SS_res/SS_tot: the fraction of the target\'s variance you explain, measured against always predicting the mean.' },
-    { front: 'R² = 0 and R² < 0', back: '0 = exactly as good as predicting the mean. Negative = WORSE than the mean. Possible on test data; a top-tier alarm for leakage or shift.' },
-    { front: 'R²\'s trap', back: 'Its denominator is the TEST SET\'s variance. The same frozen model scores 0.88 on a wide sample and 0.31 on a narrow one. Never compare R² across test sets.' },
-    { front: 'Why R² cannot select features', back: 'Adding any column — even pure noise — can never lower in-sample R² (the old fit is reachable with coefficient 0) and chance correlation pushes it up. Demo: 0.6458 → 0.6788 from 3 noise columns.' },
-    { front: 'Adjusted R²', back: '1 − (1−R²)(n−1)/(n−p−1). Charges rent per parameter, so noise features make it FALL (0.6195 → 0.6119 in the same demo).' },
-    { front: 'MAPE\'s three defects', back: 'Divides by the actual (explodes near 0); asymmetric (under-prediction capped at 100%, over-prediction unbounded); therefore systematically favours under-forecasting.' },
-    { front: 'WAPE', back: 'Σ|error| / Σ|actual| — one division at the end, so near-zero actuals cannot detonate it. Identity: WAPE = MAE / mean(y).' },
-    { front: 'MASE and the baseline habit', back: 'MAE ÷ MAE of the naive (yesterday) forecast; MASE < 1 beats "repeat last value". Generally: always report the mean/median/last-value baseline — a metric without a baseline is a number without a meaning.' },
+    { front: 'RMSE and MAE on the five-day example', back: 'Errors +2, -2, +3, -2, +12. MAE = 21/5 = 4.2. MSE = 165/5 = 33, so RMSE = 5.745. The root exists only to put the number back into the target\'s units.' },
+    { front: 'RMSE over MAE ratio', back: 'RMSE is always at least MAE. Near 1 means uniform errors. 1.5 to 2 is a normal spread. Above about 2 means a few rows own the metric - go read those rows.' },
+    { front: 'R-squared in one sentence', back: '1 - SS_res/SS_tot. SS_tot is the squared error of always predicting the average of the true values, so R-squared is the share of that baseline error you removed. Five-day example: 1 - 165/1000 = 0.835.' },
+    { front: 'R-squared equal to 0, and below 0', back: 'Zero means exactly as good as predicting the average. Negative means worse than that constant. Impossible in-sample for a linear fit, common on held-out data, and a loud alarm.' },
+    { front: 'The R-squared test-set trap', back: 'The denominator is the test set\'s own spread. SS_res 200 against SS_tot 4000 gives 0.95; the same errors against SS_tot 500 give 0.60. Never compare R-squared across test sets.' },
+    { front: 'Adjusted R-squared and why it exists', back: 'Raw R-squared can never fall when a column is added, so it cannot select features. Adjusted = 1 - (1-R2)(n-1)/(n-p-1) charges rent per fitted column, so noise columns make it fall: 0.6195 down to 0.6119 in the demo.' },
+    { front: 'MAPE\'s two failures', back: 'It divides by the actual, so an actual of 2 with a 7-unit error is a 350 percent row and MAPE reads 123.3 where WAPE reads 13.4. And it is asymmetric: under-prediction caps at 100 percent, over-prediction is unbounded, so MAPE-tuned forecasts drift low.' },
+    { front: 'WAPE', back: 'Total absolute error divided by total actual - one division at the end, so no small actual can explode it. Identity: WAPE = MAE divided by the average actual.' },
   ],
-  mindmapMarkdown: `- Regression Metrics: R², Adjusted R² & the MAPE Trap
-  - Loss vs metric
-    - loss = optimizer food; metric = the report
-    - MSE/MAE/Huber as losses → sibling module
+  mindmapMarkdown: `- Regression Metrics
+  - The five-day example
+    - truth 10 20 30 40 50
+    - pred 12 18 33 38 62
+    - errors +2 -2 +3 -2 +12
   - RMSE and MAE
-    - RMSE: target's units, quotable, outlier-sensitive
-    - MAE: robust, linear, aims at the median
-    - RMSE ≥ MAE always
-    - gap ≈1 uniform · 1.5–2 normal · >2 outliers own it
-  - R²
-    - 1 − SS_res/SS_tot, baseline = predict the mean
-    - unitless → comparable across problems
-    - 0 = the mean · <0 = worse than the mean
-    - trap: denominator is the TEST SET's variance
-  - Adjusted R²
-    - raw R² never decreases when p grows
-    - 1 − (1−R²)(n−1)/(n−p−1)
-    - noise demo: R² 0.646→0.679, adj 0.620→0.612
-    - better still: cross-validated error
+    - MAE = 21/5 = 4.2, target units
+    - MSE = 165/5 = 33, RMSE = 5.745
+    - squaring: one row is 87% of MSE, 57% of MAE
+    - ratio 1.37; above 2 means a few rows own the error
+  - R-squared
+    - baseline = always predict the mean (30)
+    - SS_res 165 vs SS_tot 1000 gives 0.835
+    - unitless, comparable across problems
+    - 0 = the mean, below 0 = worse than the mean
+    - trap: denominator is the TEST SET's spread
+  - Adjusted R-squared
+    - raw R2 never falls when a column is added
+    - 1 - (1-R2)(n-1)/(n-p-1)
+    - real fit: R2 0.6458 to 0.6788, adj 0.6195 to 0.6119
+    - only quotable when p is a real fitted count
   - MAPE traps
-    - divides by the actual → explodes near 0
-    - one row moved MAPE 52.6% → 10.2%
-    - asymmetric: under capped 100%, over unbounded
-    - favours under-forecasting → stockouts
+    - divides by the actual: a 350% row, MAPE 123.3%
+    - asymmetric: under capped at 100%, over unbounded
+    - so MAPE-tuned models forecast low
   - Fixes
-    - sMAPE — bounded 200%, not truly symmetric
-    - WAPE = Σ|e|/Σ|y| = MAE/mean(y)
-    - MASE = MAE / naive MAE, <1 beats yesterday
-  - Choose from the decision
-    - symmetric costs → RMSE / MAE
-    - percentage demanded → WAPE, caveat stated
-    - time series → MASE · intervals → pinball loss
-  - Always ship the baseline
-    - mean · median · last value
-    - twin of the majority-class baseline`,
+    - WAPE = total error / total actual = MAE / mean(y) = 13.4%
+    - sMAPE bounded at 200% but not truly symmetric
+  - Classic mistake
+    - hospital 200/day and clinic 5/day mixed
+    - R2 = 0.9968 from between-site spread alone
+    - within-site R2 = 0.000
+  - Always print the baseline`,
 }
 
 export default m

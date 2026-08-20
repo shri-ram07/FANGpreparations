@@ -4,555 +4,523 @@ const m: Module = {
   id: 'math-l1-calculus-gradients',
   subjectId: 'math',
   level: 1,
-  title: 'Derivatives, the Chain Rule & Gradients',
+  title: 'Slopes, Derivatives & the Gradient',
   whyItMatters:
-    'Backprop is not a new idea — it is the chain rule applied to a graph, and nothing else. If you can say "multiply the sensitivities along the path" and mean it, every training loop you will ever debug becomes readable. Skip this and you are memorizing formulas that were three lines of calculus all along.',
-  estMinutes: 55,
+    'One word decides whether the rest of machine learning makes sense to you: gradient. Every training loop, every optimiser, every "the model is learning" claim is built on it. A gradient is not an advanced idea. It is the slope of a hill, written down as a list of numbers, one number per knob you can turn. This module builds that idea from the slope of a straight line, using real arithmetic and a pocket calculator\'s worth of Python, and never asks you to trust a formula you have not watched being produced.',
+  assumes: [
+    'School algebra: you can substitute a number into an expression like 3x + 1 and get an answer',
+    'You have seen a graph: a horizontal axis, a vertical axis, and a curve drawn on them',
+    'Basic Python: functions, lists, a for loop, and print',
+    'No calculus at all is needed. Derivative, slope at a point, tangent, partial derivative and gradient are all defined here, from scratch.',
+  ],
+  estMinutes: 36,
   sections: [
     {
       type: 'intuition',
-      title: 'Derivative = sensitivity, not "slope of a tangent"',
-      md: `Forget the tangent lines from school. The only reading that matters in ML: **if I nudge x by a tiny bit, how much does f move?**
+      title: 'Start with a straight line and two real points',
+      md: `Take the line **f(x) = 3x + 1**. Pick two points on it and measure how steep it is.
 
-- Volume knob: turn it 1mm. Loud jump? High derivative. Barely a change? Low derivative.
-- Formally: *f'(x)* = how many units f moves per one unit of x, measured right at x.
-- f'(3) = 6 means "near x = 3, f moves 6× as fast as x does".
-- Sign carries the direction: **positive = f rises as x rises**, negative = f falls.
-- Size carries the leverage: this is the number that decides which knob to turn first.
-- Training a model = finding which weights the loss is *sensitive* to, then turning those.`,
-    },
-    {
-      type: 'math',
-      intro: 'The limit definition. Look at it once, understand it, then never compute one by hand again.',
-      latex: [
-        'f^{\\prime}(x) = \\lim_{h \\to 0} \\frac{f(x+h) - f(x)}{h}',
-        '\\text{rise over run, with the run shrunk to nothing}',
-      ],
-    },
-    {
-      type: 'note',
-      md: `That limit is the *definition*; the rules below are the *shortcuts*, and shortcuts are all anyone uses. Worth knowing it exists for one reason only: it is literally what a **numeric gradient check** computes (later in this module) — the trick engineers use to catch a wrong derivative. If you want the geometry to click permanently, watch 3Blue1Brown's *Essence of Calculus* — chapters 2 and 3 cover this and the chain rule better than any textbook.`,
-    },
-    {
-      type: 'intuition',
-      title: 'The three rules you actually need',
-      md: `You need almost none of the calculus you were taught. Three rules cover ML:
+- At x = 2 the height is 3(2) + 1 = **7**. At x = 5 the height is 3(5) + 1 = **16**.
+- Going from the first point to the second, the height went up by 16 − 7 = **9**. That is the **rise**.
+- Sideways, we moved 5 − 2 = **3**. That is the **run**.
+- **Slope = rise / run = 9 / 3 = 3.** The line climbs 3 units of height for every 1 unit sideways.
+- Try any other pair of points on this line and you get 3 again. A straight line has one slope, everywhere. That is what "straight" means.
 
-- **Power rule:** bring the exponent down, subtract one. (x³)' = 3x².
-- **Sum rule:** derivatives add. (f + g)' = f' + g'. This is why a loss summed over 1M samples is just 1M gradients added — and why mini-batching is legal.
-- **Product rule:** (fg)' = f'g + fg'. Rarer in practice — most ML composition is *nesting*, not multiplying.
-- A constant multiplier rides along: (5f)' = 5f'. A constant alone dies: (7)' = 0.
-- That last one is why the bias term's gradient has no input factor attached.`,
-    },
-    {
-      type: 'math',
-      intro: 'The ML cast, with their derivatives. Memorize these five — they cover 95% of what appears in a training loop.',
-      latex: [
-        '\\frac{d}{dx}x^2 = 2x \\qquad \\frac{d}{dx}e^{x} = e^{x} \\qquad \\frac{d}{dx}\\ln x = \\frac{1}{x}',
-        '\\sigma(x) = \\frac{1}{1+e^{-x}} \\quad\\Longrightarrow\\quad \\sigma^{\\prime}(x) = \\sigma(x)\\,\\bigl(1 - \\sigma(x)\\bigr)',
-        '\\mathrm{ReLU}(x) = \\max(0, x) \\quad\\Longrightarrow\\quad \\mathrm{ReLU}^{\\prime}(x) = \\begin{cases} 1 & x > 0 \\\\ 0 & x < 0 \\end{cases}',
-      ],
-    },
-    {
-      type: 'note',
-      md: `Three things to actually carry away. **eˣ is its own derivative** — that self-reproducing property is why it shows up in every softmax and every exponential decay schedule. **The sigmoid derivative reuses the forward value**: if you already computed a = σ(z), the gradient is a(1−a) — no new exp() call, which is exactly why frameworks cache activations. And **σ' peaks at 0.25** (at z = 0) — multiply a stack of those together through 20 layers and your gradient is 0.25²⁰ ≈ 10⁻¹²: that is the vanishing-gradient problem, born right here.`,
-    },
-    {
-      type: 'note',
-      md: `**ReLU's kink at 0.** ReLU has *no* derivative at exactly x = 0 — the slope jumps from 0 to 1 with nothing in between. Mathematically the honest answer is a **subgradient**: any value in [0, 1] is valid there. Engineering answer: every framework just picks one — PyTorch and TensorFlow return **0** at x = 0 — and it never matters, because floating-point activations land on exactly 0.0 essentially never. Interview line: *"non-differentiable at a single point, subgradient convention, measure zero, nobody cares."*`,
-    },
-    {
-      type: 'intuition',
-      title: 'The chain rule — this is backprop',
-      md: `Gears in a machine. Gear A turns gear B turns gear C. If A→B is 3:1 and B→C is 2:1, then A→C is 6:1. You **multiply the ratios along the path**.
-
-- Derivatives are exactly those ratios: "how much does the next thing move per unit of this thing".
-- So for nested functions f(g(x)): **f'(g(x)) · g'(x)** — the outer sensitivity times the inner one.
-- Read it as one sentence: *multiply the sensitivities along the path from input to output*.
-- Longer chain? Keep multiplying. Ten links, ten factors.
-- That is the whole of backpropagation. Everything else in a deep learning framework is bookkeeping.
-- Which is also why gradients vanish or explode: a product of ten numbers all below 1 collapses; all above 1 detonates.`,
-    },
-    {
-      type: 'math',
-      intro: 'The chain rule, and its Leibniz form — the one worth memorizing because the symbols visibly cancel.',
-      latex: [
-        'h(x) = f\\bigl(g(x)\\bigr) \\quad\\Longrightarrow\\quad h^{\\prime}(x) = f^{\\prime}\\bigl(g(x)\\bigr) \\cdot g^{\\prime}(x)',
-        '\\frac{dL}{dw} = \\frac{dL}{da} \\cdot \\frac{da}{dz} \\cdot \\frac{dz}{dw}',
-      ],
-    },
-    {
-      type: 'intuition',
-      title: 'A 3-link chain, by hand, with real numbers',
-      md: `One neuron, one sample. Input **x = 2**, target **y = 1**, weight **w = 0.5**, bias **b = −1**. Three links:
-
-- **Link 1 (linear):** z = w·x + b = 0.5·2 − 1 = **0**.
-- **Link 2 (squash):** a = σ(z) = σ(0) = **0.5**.
-- **Link 3 (loss):** L = (a − y)² = (0.5 − 1)² = **0.25**.
-- Now walk backwards. ∂L/∂a = 2(a − y) = 2(−0.5) = **−1**.
-- ∂a/∂z = a(1 − a) = 0.5 · 0.5 = **0.25**.  ∂z/∂w = x = **2**.
-- Multiply the three: −1 × 0.25 × 2 = **−0.5**. That is ∂L/∂w.`,
-    },
-    {
-      type: 'math',
-      intro: 'The same walk in symbols. Note every factor is a small, local, obvious derivative — the chain does the rest.',
-      latex: [
-        '\\frac{\\partial L}{\\partial w} = \\underbrace{\\frac{\\partial L}{\\partial a}}_{-1} \\cdot \\underbrace{\\frac{\\partial a}{\\partial z}}_{0.25} \\cdot \\underbrace{\\frac{\\partial z}{\\partial w}}_{2} = -0.5',
-        '\\frac{\\partial L}{\\partial b} = (-1) \\cdot (0.25) \\cdot 1 = -0.25',
-      ],
-    },
-    {
-      type: 'note',
-      md: `Sanity-check the *sign*, always — it is the cheapest bug detector you have. ∂L/∂w = −0.5 is negative, so the update w := w − α·(−0.5) **increases** w. Bigger w → bigger z → bigger a, moving 0.5 up toward the target y = 1. The math agrees with common sense. When it does not, you have a bug, not a discovery.`,
-    },
-    {
-      type: 'intuition',
-      title: 'Partial derivatives: one knob at a time',
-      md: `A mixing desk with 50 faders. To learn what fader 7 does, you **hold the other 49 still** and wiggle only that one.
-
-- That is a **partial derivative**, written ∂f/∂x₇: the derivative of f treating every other variable as a frozen constant.
-- Mechanically identical to an ordinary derivative — just pretend the others are numbers.
-- f(x, y) = x²y  →  ∂f/∂x = 2xy (y is a constant), ∂f/∂y = x² (x is a constant).
-- Curly ∂ instead of d is pure notation: it only signals "there were other variables around".
-- A model with 175 billion parameters has 175 billion partials. Each one answers: *nudge this weight, how does the loss move?*`,
-    },
-    {
-      type: 'intuition',
-      title: 'The gradient: all the partials, stacked into one arrow',
-      md: `Stack every partial into a vector and you get the **gradient ∇f**. It stops being a list and becomes a direction.
-
-- ∇f points in the direction of **steepest ASCENT** — the single fastest way to make f bigger.
-- Its length is *how* steep: a long gradient means a cliff, near-zero means flat ground.
-- We want the loss smaller, so we walk **−∇f**. That minus sign is the entire word "descent" in gradient descent.
-- Why ascent and not some other direction? Because the change in f for a small step **u** is ∇f·u, and a dot product is maximized when u points the same way as ∇f. (Linear algebra earning its keep.)
-- Flat ground (∇f ≈ 0) means a minimum, a maximum, or a saddle — the gradient alone cannot tell you which.`,
-    },
-    {
-      type: 'math',
-      intro: 'Gradient and the update rule you have already met.',
-      latex: [
-        '\\nabla f = \\left[\\, \\frac{\\partial f}{\\partial x_1},\\; \\frac{\\partial f}{\\partial x_2},\\; \\dots,\\; \\frac{\\partial f}{\\partial x_n} \\,\\right]',
-        '\\theta := \\theta - \\alpha \\, \\nabla_{\\theta} J(\\theta)',
-      ],
-    },
-    {
-      type: 'intuition',
-      title: 'The loss surface: the landscape those gradients live on',
-      md: `Put the picture together. A **loss surface** is the graph of your loss as a function of your PARAMETERS — the thing gradient descent walks on.
-
-- The horizontal axes are your weights (w₁, w₂, …). The vertical height is the loss J. A point on the surface = "this exact parameter setting is this bad".
-- One weight gives a **curve** (the slider below). Two weights give a **surface** — a landscape. A million weights gives the same idea in a million dimensions: you can't picture it, but the maths does not change.
-- A **contour line** joins points of equal loss, like altitude on a trekking map. The gradient is always **perpendicular** to the contour through your point — you proved that above: no movement along the contour changes J, so the direction of steepest change must be at right angles to it.
-- **Convex** surface (one bowl, one bottom): any downhill path reaches THE minimum. Linear regression with MSE is this — which is why it has a closed-form answer at all.
-- **Non-convex** (many valleys, saddles, plateaus, narrow ravines): deep networks live here. Where you start decides which valley you land in, and a flat plateau starves your steps without ever being an error.
-- Same surface, different tools: the ravine shape is exactly why Momentum and Adam exist — you'll race them on a real one in the DL subject.`,
-    },
-    { type: 'visual', component: 'GradientDescentSlider', props: { fn: 'nonconvex' } },
-    {
-      type: 'note',
-      md: `Watch what the ball is doing, because it is doing calculus. **The slope it feels under itself IS the derivative** dJ/dw at that point — one number, computed locally, with no view of the rest of the curve. Each step moves it *against* that slope, which is exactly "step in the direction of the negative gradient". Two things this non-convex curve shows that a simple bowl hides: the ball settles in whichever valley it started nearest (**initialization decides the outcome**), and on the flat stretch between valleys it barely moves because the derivative there is nearly zero (**a plateau starves the update, it does not break it**).`,
-    },
-    {
-      type: 'intuition',
-      title: 'End to end: the gradient of MSE for one weight',
-      md: `The payoff. Model ŷ = w·x (no bias, one weight). Loss = MSE. Data: (1, 2), (2, 4), (3, 6) — so the true w is 2. Start at **w = 0.5**.
-
-- Predictions: [0.5, 1, 1.5]. Errors (ŷ − y): [−1.5, −3, −4.5]. Loss J = 5.25.
-- Chain rule per point: outer d/du of ½u² is u = (ŷ − y); inner d/dw of (w·x) is x. Multiply → **(ŷ − y)·x**.
-- Average over the 3 points: (−1.5 + −6 + −13.5)/3 = **∂J/∂w = −7**.
-- One step with α = 0.1: w := 0.5 − 0.1·(−7) = **1.2**. New loss: 5.25 → **1.49**. It worked.
-- Say the gradient out loud: **error × input, averaged**.
-- That is the *exact* formula the ML module **Gradient Descent + Linear Regression** hands you. You just derived it — it was one chain rule the whole time.`,
-    },
-    {
-      type: 'math',
-      intro: 'Written properly. The ½ is cosmetic: it cancels the 2 the power rule produces.',
-      latex: [
-        'J(w) = \\frac{1}{2m}\\sum_{i=1}^{m}\\bigl(w x^{(i)} - y^{(i)}\\bigr)^2',
-        '\\frac{dJ}{dw} = \\frac{1}{m}\\sum_{i=1}^{m}\\bigl(\\hat{y}^{(i)} - y^{(i)}\\bigr)\\, x^{(i)}',
-      ],
-    },
-    {
-      type: 'intuition',
-      title: 'The computational graph: forward values, backward multiplications',
-      md: `Stop thinking "formula", start thinking **graph**. Every model is nodes; every node knows two tiny things.
-
-- **Forward:** each node takes inputs, computes an output, and caches it. Values flow left to right.
-- Each node also knows its own **local derivative** — output-per-input, for its one operation only. Nothing global.
-- **Backward:** start at the loss with gradient 1, then walk right to left, multiplying each incoming gradient by the local derivative.
-- Every node is dumb. It never sees the network. It only multiplies what arrived by what it knows.
-- **Fan-out rule:** if a node feeds two places, its gradients from both paths are **added** (sum rule, applied to a graph).
-- Step through the diagram below — those are the exact numbers from the 3-link chain.`,
-    },
-    {
-      type: 'visual',
-      component: 'PointerBoxDiagram',
-      props: {
-        title: 'One neuron: forward values, then backward gradients',
-        notice: 'Left = values computed going forward. Right = gradients computed coming back. Each backward number is just the previous one times a local derivative.',
-        leftLabel: 'forward',
-        rightLabel: 'backward',
-        frames: [
-          {
-            note: 'Forward, node 1 (linear). z = w*x + b = 0.5*2 + (-1) = 0. The node caches z for later.',
-            stack: [
-              { name: 'x  (input)', value: '2' },
-              { name: 'w  (weight)', value: '0.5' },
-              { name: 'b  (bias)', value: '-1' },
-              { name: 'z = w*x + b', value: '0' },
-            ],
-            heap: [{ id: 'todo', value: 'not started', label: 'backward pass' }],
-          },
-          {
-            note: 'Forward, node 2 (squash). a = sigmoid(0) = 0.5. Cached too — the sigmoid gradient reuses it.',
-            stack: [
-              { name: 'x  (input)', value: '2' },
-              { name: 'w  (weight)', value: '0.5' },
-              { name: 'b  (bias)', value: '-1' },
-              { name: 'z = w*x + b', value: '0' },
-              { name: 'a = sigmoid(z)', value: '0.5' },
-            ],
-            heap: [{ id: 'todo', value: 'not started', label: 'backward pass' }],
-          },
-          {
-            note: 'Forward, node 3 (loss). Target y = 1, so L = (a - y)^2 = 0.25. Forward pass done.',
-            stack: [
-              { name: 'x  (input)', value: '2' },
-              { name: 'w  (weight)', value: '0.5' },
-              { name: 'b  (bias)', value: '-1' },
-              { name: 'z = w*x + b', value: '0' },
-              { name: 'a = sigmoid(z)', value: '0.5' },
-              { name: 'L = (a - y)^2', value: '0.25' },
-            ],
-            heap: [{ id: 'todo', value: 'not started', label: 'backward pass' }],
-          },
-          {
-            note: 'Backward starts at the END. Seed dL/dL = 1. Local derivative of (a-y)^2 is 2(a-y) = -1, so dL/da = 1 * -1 = -1.',
-            stack: [
-              { name: 'x  (input)', value: '2' },
-              { name: 'w  (weight)', value: '0.5' },
-              { name: 'b  (bias)', value: '-1' },
-              { name: 'z = w*x + b', value: '0' },
-              { name: 'a = sigmoid(z)', value: '0.5', to: 'ga' },
-              { name: 'L = (a - y)^2', value: '0.25', to: 'gL' },
-            ],
-            heap: [
-              { id: 'gL', value: 'dL/dL = 1', label: 'seed' },
-              { id: 'ga', value: 'dL/da = -1', label: 'local: 2(a - y)' },
-            ],
-          },
-          {
-            note: 'Through the sigmoid. Local derivative a(1-a) = 0.5*0.5 = 0.25. Multiply: dL/dz = -1 * 0.25 = -0.25.',
-            stack: [
-              { name: 'x  (input)', value: '2' },
-              { name: 'w  (weight)', value: '0.5' },
-              { name: 'b  (bias)', value: '-1' },
-              { name: 'z = w*x + b', value: '0', to: 'gz' },
-              { name: 'a = sigmoid(z)', value: '0.5', to: 'ga' },
-              { name: 'L = (a - y)^2', value: '0.25', to: 'gL' },
-            ],
-            heap: [
-              { id: 'gL', value: 'dL/dL = 1', label: 'seed' },
-              { id: 'ga', value: 'dL/da = -1', label: 'local: 2(a - y)' },
-              { id: 'gz', value: 'dL/dz = -0.25', label: '-1 x 0.25' },
-            ],
-          },
-          {
-            note: 'Last hop. z = w*x + b has local derivatives x = 2 (for w) and 1 (for b). dL/dw = -0.25 * 2 = -0.5, dL/db = -0.25 * 1 = -0.25. These are what the optimizer subtracts.',
-            stack: [
-              { name: 'x  (input)', value: '2' },
-              { name: 'w  (weight)', value: '0.5', to: 'gw' },
-              { name: 'b  (bias)', value: '-1', to: 'gb' },
-              { name: 'z = w*x + b', value: '0', to: 'gz' },
-              { name: 'a = sigmoid(z)', value: '0.5', to: 'ga' },
-              { name: 'L = (a - y)^2', value: '0.25', to: 'gL' },
-            ],
-            heap: [
-              { id: 'gL', value: 'dL/dL = 1', label: 'seed' },
-              { id: 'ga', value: 'dL/da = -1', label: 'local: 2(a - y)' },
-              { id: 'gz', value: 'dL/dz = -0.25', label: '-1 x 0.25' },
-              { id: 'gw', value: 'dL/dw = -0.5', label: '-0.25 x 2' },
-              { id: 'gb', value: 'dL/db = -0.25', label: '-0.25 x 1' },
-            ],
-          },
-        ],
-      },
-    },
-    {
-      type: 'note',
-      md: `You have just hand-executed backpropagation. A real network is this graph with millions of nodes and matrices instead of scalars — the *procedure* does not change by one line. When you reach the DL module on **backpropagation**, it will replay this exact walk with layers in place of nodes; the only new content there is the matrix bookkeeping. Also note *why* backward goes right-to-left: one backward sweep produces the gradient for **every** parameter at once. Doing it forward-mode would cost one full pass per parameter — the difference between training GPT and not.`,
+Notice the number 3 was already sitting in the formula, in front of the x. Hold that thought.`,
     },
     {
       type: 'code',
       lang: 'python',
-      title: 'Gradient check: finite differences vs your formula — the bug-catcher',
-      code: `import numpy as np
+      title: 'The straight-line slope, computed instead of asserted',
+      code: `def line(x):
+    return 3 * x + 1
 
-def sigmoid(z):
-    return 1 / (1 + np.exp(-z))
+x1, x2 = 2.0, 5.0
+rise = line(x2) - line(x1)
+run = x2 - x1
 
-x, y = 2.0, 1.0                        # one sample: input 2, target 1
+print('height at x1 =', line(x1), ' height at x2 =', line(x2))
+print('rise =', rise, ' run =', run)
+print('slope = rise / run =', rise / run)
 
-def loss(w, b):                        # forward: z -> a -> L
-    return (sigmoid(w * x + b) - y) ** 2
-
-def analytic_grad(w, b):               # the chain rule, by hand
-    a = sigmoid(w * x + b)
-    dL_dz = 2 * (a - y) * a * (1 - a)  # 2(a-y) . a(1-a)
-    return np.array([dL_dz * x, dL_dz * 1.0])
-
-def buggy_grad(w, b):                  # sabotage: forgot the sigmoid's local derivative
-    a = sigmoid(w * x + b)
-    return np.array([2 * (a - y) * x, 2 * (a - y)])
-
-def numeric_grad(f, params, h=1e-5):   # central difference, one param at a time
-    g = np.zeros(len(params))
-    for i in range(len(params)):
-        up, dn = list(params), list(params)
-        up[i] += h
-        dn[i] -= h
-        g[i] = (f(*up) - f(*dn)) / (2 * h)
-    return g
-
-def rel_err(a, n):
-    return np.abs(a - n).max() / max(np.abs(a).max(), np.abs(n).max(), 1e-12)
-
-w, b = 0.5, -1.0
-num = numeric_grad(loss, [w, b])
-print('numeric ', num)                             # [-0.5  -0.25]
-print('analytic', analytic_grad(w, b))             # [-0.5  -0.25]
-print('rel err  %.2e' % rel_err(analytic_grad(w, b), num))   # 3.79e-11  -> PASS
-print('buggy   ', buggy_grad(w, b))                # [-2.  -1. ]
-print('rel err  %.2e' % rel_err(buggy_grad(w, b), num))      # 7.50e-01  -> FAIL`,
+# ---- real output ----
+# height at x1 = 7.0  height at x2 = 16.0
+# rise = 9.0  run = 3.0
+# slope = rise / run = 3.0`,
       annotations: {
-        6: 'Hand-check: z = 0.5*2 - 1 = 0, a = sigmoid(0) = 0.5, L = (0.5 - 1)^2 = 0.25. Clean numbers on purpose.',
-        13: 'The three links, multiplied: 2(a-y) = -1, times a(1-a) = 0.25, gives dL/dz = -0.25. Then x = 2 for w, and 1 for b.',
-        26: 'Central difference, not (f(x+h)-f(x))/h. Two-sided error shrinks as h^2 instead of h — same cost, far more accurate.',
-        30: 'RELATIVE error, never absolute: a gradient of 1e-8 and one of 1e8 need the same test.',
-        36: 'Pass threshold in practice: < 1e-7 for float64 is solid, < 1e-4 is suspicious, > 1e-2 is a bug.',
-        38: 'The dropped a(1-a) = 0.25 factor makes the gradient exactly 4x too big. Silent in training (loss still falls, just wrongly) — loud here.',
+        1: 'Defines the line as a Python function so we can ask it for the height at any x. line(2) means "the height of the line above the point x = 2".',
+        2: 'The body: multiply the input by 3 and add 1. This one expression IS the line.',
+        4: 'Two sideways positions to measure between. They are written as 2.0 and 5.0, with decimal points, so Python does decimal division later instead of whole-number division.',
+        5: 'Rise: the height at the second point minus the height at the first. Subtraction, in that order, so a downhill line gives a negative rise.',
+        6: 'Run: how far we moved sideways. Same order of subtraction, so the two match up.',
+        8: 'Prints both heights so you can check 7.0 and 16.0 against the arithmetic you did by hand above.',
+        9: 'Prints the two ingredients separately. Seeing 9.0 and 3.0 before the division makes the next line obvious rather than magical.',
+        10: 'Rise divided by run. The answer 3.0 is the slope, and it matches the 3 sitting in front of x in the formula.',
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'A curve has a different slope at every point',
+      md: `Now bend the line. Take **f(x) = x²**, whose graph is a bowl-shaped curve: at x = 1 the height is 1, at x = 2 it is 4, at x = 3 it is 9.
+
+- Between x = 1 and x = 2 the rise is 4 − 1 = 3 over a run of 1, so the slope there is **3**.
+- Between x = 2 and x = 3 the rise is 9 − 4 = 5 over a run of 1, so the slope there is **5**.
+- Different answers. On a curve, "the slope" is not one number — it depends on where you stand and how far you look.
+- So the question has to become sharper: what is the slope **exactly at** the point x = 3, not averaged over a stretch?
+- The answer people agreed on: **imagine the straight line that just touches the curve at that point** and runs alongside it, neither cutting through nor drifting away. That touching line is called the **tangent** at x = 3. The **slope at a point** means the slope of that tangent.
+
+That is a picture, not yet a number. The next section turns it into a number, with arithmetic you can do on paper.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Measuring the slope at a point: take a tiny step and look',
+      md: `We cannot measure rise over run at a single point, because a single point gives a run of zero and division by zero is nothing. So take a **small** run and shrink it. Standing at x = 3 on f(x) = x², where f(3) = 9:
+
+- Step 1.0 sideways: f(4) = 16. Rise 16 − 9 = 7, run 1.0, slope **7**.
+- Step 0.1 sideways: f(3.1) = 9.61. Rise 0.61, run 0.1, slope **6.1**.
+- Step 0.01 sideways: f(3.01) = 9.0601. Rise 0.0601, run 0.01, slope **6.01**.
+- Step 0.001: slope **6.001**. The answers are marching towards **6** and getting closer every time you shrink the step.
+- That settled-on value, 6, is the slope of the tangent at x = 3. It is called the **derivative of f at x = 3**, written f'(3) = 6.
+
+In words: **the derivative at a point is the slope of the curve exactly there**, found by taking a step so small that shrinking it further stops changing the answer. The same number has a second name, **rate of change**: it says the height is changing 6 units for every 1 unit of sideways movement, right at that spot.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Watch the answer settle as the step shrinks',
+      code: `def f(x):
+    return x * x
+
+def slope_near(x, h):
+    return (f(x + h) - f(x)) / h
+
+for h in [1.0, 0.1, 0.01, 0.001, 0.000001]:
+    print('h =', h, ' measured slope at x=3 :', slope_near(3.0, h))
+
+# ---- real output ----
+# h = 1.0  measured slope at x=3 : 7.0
+# h = 0.1  measured slope at x=3 : 6.100000000000012
+# h = 0.01  measured slope at x=3 : 6.009999999999849
+# h = 0.001  measured slope at x=3 : 6.000999999999479
+# h = 1e-06  measured slope at x=3 : 6.000001000927568`,
+      annotations: {
+        1: 'The curve, as a function. f(3) will give 9.',
+        2: 'x * x is x squared, written the boring way on purpose so there is no operator to decode.',
+        4: 'A function of two things: the point x we are standing at, and h, the size of the small sideways step.',
+        5: 'This single line is the whole measurement: f(x + h) is the height after stepping, minus f(x) the height before, is the rise; dividing by h, the run, gives rise over run.',
+        7: 'Loops over five step sizes, each ten or more times smaller than the last. The list is written out explicitly so you can see exactly which steps are being tried.',
+        8: 'Prints the step size next to the slope it produced. Reading the column of answers top to bottom is the point of the whole snippet: 7.0, 6.1, 6.01, 6.001, 6.000001.',
       },
     },
     {
       type: 'note',
-      md: `Run this before you trust any hand-written gradient. Practical rules: check on **random small inputs**, not zeros (zeros hide sign errors); use **float64** — float32 noise alone can produce 1e-3 error and fake a failure; pick **h ≈ 1e-5** (too big = truncation error, too small = catastrophic cancellation in floating point, and the curve of error vs h is U-shaped); and **disable dropout and any other randomness** first, or you are differencing two different functions. Finally: turn it off in production — it costs two forward passes *per parameter*.`,
+      md: `Two practical things from that output. **The trailing junk is normal**: 6.000001000927568 instead of a clean 6 is because a computer stores decimals with limited precision, and subtracting two nearly equal numbers throws away digits. A step around 0.000001 is the usual sweet spot: small enough to be accurate, big enough that the rounding noise stays tiny. **And 1e-06 just means 0.000001** — Python's shorthand for a number written with a power of ten.
+
+This measurement has a name you will meet again: a **numerical derivative**, or a finite-difference estimate. Keep it. Later, when you have a formula for a derivative and are not sure it is right, this is how you check it: compute both, see if they agree.`,
+    },
+    {
+      type: 'intuition',
+      title: 'From a measurement to a formula',
+      md: `Measuring is fine for one point, but we want the slope at *any* point without re-running the experiment. So do the same arithmetic with the letter x instead of the number 3, for f(x) = x².
+
+- Rise: f(x + h) − f(x) = (x + h)² − x².
+- Expand (x + h)²: that is x² + 2xh + h². Subtract x² and you are left with **2xh + h²**.
+- Divide by the run h: (2xh + h²) / h = **2x + h**.
+- Now shrink h towards nothing. The h on the end vanishes and what survives is **2x**.
+- So the derivative of x² is **2x**, at every point. Check it at x = 3: 2(3) = 6, which is exactly what the measurement settled on.
+
+That is the whole trick, and it is why nobody measures in practice: once, with letters, gives you a formula that works forever. **The derivative is a formula for the slope at any point**, written f'(x) or dy/dx. Both notations mean the same thing; the second is read "the change in y per unit change in x".`,
+    },
+    {
+      type: 'math',
+      intro: 'The definition you just did by hand, plus the three shortcut rules that cover almost everything.',
+      latex: [
+        "f^{\\prime}(x) = \\lim_{h \\to 0} \\frac{f(x+h) - f(x)}{h} \\qquad \\text{(rise over run, with the run shrunk to nothing)}",
+        "\\frac{d}{dx}\\,x^{n} = n\\,x^{n-1} \\qquad \\frac{d}{dx}\\,c = 0 \\qquad \\frac{d}{dx}\\bigl(f + g\\bigr) = f^{\\prime} + g^{\\prime}",
+      ],
     },
     {
       type: 'note',
-      md: `**Jacobian, in one note.** A gradient is for a function that outputs one number. When a function takes a vector *in* and puts a vector *out* (every layer of a network), the full set of partials is a **matrix**: J[i][j] = ∂(output i)/∂(input j) — the **Jacobian**. That matrix is what a layer's backward pass conceptually applies. Autograd almost never builds it, though: it computes **vector–Jacobian products** instead, because for a 1000-in/1000-out layer the matrix has a million entries but the product you actually need costs a thousand. If matrices-as-transformations still feels abstract, 3Blue1Brown's *Essence of Linear Algebra* is the fix — the Jacobian is exactly "the linear transformation your function looks like, up close".`,
+      md: `Read those three rules in plain words, because they are all you need for this module.
+
+- **Power rule:** for x raised to a power, bring the power down in front and lower the power by one. x² becomes 2x. x³ becomes 3x². And x itself, which is x¹, becomes 1x⁰ = 1.
+- **Constant rule:** a plain number on its own has a derivative of 0. A flat line has no slope, so changing x does not move it.
+- **Sum rule:** the derivative of a sum is the sum of the derivatives. So x² + 3x + 7 has derivative 2x + 3 + 0 = 2x + 3.
+- A constant multiplier just rides along: 5x² has derivative 5(2x) = 10x.
+
+The symbol lim with h → 0 in the first line is just shorthand for what you did by hand: "shrink h towards zero and report the value the answer settles on".`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Formula against measurement, at four different points',
+      code: `def f(x):
+    return x * x
+
+def numeric_slope(x, h=0.000001):
+    return (f(x + h) - f(x)) / h
+
+def formula_slope(x):
+    return 2 * x
+
+for x in [-2.0, 0.0, 1.5, 3.0]:
+    print('x =', x, ' numeric:', round(numeric_slope(x), 4), ' formula 2x:', formula_slope(x))
+
+# ---- real output ----
+# x = -2.0  numeric: -4.0  formula 2x: -4.0
+# x = 0.0  numeric: 0.0  formula 2x: 0.0
+# x = 1.5  numeric: 3.0  formula 2x: 3.0
+# x = 3.0  numeric: 6.0  formula 2x: 6.0`,
+      annotations: {
+        1: 'Same curve as before, x squared.',
+        2: 'Same body. Keeping it identical means any difference in the results comes from the method, not the function.',
+        4: 'h=0.000001 is a default value: if you call numeric_slope(3.0) without a second argument, Python fills h in for you. That is why the loop below can pass one argument.',
+        5: 'The measurement, unchanged from the previous snippet.',
+        7: 'The formula we derived with letters. No stepping, no subtraction, no h.',
+        8: 'Two times x. One multiplication, and it is correct at every point.',
+        10: 'Four test points, chosen to include a negative one and zero, because a formula that is only checked where everything is positive is barely checked at all.',
+        11: 'Prints both answers side by side. round(value, 4) chops the floating-point junk to four decimal places so the two columns are readable; without it the numeric column would show 6.000001000927568.',
+      },
     },
     {
       type: 'note',
-      md: `**Second derivative, in one note.** Differentiate twice and you get f'' — **how fast the slope itself changes**, i.e. curvature. Sharp narrow valley = big f'' = your step size must be small. Wide flat valley = small f'' = you could stride. That is genuinely useful information a gradient does not carry, and **Newton's method** uses it (step = f'/f'') to jump toward the bottom in far fewer iterations. Why is nobody training GPT with Newton? The multivariable version of f'' is the **Hessian**, an n×n matrix — at n = 1 billion parameters, storing it is impossible, inverting it is a joke. **Adam** is the pragmatic compromise: it keeps a running estimate of gradient magnitude per parameter, giving each weight its own effective step size. Curvature-flavoured, at gradient prices.`,
+      md: `Look at the row for x = −2: the slope is **−4**, a negative number. The sign of a derivative is a direction. **Positive means the curve is going up as you move right; negative means it is going down.** At x = 0 the slope is exactly 0, which is the bottom of the bowl — flat ground. Sign and size are the two things a derivative tells you, and both matter later.`,
+    },
+    {
+      type: 'intuition',
+      title: 'The chain rule: two steps, one number flowing through both',
+      md: `Real quantities usually arrive through a pipeline. Suppose x feeds a first step, whose answer feeds a second step.
+
+- **Step 1:** u = 2x + 1. **Step 2:** y = u². So the whole thing is y = (2x + 1)².
+- Put x = 3 in. Step 1 gives u = 2(3) + 1 = **7**. Step 2 gives y = 7² = **49**.
+- Now ask each step how sensitive it is, on its own. Step 1: u = 2x + 1 is a straight line with slope **2**, so nudging x by a tiny bit moves u twice as much. Step 2: y = u² has derivative 2u, and we are standing at u = 7, so its slope right there is **14** — nudging u moves y fourteen times as much.
+- Chain them. A nudge of 1 in x becomes a nudge of 2 in u, and each unit of u is worth 14 units of y. So the nudge in y is 2 × 14 = **28**.
+- **dy/dx = 28.** The two sensitivities were **multiplied**, not added. That is the **chain rule**: when one thing feeds another, multiply the slopes along the path.
+
+The multiplication is not a convention to memorise. It is the same reason two gears geared 2:1 and then 7:1 give 14:1 overall — rates that feed each other compound.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'One number through both steps, each slope measured separately',
+      code: `def inner(x):
+    return 2 * x + 1
+
+def outer(u):
+    return u * u
+
+def whole(x):
+    return outer(inner(x))
+
+x = 3.0
+h = 0.000001
+u = inner(x)
+
+print('u = inner(3) =', u, ' y = whole(3) =', whole(x))
+print('du/dx =', round((inner(x + h) - inner(x)) / h, 4))
+print('dy/du =', round((outer(u + h) - outer(u)) / h, 4))
+print('dy/dx =', round((whole(x + h) - whole(x)) / h, 4))
+
+# ---- real output ----
+# u = inner(3) = 7.0  y = whole(3) = 49.0
+# du/dx = 2.0
+# dy/du = 14.0
+# dy/dx = 28.0`,
+      annotations: {
+        1: 'Step 1 of the pipeline, as its own function so we can measure it alone.',
+        2: 'Double the input and add one. At x = 3 this returns 7.0.',
+        4: 'Step 2 of the pipeline. Its input is named u, not x, to keep straight that it consumes step 1s output.',
+        5: 'Square whatever arrives.',
+        7: 'The whole pipeline: one function that does both steps.',
+        8: 'outer(inner(x)) runs inner first, then hands its answer to outer. That nesting is exactly what "one thing feeds another" looks like in code.',
+        10: 'The point we are standing at.',
+        11: 'The tiny step size, the same one that worked before.',
+        12: 'Compute and keep u = 7.0, because measuring step 2s slope needs the value that actually arrives at step 2, not x itself. Getting this wrong is the single most common chain-rule error.',
+        14: 'Prints the forward values: x = 3 produces u = 7 produces y = 49. Check these against the hand arithmetic before reading the slopes.',
+        15: 'Measures step 1 alone: nudge x, see how much u moves, divide. Answer 2.0.',
+        16: 'Measures step 2 alone: nudge u away from 7.0, see how much y moves, divide. Answer 14.0 — and note it depends on being at 7.0, not at 3.0.',
+        17: 'Measures the whole pipeline end to end: nudge x, see how much the final y moves. Answer 28.0, which is 2.0 times 14.0. The chain rule, confirmed by measurement rather than asserted.',
+      },
+    },
+    {
+      type: 'math',
+      intro: 'The chain rule in symbols. The second line is the same statement with the letters cancelling visibly, which is why most people memorise that form.',
+      latex: [
+        "y = f\\bigl(g(x)\\bigr) \\quad\\Longrightarrow\\quad \\frac{dy}{dx} = f^{\\prime}\\bigl(g(x)\\bigr)\\cdot g^{\\prime}(x)",
+        "\\frac{dy}{dx} = \\frac{dy}{du}\\cdot\\frac{du}{dx} = 14 \\times 2 = 28",
+      ],
+    },
+    {
+      type: 'intuition',
+      title: 'Partial derivatives: wiggle one input, hold the others still',
+      md: `So far one input. Real problems have many. Take **f(x, y) = x² + 3y** and stand at the point x = 2, y = 5, where f = 4 + 15 = **19**.
+
+- Wiggle only x, keeping y frozen at 5. Move x to 2.000001: f becomes (2.000001)² + 15 ≈ 19.000004. Rise 0.000004 over run 0.000001, so the slope in the x direction is **4**.
+- Wiggle only y, keeping x frozen at 2. Move y to 5.000001: f becomes 4 + 15.000003 = 19.000003. Slope in the y direction is **3**.
+- Each of those is a **partial derivative**: the slope you get when you change ONE input and hold every other input still. Written ∂f/∂x and ∂f/∂y. The curly ∂ instead of a plain d is only a reminder that other inputs existed and were held frozen.
+- Computing one is not a new skill. Treat every other letter as a plain number and use the ordinary rules: with y frozen, x² + 3y is "x² plus a constant", whose derivative is 2x = 4. With x frozen, it is "a constant plus 3y", whose derivative is 3.
+- Note ∂f/∂y = 3 no matter where you stand, while ∂f/∂x = 2x changes as you move. Partial derivatives are numbers *at a point*, not properties of the function.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Both partials, measured the same way as before',
+      code: `def f(x, y):
+    return x * x + 3 * y
+
+h = 0.000001
+x, y = 2.0, 5.0
+
+d_dx = (f(x + h, y) - f(x, y)) / h
+d_dy = (f(x, y + h) - f(x, y)) / h
+gradient = [round(d_dx, 4), round(d_dy, 4)]
+
+print('f(2, 5) =', f(x, y))
+print('partial with respect to x =', gradient[0])
+print('partial with respect to y =', gradient[1])
+print('gradient =', gradient)
+
+# ---- real output ----
+# f(2, 5) = 19.0
+# partial with respect to x = 4.0
+# partial with respect to y = 3.0
+# gradient = [4.0, 3.0]`,
+      annotations: {
+        1: 'A function of two inputs now. Python functions take as many arguments as you list.',
+        2: 'x squared plus three times y. At (2, 5) this is 4 + 15 = 19.',
+        4: 'The same tiny step size, reused.',
+        5: 'The point we are standing at. Both values are set on one line; Python allows that.',
+        7: 'The x partial: the step h is added to the FIRST argument only, and y is passed through unchanged. That "unchanged" is what holding the other input still means, in code.',
+        8: 'The y partial: h goes on the second argument this time, x untouched. Same measurement, different knob.',
+        9: 'Collects both numbers into a Python list, in a fixed order: x first, then y. That ordered list is the gradient.',
+        11: 'Prints the height at the point, so you can confirm 19.0 before trusting anything computed from it.',
+        12: 'gradient[0] reads the first item of the list, the x partial. Lists are numbered from 0 in Python.',
+        13: 'gradient[1] reads the second item, the y partial.',
+        14: 'Prints the whole list at once: [4.0, 3.0]. Two numbers, one per input, which is the entire content of the word gradient.',
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'The gradient: the list of all the partials, and it points uphill',
+      md: `The **gradient** of f, written ∇f, is exactly what the last line printed: the list of every partial derivative, in a fixed order. At our point it is **[4, 3]**. Nothing more mysterious than that.
+
+- Stop reading it as a list and read it as a **direction**. Standing at (2, 5) on the surface, the arrow that goes 4 units in the x direction and 3 units in the y direction points **straight uphill** — the steepest way up from where you stand.
+- Its **length** says how steep: √(4² + 3²) = √25 = **5**. A long gradient means a steep slope. A gradient near zero means near-flat ground.
+- Why uphill, rather than some other direction? Because the partial in each direction already says how much f rises per unit of movement along that axis, and the direction that gains the most is the one that leans into each axis in proportion to its own payoff — 4 parts x for every 3 parts y. Leaning any further towards y trades away more x-gain than it buys.
+- **Flat ground, where the gradient is all zeros, is the interesting case.** If every partial is 0, nudging any single input in any direction changes nothing to first order. That is the signature of a **local minimum** — a point that is lower than everything immediately around it — or a local maximum, or a flat saddle. The gradient alone cannot tell you which; it only tells you that you have stopped going anywhere.
+- "Local" is doing real work in that phrase. A local minimum is the bottom of *its own* dip. Another, deeper dip may exist elsewhere on the surface, and a gradient, which only ever sees the ground under your feet, has no way to know about it.`,
+    },
+    { type: 'visual', component: 'GradientDescentSlider', props: { fn: 'nonconvex' } },
+    {
+      type: 'note',
+      md: `The ball in that picture is doing exactly the arithmetic you just did. **The slope it feels under itself is the derivative** at that point: one number, measured locally, with no view of the rest of the curve. Two things to watch. It comes to rest at whichever dip it started nearest, not necessarily the deepest one — that is the local-minimum problem, seen rather than argued. And on the flat stretch between the dips it barely moves, because the slope there is nearly zero and a nearly zero slope produces a nearly zero step.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Why any of this shows up in learning',
+      md: `A model has knobs, and a number that says how wrong it currently is. The partial derivative of that wrongness with respect to one knob says which way that knob makes things worse. The gradient collects all of them, and points uphill — towards *more* wrong.
+
+- So to get less wrong, you move the other way: **against the gradient**. That is the entire connection.
+- How big a move to make, how often, and what goes wrong along the way is a subject in itself. It is taught properly in the ML module **Gradient Descent + Linear Regression**. Do not try to learn it here; here, the job is only to be sure you know what the gradient *is*.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Worked case: one weight, one data point, by hand',
+      md: `A tiny model predicts with one knob w: prediction = w × x. One data point: x = 2, true answer y = 10. The wrongness is the squared error **E(w) = (2w − 10)²**. Start at **w = 3**.
+
+- **Forward.** Inner step: u = 2(3) − 10 = **−4**. Outer step: E = (−4)² = **16**.
+- **Backward, with the chain rule.** Outer: E = u² has derivative 2u, and we are at u = −4, so dE/du = **−8**. Inner: u = 2w − 10 has slope **2**, so du/dw = **2**.
+- Multiply along the path: dE/dw = (−8) × (2) = **−16**.
+- **Check it by measuring.** Nudge w to 3.001: u = −3.998, E = 15.984004. Rise −0.015996 over run 0.001 gives **−15.996**, which is −16 to within the rounding you would expect from a step that is not yet tiny. The formula is right.
+- **Read the sign.** dE/dw = −16 is negative, so increasing w *decreases* the error. Moving against the gradient here means moving w up.
+- **Take a step.** Move w by a small amount against the gradient: w = 3 − 0.01 × (−16) = **3.16**. New error: u = 2(3.16) − 10 = −3.68, E = **13.5424**. Down from 16. The arithmetic and common sense agree, which is the only sanity check worth running.`,
+    },
+    {
+      type: 'intuition',
+      title: 'The classic mistake, walked into on purpose',
+      md: `Same problem, E(w) = (2w − 10)² at w = 3, but done the way almost everyone does it the first time.
+
+- The wrong reasoning: "it is something squared, and the derivative of a square is two times the thing, so dE/dw = 2(2w − 10) = 2(−4) = **−8**."
+- That answer is exactly **half** the true −16, and it is wrong for one reason: it differentiated the outer step and then **forgot the inner step's slope**. The chain rule has two factors, and only one of them was used.
+- **Catch it by measuring**, which is why the numerical derivative was taught first. The measurement gave −15.996. The claim was −8. They are not the same number and not close, so the formula is wrong. No argument needed.
+- Why the inner factor exists: w does not feed the square directly. It feeds 2w − 10 first, and that step *doubles* every nudge before the square ever sees it. Skipping the factor of 2 is claiming a nudge passes through unchanged, which the printed du/dw = 2.0 says it does not.
+- Why it is nasty in practice: a gradient that is off by a constant factor still points in the right *direction*. Steps still reduce the error, just at the wrong size, so nothing visibly breaks and the bug survives. Only the numerical check finds it.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Practice problems',
+      md: `Do these on paper before reading the solutions. A calculator is fine.
+
+1. For the straight line f(x) = 5x + 2, compute the slope between x = 1 and x = 4 using rise over run. Then say what f'(x) is at every point, and why the two answers must match.
+2. For f(x) = x², estimate the slope at x = −4 by stepping h = 0.001. Then compare with the formula 2x. Explain what the sign of the answer means about the curve there.
+3. Two steps: u = 3x − 1, then y = u³. Find dy/dx at x = 1, using the chain rule. State the value of u first.
+4. For f(x, y) = 4x + y², find both partial derivatives at the point (1, 3), write the gradient as a list, and give its length.
+5. For f(x) = (x − 2)², the derivative is 2(x − 2). You are standing at x = 5. Which direction — increasing or decreasing x — makes f smaller, and where does f stop decreasing?`,
+    },
+    {
+      type: 'intuition',
+      title: 'Worked solutions',
+      md: `1. Heights: f(1) = 7, f(4) = 22. Rise 22 − 7 = 15, run 4 − 1 = 3, slope 15/3 = **5**. By the rules, f'(x) = 5 + 0 = **5** everywhere. They must match because the graph is a straight line, and a straight line has the same slope between any two points and at every single point.
+2. f(−4) = 16, f(−3.999) = 15.992001. Rise −0.007999, run 0.001, slope ≈ **−7.999**. The formula gives 2(−4) = **−8**; the small gap is the leftover h in 2x + h. The negative sign means the curve is falling as you move right at x = −4 — you are on the left wall of the bowl, heading down towards the bottom at x = 0.
+3. At x = 1, u = 3(1) − 1 = **2**. Inner slope: du/dx = **3**. Outer slope: y = u³ has derivative 3u², and at u = 2 that is 3(4) = **12**. Multiply along the path: dy/dx = 12 × 3 = **36**. A numerical check at x = 1 gives 36.00005, which agrees.
+4. Freeze y: f = 4x + a constant, so ∂f/∂x = **4**, the same everywhere. Freeze x: f = a constant + y², so ∂f/∂y = 2y = 2(3) = **6**. Gradient = **[4, 6]**. Length = √(16 + 36) = √52 ≈ **7.21**.
+5. At x = 5, the derivative is 2(5 − 2) = **+6**: positive, so f rises as x rises. To make f smaller, move **against** it — decrease x. It stops decreasing where the derivative reaches 0, which is 2(x − 2) = 0, so **x = 2**. That is the bottom of the bowl, and f(2) = 0.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Beyond the basics - skip this on your first read',
+      md: `Everything above stands on its own. These three notes name ideas you will meet later, so the words are not new when you get there.
+
+- **Two-sided measuring is more accurate.** Instead of (f(x + h) − f(x)) / h, use (f(x + h) − f(x − h)) / 2h: step the same distance both ways and divide by the total run. It costs the same two evaluations and is noticeably more accurate, because the leftover error term cancels by symmetry. It is the version real gradient-checking code uses.
+- **Cost, and where the check belongs.** Measuring a gradient numerically costs two evaluations of the function per input. With two inputs that is nothing; with a million model parameters it is two million evaluations for one gradient, which is why numerical differentiation is a debugging tool for a formula you wrote, not a way to train anything. Run it while developing, on a small case, and then leave it out of the code that actually trains.
+- **The second derivative.** Differentiate the derivative and you get f'', which says how fast the slope itself is changing — the curvature. A sharply curving valley needs small steps; a wide gentle one tolerates big ones. It carries information a gradient does not, and optimisers such as Adam exist to get some of that benefit cheaply. You will meet it in the ML and DL subjects.`,
     },
   ],
   quiz: [
     {
-      question: 'Your loss has ∂L/∂w₁ = 0.02 and ∂L/∂w₂ = −8.5. What does that tell you?',
+      question: 'For the line f(x) = 4x - 7, what is the slope between x = 0 and x = 10?',
       options: [
-        {
-          text: 'w₂ is a much bigger weight than w₁',
-          explanation: 'Wrong object. A partial derivative says nothing about a weight\'s VALUE — only about the loss\'s sensitivity to changing it.',
-        },
-        {
-          text: 'The loss is far more sensitive to w₂, and increasing w₂ decreases the loss',
-          explanation: 'Correct on both counts. Magnitude 8.5 vs 0.02 = leverage; the negative sign means loss falls as w₂ rises, so the update w₂ := w₂ − α(−8.5) pushes w₂ up.',
-        },
-        {
-          text: 'w₂ has converged and w₁ has not',
-          explanation: 'Backwards. A gradient near ZERO (w₁ here) is the convergence signal. A gradient of −8.5 means w₂ is far from where it wants to be.',
-        },
-      ],
-      correct: 1,
-    },
-    {
-      question: 'A 3-link chain has local derivatives 4, 0.5, and −3 along the path from w to L. What is ∂L/∂w?',
-      options: [
-        { text: '1.5 — the links are added', explanation: 'Addition is for gradients arriving from DIFFERENT paths (fan-out). Links along ONE path multiply.' },
-        { text: '−6 — the links are multiplied', explanation: 'Correct: 4 × 0.5 × −3 = −6. Multiply the sensitivities along the path, exactly as the chain rule says.' },
-        { text: '−3 — only the last link reaching w counts', explanation: 'Then every earlier layer would have zero influence on training. The chain rule exists precisely because every link contributes a factor.' },
-      ],
-      correct: 1,
-    },
-    {
-      question: 'Why is a stack of 20 sigmoid layers a gradient problem waiting to happen?',
-      options: [
-        {
-          text: 'σ\' peaks at 0.25, so the chain multiplies 20 factors ≤ 0.25 and the gradient collapses toward zero',
-          explanation: 'Correct. 0.25²⁰ ≈ 10⁻¹². Early layers receive essentially no signal — the vanishing-gradient problem, and the reason ReLU (slope exactly 1 when active) took over.',
-        },
-        { text: 'Sigmoid is too slow to compute 20 times', explanation: 'Compute cost is trivial and would not affect learning quality at all.' },
-        { text: 'σ\' can be negative, so signs cancel', explanation: 'σ\' = σ(1−σ) is strictly positive, since σ ∈ (0,1). Sign flipping is not the issue; shrinkage is.' },
+        { text: '4', explanation: 'Correct. Heights are -7 and 33, so rise = 40 over run = 10, giving 4 — the number sitting in front of x.' },
+        { text: '40', explanation: 'That is the rise on its own. Slope is rise divided by run, so 40 / 10 = 4.' },
+        { text: 'It depends which two points you pick', explanation: 'True for a curve, not for a straight line. A straight line has one slope everywhere; that is what makes it straight.' },
       ],
       correct: 0,
     },
     {
-      question: 'ReLU is not differentiable at x = 0. Why does this not break training?',
+      question: 'You measure the slope of a curve at x = 2 with steps h = 0.1, 0.01 and 0.001 and get 5.1, 5.01 and 5.001. What is the derivative at x = 2?',
       options: [
-        { text: 'Frameworks smooth ReLU into a differentiable curve internally', explanation: 'They do not — that would be a different function (softplus is that idea, and it is a separate activation).' },
-        {
-          text: 'A subgradient is picked by convention (frameworks return 0), and float activations hit exactly 0.0 essentially never',
-          explanation: 'Correct on both halves: the convention makes it well-defined, and the measure-zero argument makes it irrelevant in practice.',
-        },
-        { text: 'Gradient descent skips any sample where an activation is 0', explanation: 'No such skipping exists — the backward pass runs on every sample unconditionally.' },
+        { text: '5.001, the most accurate measurement', explanation: 'That is still an estimate with leftover h in it. The pattern shows the answers heading somewhere cleaner.' },
+        { text: '5', explanation: 'Correct. The measurements are marching towards 5 as the step shrinks, and that settled-on value is the slope of the tangent at x = 2.' },
+        { text: 'The average of the three', explanation: 'The three are not equally good. Each smaller step is strictly better, so averaging drags a good answer back towards a worse one.' },
       ],
       correct: 1,
     },
     {
-      question: 'The gradient ∇J points in the direction of steepest ascent. What follows for the update rule?',
+      question: 'Two steps: u = 5x, then y = u squared. At x = 2, what is dy/dx?',
       options: [
-        { text: 'We move along +∇J to reduce the loss', explanation: 'That moves UPHILL — it maximizes the loss. This is the single most common sign error in hand-written training loops.' },
-        { text: 'We move perpendicular to ∇J', explanation: 'Perpendicular to the gradient is the direction of NO first-order change — you would walk the contour line forever and never descend.' },
-        {
-          text: 'We move along −∇J, which is why the update subtracts',
-          explanation: 'Correct. θ := θ − α∇J. The minus sign is literally the word "descent" in gradient descent.',
-        },
+        { text: '20 — the derivative of u squared, evaluated at u = 10, divided by 5', explanation: 'The two slopes multiply, they do not divide. Nothing in the chain rule divides.' },
+        { text: '15 — add the two slopes, 5 and 10', explanation: 'Adding is for something else entirely. Rates that feed one another compound, so they multiply.' },
+        { text: '100 — inner slope 5, times outer slope 2u = 20 at u = 10', explanation: 'Correct. u = 10 at x = 2, so the outer slope there is 2(10) = 20, and 20 x 5 = 100. Note the outer slope had to be read at u = 10, not at x = 2.' },
       ],
       correct: 2,
     },
     {
-      question: 'Your gradient check returns a relative error of 8e-1 between the analytic and numeric gradients. Most likely?',
+      question: 'For f(x, y) = x squared times y, what is the partial derivative with respect to y at the point x = 3, y = 10?',
       options: [
-        { text: 'Normal floating-point noise — ship it', explanation: 'Float64 noise lives around 1e-10 to 1e-7. An error of 0.8 means the two numbers barely resemble each other.' },
-        {
-          text: 'Your analytic gradient is wrong — commonly a dropped local derivative factor',
-          explanation: 'Correct. An error of that scale is a missing or mis-multiplied factor (exactly the sabotage in the code section, which produced 7.5e-1 by dropping a(1−a)).',
-        },
-        { text: 'h is too large; raise it to 1e-2', explanation: 'Raising h makes truncation error worse, not better. And no h choice explains an error of 0.8 on a smooth function.' },
+        { text: '60', explanation: 'That is the partial with respect to x: freeze y = 10, giving 10x squared, whose slope is 20x = 60. The question asked about the y knob.' },
+        { text: '9', explanation: 'Correct. Freeze x = 3, so x squared = 9 is a constant and f becomes 9y, a straight line in y with slope 9. It does not depend on y at all.' },
+        { text: '30', explanation: 'No rule produces this. Freezing x turns the function into 9y, and the slope of 9y is 9.' },
       ],
       correct: 1,
     },
     {
-      question: 'For f(x, y) = x²y, what is ∂f/∂y at (x = 3, y = 10)?',
+      question: 'At some point the gradient of a loss is [0.02, -8.5]. What does that tell you?',
       options: [
-        { text: '60 (differentiate x², then plug in)', explanation: 'That is ∂f/∂x = 2xy = 2·3·10 = 60. The question asked about the y knob.' },
-        { text: '9 — hold x still, so f = 9y and the derivative is 9', explanation: 'Correct. Partial wrt y treats x² = 9 as a constant multiplier, so ∂f/∂y = x² = 9. Note it does not depend on y at all.' },
-        { text: '30', explanation: 'No rule produces this. Freezing x gives f = 9y, whose slope in y is 9.' },
+        { text: 'The second knob is a much larger number than the first', explanation: 'Wrong object. A partial derivative says nothing about the value of a knob, only about how much the loss responds to changing it.' },
+        { text: 'The loss barely responds to the first knob, and increasing the second knob decreases the loss', explanation: 'Correct on both counts. Size 0.02 versus 8.5 is the responsiveness; the minus sign says the loss goes down as that knob goes up.' },
+        { text: 'The second knob is finished and the first still needs work', explanation: 'Backwards. A partial near zero is the flat-ground signal; -8.5 means the loss is steeply sensitive to that knob right now.' },
       ],
       correct: 1,
     },
     {
-      question: 'In a computational graph, node h feeds into two downstream nodes. How is ∂L/∂h computed?',
+      question: 'Your formula says the derivative is -8. Measuring with h = 0.000001 gives -15.9999. What is the most likely explanation?',
       options: [
-        { text: 'Take the larger of the two incoming gradients', explanation: 'Discarding one path would silently drop part of the true derivative — the model would train on a wrong gradient.' },
-        { text: 'Multiply the two incoming gradients', explanation: 'Multiplication is for links along ONE path. Two separate paths are a different situation.' },
-        {
-          text: 'Add the gradients arriving from both paths',
-          explanation: 'Correct — the sum rule applied to a graph. Total sensitivity is the sum over all routes the influence travels. This is exactly how residual/skip connections give early layers a clean extra gradient path.',
-        },
+        { text: 'Normal floating-point noise, so the formula is fine', explanation: 'Rounding noise at that step size shows up in the fourth or fifth decimal place, not as a factor of two.' },
+        { text: 'The formula dropped a factor — most often the inner step of the chain rule', explanation: 'Correct. Being off by a clean factor of exactly two is the signature of a missing multiplicative factor, and the inner slope is the one people forget.' },
+        { text: 'h is too small, so the measurement is meaningless', explanation: 'Too small a step does cause trouble, but it shows as ragged digits, not a stable answer that is exactly twice yours.' },
       ],
-      correct: 2,
+      correct: 1,
     },
   ],
   interviewQuestions: [
     {
-      question: 'Explain the chain rule to someone who is about to implement backpropagation.',
+      question: 'What is a derivative? Explain it without using the word calculus.',
       answer:
-        'Gears: if A turns B at 3:1 and B turns C at 2:1, then A turns C at 6:1 — you multiply ratios along the path. Derivatives ARE those ratios ("how much does the next thing move per unit of this thing"), so for nested functions the sensitivities multiply: ∂L/∂w = ∂L/∂a · ∂a/∂z · ∂z/∂w. Backprop is that rule executed on a graph: each node knows only its own local derivative, the backward pass starts at the loss with gradient 1 and multiplies through, and gradients arriving from multiple paths are summed. Then add the engineering half: it runs right-to-left because one backward sweep yields every parameter\'s gradient at once, whereas forward-mode would cost one pass per parameter.',
+        'A derivative is a slope. For a straight line the slope is rise over run, and it is the same everywhere. A curve does not have one slope, so we ask a sharper question: what is the slope exactly at one point? Answer: the slope of the straight line that just touches the curve there, called the tangent. You get its value by taking a very small step sideways, measuring how much the height changed, dividing, and shrinking the step until the answer stops moving. For f(x) = x squared at x = 3, that settles on 6. Doing the same work with letters instead of a number gives a formula, 2x, that works at every point. The sign says which way the curve is heading; the size says how fast.',
       isCaseBased: false,
     },
     {
-      question: 'Case: you wrote a custom layer and suspect its gradients are wrong. Training still runs and loss still falls slowly. How do you actually find out?',
+      question: 'How would you find a derivative if you had no differentiation rules at all?',
       answer:
-        'Gradient check with finite differences — this is exactly the situation it exists for. Procedure: (1) isolate the layer, feed it small RANDOM inputs (not zeros, which mask sign errors), in float64, with dropout and all randomness disabled. (2) For each parameter compute the central difference (f(θ+h) − f(θ−h)) / 2h with h ≈ 1e-5. (3) Compare against your analytic gradient using RELATIVE error, not absolute: < 1e-7 passes, ~1e-4 is suspicious, > 1e-2 is a bug. (4) If it fails, bisect — check the layer\'s sub-operations one at a time; a wrong gradient is almost always one dropped local-derivative factor or a transpose in the wrong place. Two traps worth naming: a non-smooth op like ReLU will fail the check legitimately if a test point sits near the kink (jitter the inputs), and PyTorch ships torch.autograd.gradcheck which does all this properly — reach for it before hand-rolling. And note the symptom you described is the dangerous one: a wrong-but-correlated gradient still reduces loss, so training "working" proves nothing.',
+        'Measure it. Evaluate the function at the point, evaluate it again a tiny step away, subtract to get the rise, divide by the step. That is a numerical or finite-difference derivative, and it is a direct reading of rise over run with a very short run. The step size is a tradeoff: too large and you are measuring an average over a stretch rather than a slope at a point; too small and subtracting two nearly equal numbers destroys precision. Around 0.000001 is usually the sweet spot. The two-sided version, stepping equally in both directions and dividing by the total run, is more accurate for the same cost. Practically this is a checking tool, not a computing tool, because it costs two evaluations per input.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Define partial derivative and gradient, and say how they relate.',
+      answer:
+        'A partial derivative is the slope you measure when you change one input and hold every other input completely still. Mechanically it is an ordinary derivative: treat all the other letters as plain numbers and use the ordinary rules. For f(x, y) = x squared + 3y at (2, 5), freezing y gives 4 and freezing x gives 3. The gradient is simply the list of every partial derivative, in a fixed order, so here it is [4, 3]. The list is worth naming because it reads as a direction: the arrow it describes points the steepest way uphill from where you stand, and its length is how steep that is. All zeros means flat ground under your feet.',
+      isCaseBased: false,
+    },
+    {
+      question: 'State the chain rule and explain why the two slopes multiply rather than add.',
+      answer:
+        'If x feeds a first step and that answer feeds a second, the overall slope is the product of the two step slopes: dy/dx = dy/du times du/dx. Take u = 2x + 1 then y = u squared, at x = 3. The first step doubles any nudge, so du/dx = 2. The second step is 2u evaluated where we actually are, u = 7, so dy/du = 14. Overall 28, confirmed by measuring the whole pipeline directly. They multiply because rates that feed each other compound, exactly like gears: a nudge of one becomes two, and each of those two is worth fourteen. The detail people get wrong is evaluating the outer slope at u, not at x.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Case: you have written a derivative formula by hand for a function in your code and you are not sure it is correct. How do you find out?',
+      answer:
+        'Check it against a measurement, because you can always measure a derivative without knowing any rules. Procedure. (1) Pick a specific point, and prefer a small random-ish point over a tidy one like zero, because zero makes many wrong formulas accidentally agree. (2) Measure numerically with the two-sided difference: (f(p + h) - f(p - h)) divided by 2h, with h around 0.000001. (3) Compare against what your formula claims. (4) Judge by relative difference, not absolute: divide the gap by the size of the numbers involved, so that a formula producing 0.00000001 and one producing 100000000 face the same test. Agreement in the first six or seven digits is a pass; a gap in the first digit is a bug. (5) When it fails, look for a clean ratio first. Off by exactly two, or exactly the value of one input, almost always means a dropped chain-rule factor rather than a subtle error. (6) If the function has several inputs, test each partial separately, stepping one input at a time, so a failure tells you which one is wrong. One caveat worth naming: a function with a sharp corner has no single slope at the corner, so a test point landing on one will fail the check legitimately. Move the point and retest before concluding the formula is broken.',
       isCaseBased: true,
     },
     {
-      question: 'Why is the gradient the direction of steepest ascent, rather than just some direction that goes up?',
+      question: 'Case: a colleague computes the derivative of E(w) = (2w - 10) squared as 2(2w - 10). Their code runs and the error does go down, just oddly slowly. What is wrong and how would you prove it?',
       answer:
-        'For a small step u, the first-order change in f is the dot product ∇f · u. A dot product with a fixed vector is maximized when u points the same way as that vector — so among all unit directions, ∇f gives the largest increase. Two consequences worth stating: the gradient\'s LENGTH is the rate of that steepest increase, and any direction perpendicular to ∇f produces zero first-order change, which is why contour lines are always perpendicular to the gradient. Descent is then just the negation. Caveat to add unprompted: "steepest" is a purely local, first-order claim — it says nothing about being the fastest route to the minimum, which is exactly the gap that momentum and second-order methods exploit.',
-      isCaseBased: false,
-    },
-    {
-      question: 'Derive ∂J/∂w for MSE with a single weight, out loud.',
-      answer:
-        'J(w) = 1/2m Σ (w·x⁽ⁱ⁾ − y⁽ⁱ⁾)². Chain rule per term: the outer function is ½u², whose derivative is u = (ŷ − y); the inner function is w·x, whose derivative wrt w is x. Multiply: ∂J/∂w = 1/m Σ (ŷ⁽ⁱ⁾ − y⁽ⁱ⁾)·x⁽ⁱ⁾ — "error times input, averaged". The ½ was chosen precisely so the 2 from the power rule cancels; it changes nothing except cosmetics (and rescales the effective learning rate). Add the sanity check: if predictions are too high, errors are positive, the gradient is positive, and the update subtracts — w comes down. Correct sign.',
-      isCaseBased: false,
-    },
-    {
-      question: 'What is a Jacobian, and does autograd actually build one?',
-      answer:
-        'A gradient is the vector of partials for a scalar-output function. When the function maps a vector to a vector — every layer of a network — the full set of partials is a matrix, the Jacobian, with J[i][j] = ∂(output i)/∂(input j). Conceptually, a layer\'s backward pass applies that matrix. In practice autograd almost never materializes it: it computes vector–Jacobian products (vᵀJ) directly, because for a 1000-in/1000-out layer the matrix is 10⁶ entries while the product you actually need is 10³. That distinction is why reverse-mode autodiff is cheap and why full Jacobians only appear when you explicitly ask (jacrev, functorch, sensitivity analysis).',
-      isCaseBased: false,
-    },
-    {
-      question: 'What does the second derivative buy you, and why is nobody training large models with Newton\'s method?',
-      answer:
-        'f\'\' measures curvature — how fast the slope changes. It tells you what a gradient cannot: whether you are in a sharp narrow valley (needs small steps) or a wide flat one (you could stride), and it distinguishes a minimum from a maximum from a saddle. Newton\'s method uses it (step = f\'/f\'\') and converges in dramatically fewer iterations. The blocker is dimensionality: the multivariable f\'\' is the Hessian, an n×n matrix. At n = 10⁹ parameters, storing it needs ~10¹⁸ numbers and inverting it is worse than absurd. So the field uses cheap approximations: L-BFGS keeps a low-rank history (fine for small/medium problems), and Adam keeps a per-parameter running estimate of gradient magnitude, giving each weight its own effective step size — curvature-flavoured adaptivity at gradient cost. That is the honest framing: Adam is not second-order, it just buys some of the same benefit.',
-      isCaseBased: false,
-    },
-    {
-      question: 'Case: in a 30-layer network, gradients at layer 1 are around 1e-9 while layer 29 is around 1e-1. Diagnose and fix.',
-      answer:
-        'Vanishing gradients, and the chain rule says exactly why: layer 1\'s gradient is a product of ~29 local factors, so if each averages below 1 the product decays geometrically. Prime suspect is the activation — σ\' maxes at 0.25, tanh\' at 1.0 but typically far less when saturated. Fixes, roughly in order of impact: (1) ReLU-family activations, whose derivative is exactly 1 when active, so the product stops shrinking; (2) residual/skip connections — the identity path contributes a gradient of 1 that ADDS at the fan-out junction, giving early layers a route that never decays (this is the single biggest reason very deep nets became trainable); (3) normalization (BatchNorm/LayerNorm) to keep pre-activations out of saturated regions; (4) sane initialization (He/Xavier) so the per-layer factor starts near 1. Diagnostic to name: log per-layer gradient norms during training — the decay curve tells you immediately whether the problem is vanishing or something else entirely, like a dead-ReLU layer outputting all zeros.',
+        'They differentiated the outer square and forgot the inner step, so the answer is missing the factor du/dw = 2 and is exactly half the true value. At w = 3 the true derivative is 2(-4) times 2 = -16; their formula gives -8. Proving it takes one line of code: nudge w to 3.001, recompute E, and divide the change by 0.001. That measurement returns about -15.996, which matches -16 and not -8, and no debate is needed after that. Why it hid: a derivative that is wrong by a constant positive factor still points the correct direction, so every step still reduces the error and nothing visibly breaks. Only the size of the steps is wrong, which shows up as slow progress rather than an obvious failure. That is exactly why numerical checking exists as a habit rather than as a last resort. The fix is to write the chain out with both factors named separately, compute the inner value first, and then multiply, rather than trying to do the whole derivative in one mental step.',
       isCaseBased: true,
     },
     {
-      question: 'What is the difference between a partial derivative and the total gradient flowing to a node in a graph?',
+      question: 'Case: someone is minimising f(x) = (x - 2) squared by repeatedly stepping against the derivative. They start at x = 5 and report that f climbs every step instead of falling. Diagnose it.',
       answer:
-        'A partial derivative freezes every other variable and wiggles one. In a computational graph, a node can influence the loss through several routes, and the total derivative must account for all of them — so gradients arriving from different paths are ADDED (the multivariable chain rule, which is really the sum rule applied to a graph). Concretely: if h feeds both a residual branch and a main branch, ∂L/∂h is the sum of what comes back from each. Getting this wrong is a classic hand-written-backprop bug — people overwrite the gradient buffer instead of accumulating into it, which silently drops one path. It is also why PyTorch accumulates into .grad and requires an explicit zero_grad(): accumulation is the correct default for a graph.',
-      isCaseBased: false,
-    },
-    {
-      question: 'Why does deep learning insist that every operation be differentiable? What happens when a component is not?',
-      answer:
-        'Because gradient descent has exactly one input: the gradient. A non-differentiable op has no local derivative to multiply, so the chain breaks and every parameter upstream of it stops receiving signal. That is why we use cross-entropy instead of raw accuracy (accuracy is a step function — gradient zero almost everywhere and undefined at the thresholds), and why hard argmax/sampling gets replaced by softmax or Gumbel-softmax when it needs to sit inside a trained path. The nuance worth showing: "differentiable" is a low bar in practice — ReLU has one bad point and we use a subgradient there; what actually matters is having a USEFUL gradient. A function with gradient zero everywhere is technically differentiable and completely untrainable. When something genuinely cannot be relaxed, you leave gradient descent behind: REINFORCE/policy gradients, or evolutionary search.',
-      isCaseBased: false,
-    },
-    {
-      question: 'Case: a colleague speeds up training by removing the activation functions from the hidden layers — "fewer ops, and now the gradients do not vanish". Loss plateaus much higher than before. Explain what happened using derivatives.',
-      answer:
-        'They are right that the gradients stopped vanishing, and it did not help, because they deleted the model. Without activations, the network is W₃W₂W₁x — a composition of linear maps, which collapses into one linear map. No matter how many layers, the whole thing is equivalent to a single-layer linear model, so it plateaus at whatever a linear model can achieve. The derivative view says it cleanly: each layer\'s local derivative is now a constant matrix independent of the input, so the chain rule produces a gradient that never depends on where you are in input space — the model has no capacity to bend. Non-linearity is precisely what makes each layer\'s local derivative input-dependent, and that is what buys expressive power. Correct fix for their actual concern: keep the non-linearity but use ReLU (local derivative 1 when active) plus residual connections, which addresses vanishing gradients without deleting the model\'s capacity.',
+        'Two candidates, and they are easy to tell apart. First, a sign error: stepping with the derivative rather than against it. At x = 5 the derivative is 2(5 - 2) = +6, so the correct move is downward in x, towards 2. If they wrote new_x = x + step times 6, x runs away to the right and f climbs immediately and smoothly. Second, and more likely given that the direction of the first move usually looks fine: a step size that is far too large. Here the derivative is 2(x - 2), so a step of size s sends the distance from 2 to (1 - 2s) times itself. With s = 0.1 that distance shrinks to 0.8 of its value each time and f falls. With s = 1.5 it becomes -2 times itself, so the point overshoots the bottom, lands further away than it started on the other side, and f climbs while the sign of the derivative flips every step. That alternating sign is the diagnostic signature and it distinguishes this case from the pure sign error, where the derivative keeps the same sign throughout. Fix: print the value each step, confirm the subtraction, then reduce the step until the value falls monotonically.',
       isCaseBased: true,
     },
     {
-      question: 'How do you numerically approximate a derivative, and why is the two-sided version standard?',
+      question: 'The gradient is zero at some point. What does that tell you, and what does it not?',
       answer:
-        'Forward difference is (f(x+h) − f(x))/h, straight from the limit definition; its error shrinks like O(h). Central difference is (f(x+h) − f(x−h))/2h, and its error shrinks like O(h²) — the linear error terms cancel by symmetry — for the same two function evaluations. Free accuracy, so it is always the default. Choosing h is a U-shaped tradeoff: too large and truncation error dominates; too small and catastrophic cancellation dominates (you subtract two nearly equal floats and lose most of your significant digits). h ≈ 1e-5 in float64 sits near the bottom of that curve. And the reason this is a debugging tool rather than a training method: it costs two forward passes per parameter, so on a million-parameter model it is two million forward passes to get one gradient that backprop produces in a single backward pass.',
+        'It tells you the ground under your feet is flat: nudging any single input a tiny amount in any direction does not change the value, to first order. Every partial derivative is zero, so no small move gains anything. What it does not tell you is which kind of flat. It could be the bottom of a dip, the top of a hump, or a saddle that goes down one way and up another. It also says nothing about the rest of the surface: a local minimum is the bottom of its own dip only, and a much deeper dip may sit elsewhere. A slope is a purely local measurement, so it can never report on ground it has not touched.',
       isCaseBased: false,
     },
   ],
   flashcards: [
-    { front: 'Derivative, in ML terms', back: 'Sensitivity: nudge x a tiny bit, how much does f move? Sign = direction, magnitude = leverage.' },
-    { front: 'Chain rule, in one sentence', back: 'f(g(x))\' = f\'(g(x))·g\'(x) — multiply the sensitivities along the path from input to output.' },
-    { front: 'Derivative of sigmoid', back: 'σ\'(x) = σ(x)(1−σ(x)) — reuses the cached forward value. Peaks at 0.25 → vanishing gradients when stacked.' },
-    { front: 'Derivative of ReLU', back: '1 for x>0, 0 for x<0, undefined at 0. Convention: frameworks return 0 (a valid subgradient). Slope exactly 1 when active = no shrinkage.' },
-    { front: 'Partial derivative', back: 'Freeze every other variable, wiggle one. ∂f/∂x. Mechanically an ordinary derivative with the others treated as constants.' },
-    { front: 'Gradient ∇f', back: 'The vector of all partials. Points in the direction of steepest ASCENT; length = how steep. Descent walks −∇f.' },
-    { front: '∂J/∂w for MSE', back: 'Error × input, averaged: 1/m Σ (ŷ−y)·x. One chain rule — outer ½u² gives (ŷ−y), inner w·x gives x.' },
-    { front: 'Backprop, procedurally', back: 'Forward: compute and cache node values. Backward: seed 1 at the loss, walk right-to-left multiplying each incoming gradient by the node\'s local derivative. Fan-out → ADD paths.' },
-    { front: 'Gradient check', back: '(f(w+h) − f(w−h))/2h vs your formula, h≈1e-5, float64, RELATIVE error. <1e-7 pass, >1e-2 bug. Debug only — costs 2 forward passes per parameter.' },
-    { front: 'Jacobian vs Hessian', back: 'Jacobian = all first partials of a vector→vector function (autograd computes vector–Jacobian products, never the matrix). Hessian = second derivatives; n×n, so Newton is impossible at scale — Adam approximates the benefit.' },
+    { front: 'Slope of a straight line', back: 'Rise over run: take two points, divide the change in height by the change in sideways position. For f(x) = 3x + 1 between x = 2 and x = 5: 9 / 3 = 3. The same everywhere on the line.' },
+    { front: 'Slope at a point on a curve', back: 'The slope of the tangent — the straight line that just touches the curve at that point. Measure it by taking a tiny sideways step, dividing rise by run, and shrinking the step until the answer stops moving.' },
+    { front: 'Derivative', back: 'A formula for the slope at any point, written f\'(x) or dy/dx. Sign = which way the curve is heading (up or down); size = how fast. For x squared it is 2x, so at x = 3 the slope is 6.' },
+    { front: 'Numerical derivative', back: '(f(x + h) - f(x)) / h with h around 0.000001 — rise over run with a very short run. Two-sided, (f(x+h) - f(x-h)) / 2h, is more accurate for the same cost. Used to check formulas, not to train.' },
+    { front: 'The three rules', back: 'Power: x to the n becomes n times x to the n-1. Constant: a plain number has derivative 0. Sum: derivatives add. So x squared + 3x + 7 has derivative 2x + 3.' },
+    { front: 'Chain rule', back: 'When x feeds one step and that feeds another, multiply the slopes: dy/dx = dy/du times du/dx. Evaluate the outer slope at u, not at x. Forgetting the inner factor is the classic error.' },
+    { front: 'Partial derivative', back: 'The slope when you wiggle ONE input and hold every other one still. Written with a curly d. Computed by treating the other letters as plain numbers. For x squared + 3y: 2x and 3.' },
+    { front: 'Gradient', back: 'The list of all the partial derivatives, in a fixed order — e.g. [4, 3]. Read as a direction it points the steepest way UPHILL; its length is how steep. All zeros means flat ground: a local minimum, maximum or saddle.' },
   ],
-  mindmapMarkdown: `- Derivatives, the Chain Rule & Gradients
-  - Derivative = sensitivity
-    - Nudge x, how much does f move
-    - Limit definition (seen once, then dropped)
-  - Rules + the ML cast
-    - Power, sum, product
-    - x² → 2x · eˣ → eˣ · log x → 1/x
-    - sigmoid → a(1−a), peaks at 0.25
-    - ReLU → 1 or 0, kink at 0 → subgradient
-  - Chain rule (the star)
-    - Multiply sensitivities along the path
-    - 3-link walk: −1 × 0.25 × 2 = −0.5
-  - Partials → gradient
-    - Hold everything still, wiggle one knob
-    - ∇J = the vector of all partials
-    - Steepest ASCENT, so descent steps −∇J
-  - MSE gradient, end to end
-    - dJ/dw = error × input, averaged
-    - Feeds the ML gradient-descent module
-  - Computational graph = backprop
-    - Forward caches values
-    - Backward multiplies local derivatives
-    - Fan-out → gradients ADD
-  - Gradient check
-    - Central difference, h ≈ 1e-5
-    - Relative error, float64, no dropout
-  - Jacobian & curvature
-    - Jacobian = all partials, vector → vector
-    - Second derivative → Newton, Adam`,
+  mindmapMarkdown: `- Slopes, Derivatives & the Gradient
+  - Straight line
+    - rise over run, two real points
+    - one slope everywhere
+  - Curve
+    - slope differs at every point
+    - tangent = the line that just touches
+    - slope at a point = slope of that tangent
+  - Measuring it
+    - tiny step h, rise / run
+    - 7, 6.1, 6.01, 6.001 -> 6
+    - numerical derivative = the checking tool
+  - Formula
+    - same work with letters -> 2x
+    - power, constant, sum rules
+    - sign = direction, size = steepness
+  - Chain rule
+    - u = 2x + 1, then y = u squared
+    - 2 x 14 = 28, measured and confirmed
+    - evaluate outer slope AT u
+    - classic error: dropped inner factor
+  - Many inputs
+    - partial = wiggle one, freeze the rest
+    - gradient = the list of all partials
+    - points uphill, length = steepness
+    - all zeros -> local minimum, max or saddle
+  - Link to learning
+    - uphill is more wrong, so step the other way
+    - details live in ML: Gradient Descent`,
 }
 
 export default m

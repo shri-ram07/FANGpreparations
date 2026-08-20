@@ -411,18 +411,6 @@ The fix is to pick the metric from the decision. The decision here is "send this
       correct: 1,
     },
     {
-      question: 'Which quantity can genuinely serve as both the loss and a reported metric?',
-      options: [
-        { text: 'Accuracy, if you use a small enough learning rate', explanation: 'The learning rate multiplies the slope. Multiplying zero by anything is still zero, so no step size rescues a flat function.' },
-        {
-          text: 'Squared error in a problem where the target is a number — you can descend it during training and also report it as "average squared distance from the truth"',
-          explanation: 'Correct. It is smooth, so it produces slopes, and its value is directly interpretable, so a person can act on it. That overlap is exactly what hides the loss/metric distinction from beginners.',
-        },
-        { text: 'Any metric, as long as it is averaged over enough examples', explanation: 'Averaging a staircase over many examples gives a staircase with smaller steps. More steps, still flat between them, still no slope.' },
-      ],
-      correct: 1,
-    },
-    {
       question: 'In the worked fraud case, the loss improved 41% while accuracy stayed at exactly 1.0000. What is the correct reading?',
       options: [
         { text: 'There is a bug — a lower loss must improve the metric', explanation: 'No. The two formulas read different things: the loss reads distances between the raw outputs and the truth, the metric reads which side of the cut-off each output landed on.' },
@@ -431,18 +419,6 @@ The fix is to pick the metric from the decision. The decision here is "send this
           explanation: 'Correct. Every score stayed on its original side of 0.5, so no decision changed, so no count changed. Meanwhile every score moved closer to its true label, which is exactly what squared error measures.',
         },
         { text: 'Accuracy should have gone above 1.0', explanation: 'Accuracy is a fraction of examples correct, so 1.0 means all ten were correct. There is nothing above it.' },
-      ],
-      correct: 1,
-    },
-    {
-      question: 'What is the recommended order of decisions when starting a new supervised project?',
-      options: [
-        { text: 'Pick the loss first, since it is what the model actually optimises', explanation: 'Backwards. The loss is a means to an end, so choosing it first means you never stated the end. That is how the fraud team in this module got 99.9% and caught nothing.' },
-        {
-          text: 'Name the decision the model will drive, pick the metric that measures that decision, then pick the smooth loss that best pushes that metric',
-          explanation: 'Correct. The decision fixes what counts as a good outcome, that fixes the metric, and only then is the loss selected as the best available smooth stand-in.',
-        },
-        { text: 'Train first with defaults, then choose whichever metric makes the result look strongest', explanation: 'That is picking the scoreboard after the game. It reliably produces numbers nobody can act on and models nobody can use.' },
       ],
       correct: 1,
     },
@@ -491,18 +467,6 @@ The fix is to pick the metric from the decision. The decision here is "send this
       isCaseBased: true,
     },
     {
-      question: 'Give an example where the same formula is used as both a loss and a metric, and explain why that is possible.',
-      answer:
-        'Squared error on a regression problem — predicting house prices, delivery times, temperatures. During training you compute the average squared distance between prediction and truth and descend it, because the formula is smooth: change any prediction by any amount and the number changes by a matching amount, so it always has a slope. Afterwards you report the same number, often square-rooted so it is back in the original units, and a person can act on "our average error is about 12 minutes". Both jobs are satisfied because the quantity happens to be simultaneously smooth and meaningful. This coincidence is genuinely why the loss-versus-metric distinction is confusing at first: if your first ML problem is regression, the two numbers are the same number, and you never see them come apart until you meet a classification problem where the metric is a count.',
-      isCaseBased: false,
-    },
-    {
-      question: 'What is a surrogate loss, and what is the risk in using one?',
-      answer:
-        'A surrogate is a smooth stand-in for a metric you cannot descend, chosen because lowering it tends to move the metric the right way. Squared error and cross-entropy are surrogates for accuracy: they push each raw output toward its true label, and pushing outputs toward their labels eventually moves them across the cut-off, which is what accuracy reads. The risk is that "tends to" is an assumption, not a guarantee, and it is your job to check it rather than the optimiser\'s. Two ways it breaks in practice. First, the surrogate can improve without any decision changing, because it rewards confidence on examples already on the correct side of the cut-off. Second, the surrogate averages over rows while the value is concentrated in a few rows — under heavy class imbalance, the overwhelming majority of the loss comes from the majority class, so the optimiser spends nearly all its effort where nothing valuable is at stake. Both failures look identical from the training curve, which keeps falling.',
-      isCaseBased: false,
-    },
-    {
       question: 'Why should you pick the metric before the loss, rather than the other way around?',
       answer:
         'Because the loss is a means and the metric is the end, and choosing a means before you have named an end is how projects end up with beautiful training curves and useless models. The chain runs: what decision does this model drive, who acts on it, what does each kind of mistake cost, and what capacity constraints exist. That fixes the metric. Only then do you go shopping for a smooth loss that pushes that metric in the right direction, and possibly for a weighting or a threshold that reflects the cost asymmetry. Doing it in the reverse order means starting with whatever loss the tutorial used, training until it goes down, and then looking around for a number that makes the result presentable. That is choosing the scoreboard after the game, and it is exactly what produces the 99.9%-accuracy fraud model that catches nothing.',
@@ -520,18 +484,6 @@ The fix is to pick the metric from the decision. The decision here is "send this
         'Three separate joints, each with a different fix. Joint one, loss to metric: the loss treats every result on the page as equally important, while the metric almost certainly weights the top positions far more heavily, so an offline win can come entirely from reordering results far down the page that nobody scrolls to. Check where in the ranking the improvement lives; the fix is to weight the loss by position. Joint two, offline metric to live behaviour: the offline metric is computed on logged clicks, and those clicks were produced under the old ranking, so results the old system never showed have no data at all. A model that reproduces the old ordering scores well by construction. The fix is a live test or interleaving rather than replaying logs. Joint three, engagement to value: clicks are a proxy for satisfaction and can be raised by results that get clicked and disappoint. The discipline is to name which joint broke before changing the model, because two of the three fixes are not model changes at all.',
       isCaseBased: true,
     },
-    {
-      question: 'Someone argues that since differentiability is required, any function with a corner in it is unusable as a loss. Is that right?',
-      answer:
-        'Not quite, and the distinction is worth getting right. What kills training is flatness, not corners. A function with a single sharp corner — for example, absolute error, which is a V shape with a corner at zero — has a perfectly good slope everywhere except at one point, and frameworks simply pick one of the two slopes at that point and carry on. Training proceeds normally. Accuracy is a different failure: it is not merely non-smooth at one point, it is constant over entire regions, so the slope is zero across everything the optimiser might currently be looking at. There is no direction to pick anywhere, not just at one awkward spot. So the accurate statement is that a loss must not be flat over the regions the optimiser travels through; a finite number of corners is survivable, and plateaus are not.',
-      isCaseBased: false,
-    },
-    {
-      question: 'Is there any way to get a training signal from a metric that has no slope?',
-      answer:
-        'Yes, in three flavours, though a surrogate remains the default. One, make the metric smooth by replacing the counting with sums of probabilities, so instead of counting how many predictions landed in a bucket you add up the probabilities of landing there. Once counting is gone, the formula has a slope. Two, estimate the slope by randomness: let the model make random choices, score them with the metric, and shift the model toward whatever choices scored above average. That gives a usable signal without ever differentiating the metric, at the cost of being far noisier and slower. Three, brute force over a small number of decision parameters. This last one is what you will actually do most days: train the weights with a smooth loss, then sweep the cut-off directly against the metric and keep the best value. It costs nothing, requires no retraining, and captures a large fraction of what the fancier methods promise.',
-      isCaseBased: false,
-    },
   ],
   flashcards: [
     { front: 'Loss vs metric, in one line', back: 'Loss = the number the model uses to know which way to adjust its weights; must be smooth, computed every batch. Metric = the number a person uses to decide something; needs no slope, computed on held-out data.' },
@@ -542,8 +494,6 @@ The fix is to pick the metric from the decision. The decision here is "send this
     { front: 'Slope of squared-error loss', back: '2(p - y)/N — literally prediction minus truth, scaled. The slope IS the mistake, which is why it points straight at the fix. At p=0.40, y=1, N=6: -0.2.' },
     { front: 'Batch and epoch', back: 'Batch = a small group of examples processed together before the weights are adjusted once. Epoch = one complete pass through the whole training dataset.' },
     { front: 'Loss down, metric flat', back: 'Normal, not a bug. The model got more confident about examples already on the correct side of the cut-off. Worked case: loss 0.0360 to 0.0213 (-41%) with accuracy 1.0000 both times.' },
-    { front: 'The imbalance trap', back: 'With 1,000 frauds in 1,000,000 rows, always answering "not fraud" scores 999,000/1,000,000 = 99.9% accuracy. Any reported accuracy near that is indistinguishable from a model that never looks at the input.' },
-    { front: 'Order of work', back: 'Name the decision the model drives, pick the metric that measures that decision, then pick the smooth loss that best pushes that metric. Never the reverse.' },
   ],
   mindmapMarkdown: `- Loss vs Metric
   - The six-email experiment

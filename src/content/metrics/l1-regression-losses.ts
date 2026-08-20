@@ -6,478 +6,451 @@ const m: Module = {
   level: 1,
   title: 'Regression Losses: MSE, MAE, Huber & Quantile',
   whyItMatters:
-    'Picking a regression loss is not a style choice — it silently decides what your model predicts. MSE predicts the mean, MAE predicts the median, quantile loss predicts whatever percentile the business needs. Interviewers ask "why this loss?" precisely because most candidates answer "it is the default", and one dirty row is enough to show the difference: in this module a single outlier drags the MSE fit 13 units and the MAE fit 0.5.',
-  estMinutes: 50,
+    'When a model has to predict a number - a delivery time, a price, tomorrow\'s demand - you must tell it how much each kind of mistake costs. That instruction is the loss function, and it quietly decides what the model predicts. Here you take five delivery times, add one broken-bike delivery of 90 minutes, and watch one loss move its answer from 12 minutes to 25 while another moves it by half a minute. Everything is computed with plain Python lists and a for loop, so you see the number move rather than take a claim on trust.',
+  assumes: [
+    'You know what an average is, and what the middle value of a sorted list (the median) is',
+    'You have seen a Python list, a for loop, a function, and the abs() function',
+    'You remember from school maths that squaring a number makes it positive, and that a square root undoes a square',
+    'Read *Loss vs Metric* (Level 0) first: it explains what a loss is and why training needs one',
+  ],
+  estMinutes: 44,
   sections: [
     {
       type: 'intuition',
-      title: 'A loss is a definition of "typical"',
-      md: `Five delivery times: 10, 11, 12, 13, 14 minutes. Predict one number for all of them. Easy — 12.
+      title: 'Five delivery times, then one 90',
+      md: `Five deliveries took 10, 11, 12, 13, 14 minutes. You must publish a single number as the promised time for all of them. Easy - 12.
 
-Now a sixth order comes in at **90** minutes. The driver's bike broke. Predict one number again.
+Now a sixth delivery arrives at **90** minutes. The rider's bike broke on the way. Publish one number again.
 
 - Say 25 and you are wrong about every single normal delivery.
-- Say 12 and you are catastrophically wrong about one.
-- There is no "correct" answer. There is only **what you decided to be wrong about**.
-- The loss function is where you write that decision down. It is not a technicality — it is the spec.
-- MSE says 25. MAE says 12.5. Both are minimising *their* loss perfectly. They just disagree about what "typical" means.`,
+- Say 12 and you are enormously wrong about one of them.
+- There is no correct answer here. There is only **what you have decided to be wrong about**.
+- The loss function is where you write that decision down. It is the rule that says how much each miss costs.
+- Two common rules give two different answers on this exact data: one says 25, the other says 12. Neither is broken. They disagree about what "typical" means, and the rest of this module is about that disagreement.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Two words used on every line from here on',
+      md: `Before any formula, names for things you have already been doing.
+
+- **Prediction** - the number the model outputs for a row. Written as y-hat when it appears in a formula. In the delivery example, the single number you publish is the prediction.
+- **Actual** - the number that really happened, written y. For delivery three, y = 12.
+- **Residual** - actual minus prediction. It is just "how far off were we, and in which direction". We write it as r, and the whole module uses one convention: **r = actual - prediction**.
+- A positive residual means the real value came in **above** your prediction: you predicted too low. A negative residual means you predicted too high.
+- With a prediction of 12, the five clean deliveries have residuals -2, -1, 0, 1, 2. The broken-bike delivery has residual 90 - 12 = **78**.
+
+A loss function is a price list for residuals. Hand it a residual, it hands back a cost. Everything below is four different price lists.`,
     },
     {
       type: 'intuition',
       title: 'MSE: square the miss',
-      md: `**MSE — Mean Squared Error.** For each row take the residual (actual minus prediction), square it, average.
+      md: `**MSE** stands for **Mean Squared Error**. The recipe is those three words read backwards: take the error (the residual), square it, then take the mean of all the squares.
 
-- One convention for this whole module: **r = y − ŷ**. Actual minus prediction. Positive r means you predicted too low.
-- Miss by 2 → pay 4. Miss by 10 → pay 100. Miss by 78 → pay 6,084.
-- Squaring is a **quadratic** penalty: doubling the error quadruples the cost. Big misses are not slightly worse, they are catastrophically worse.
-- That is a feature when big misses really are catastrophic (a bridge, a dosage) and a bug when big misses are just bad data.
-- Second reason it is everywhere: it is **smooth everywhere**. The derivative is −2r — continuous, and it shrinks as you approach the answer.
-- That shrinking is what makes gradient descent settle down instead of jittering: big error → big step, small error → small step, automatically.`,
-    },
-    {
-      type: 'math',
-      intro: 'MSE, its derivative, and the one fact that actually matters about it.',
-      latex: [
-        '\\text{MSE} = \\frac{1}{n}\\sum_{i=1}^{n}\\left(y_i - \\hat{y}_i\\right)^2 \\qquad \\frac{\\partial}{\\partial \\hat{y}}\\left(y - \\hat{y}\\right)^2 = -2\\left(y - \\hat{y}\\right)',
-        '\\arg\\min_{c}\\;\\mathbb{E}\\!\\left[(Y - c)^2\\right] \\;=\\; \\mathbb{E}[Y] \\qquad \\text{(the conditional MEAN)}',
-      ],
-    },
-    {
-      type: 'intuition',
-      title: 'What MSE really is: Gaussian maximum likelihood',
-      md: `That second line is the whole point. Train with MSE and your model is estimating **E[y | x]** — the conditional mean. Not "the value", not "the typical case". The mean.
+- Squaring does two jobs at once. It throws away the sign, so being 2 too high and 2 too low cost the same. And it makes big misses cost far more than small ones.
+- Miss by 2 and you pay 4. Miss by 10 and you pay 100. Miss by 78 and you pay 6,084.
+- The cost does not grow at the same speed as the error - doubling the error multiplies the cost by four. That is what "squared penalty" means in practice.
+- That is a good rule when a big miss really is far worse than several small ones: a bridge, a drug dosage, a battery temperature.
+- It is a bad rule when the big miss is simply a bad row of data, because you have just told the model that the bad row is the most important thing in the dataset.
 
-- Where does the mean come from? Assume the noise is Gaussian: y = f(x) + ε with ε ~ N(0, σ²).
-- Write the log-likelihood of your data under that assumption. The Gaussian's exponent is −(y − ŷ)²/2σ².
-- Everything else is a constant, so **maximising the likelihood is exactly minimising the sum of squared errors**.
-- MSE is not a convenient formula somebody invented. It is the **maximum-likelihood estimator under Gaussian noise** — see MLE in *Probability, Bayes & the Statistics ML Actually Uses* in the Math subject.
-- Flip it around and you get the honest warning: **if your noise is not Gaussian, MSE is optimising the wrong thing.** Heavy tails, spikes, one-in-a-thousand disasters — those are exactly non-Gaussian, and exactly where MSE misbehaves.
-- Same trick names MAE too: absolute error is the maximum-likelihood loss under **Laplace** (double-exponential) noise, which has fatter tails than Gaussian. Fat tails assumed → outliers surprise it less.`,
-    },
-    {
-      type: 'math',
-      intro: 'The derivation, in three lines. Worth being able to reproduce on a whiteboard.',
-      latex: [
-        'y_i = f(x_i) + \\varepsilon_i, \\qquad \\varepsilon_i \\sim \\mathcal{N}(0, \\sigma^2)',
-        '\\log \\mathcal{L} = \\sum_{i=1}^{n} \\log \\frac{1}{\\sqrt{2\\pi\\sigma^2}}\\exp\\!\\left(-\\frac{(y_i - \\hat{y}_i)^2}{2\\sigma^2}\\right) = -\\frac{1}{2\\sigma^2}\\sum_{i=1}^{n}\\left(y_i - \\hat{y}_i\\right)^2 + \\text{const}',
-        '\\max_{\\hat{y}} \\log \\mathcal{L} \\;\\iff\\; \\min_{\\hat{y}} \\sum_i \\left(y_i - \\hat{y}_i\\right)^2 \\;\\iff\\; \\min_{\\hat{y}} \\text{MSE}',
-      ],
-    },
-    {
-      type: 'intuition',
-      title: 'MAE: pay the distance, not the square',
-      md: `**MAE — Mean Absolute Error.** Same residuals, but you pay |r| instead of r².
-
-- Miss by 2 → pay 2. Miss by 78 → pay 78. Linear. A big miss is exactly as bad as it is big.
-- Consequence: **one outlier cannot buy the model.** Under MSE, a residual of 78 is worth 6,084 units of "please move toward me". Under MAE it is worth 78.
-- What MAE estimates is the **conditional median**, not the mean. That is a different quantity, and often the one a human actually wanted: "half our deliveries take under X minutes".
-- Its cost is in the gradient. The derivative of |r| is **−sign(r)** — a constant ±1, whatever the distance.
-- Far from the answer? Step size 1. Nearly there? Still step size 1. There is no automatic slowdown, so training **wobbles around the optimum** instead of settling into it. You fix it with a learning-rate schedule, which is one more thing to tune.
-- And at r = 0 exactly the derivative **does not exist** — there is a kink. Frameworks use the **subgradient** convention: any value in [−1, 1] is valid, and they pick 0. Harmless in practice, but it is the thing to say out loud when asked "is MAE differentiable?".`,
-    },
-    {
-      type: 'math',
-      intro: 'MAE, its (sub)gradient, and its minimiser.',
-      latex: [
-        '\\text{MAE} = \\frac{1}{n}\\sum_{i=1}^{n}\\left|y_i - \\hat{y}_i\\right| \\qquad \\frac{\\partial}{\\partial \\hat{y}}\\left|y - \\hat{y}\\right| = -\\operatorname{sign}\\!\\left(y - \\hat{y}\\right)',
-        '\\arg\\min_{c}\\;\\mathbb{E}\\!\\left[\\,\\left|Y - c\\right|\\,\\right] \\;=\\; \\operatorname{median}(Y)',
-        '\\text{At } r = 0 \\text{ the derivative does not exist. Subgradient } \\in [-1, 1]; \\text{ libraries take } 0.',
-      ],
+Compute it by hand on the five clean deliveries, predicting 12: residuals -2, -1, 0, 1, 2, so the squares are 4, 1, 0, 1, 4. They add to 10, and 10 divided by 5 is **2.0**. That is the MSE.`,
     },
     {
       type: 'code',
       lang: 'python',
-      title: 'The outlier demo: add ONE bad row, watch each loss move',
-      code: `import numpy as np
+      title: 'Step 1: MSE and MAE on the five clean deliveries, with one for loop',
+      code: `y = [10, 11, 12, 13, 14]   # the five actual delivery times, in minutes
+guess = 12                 # the one number we predict for all of them
 
-clean = np.array([10., 11., 12., 13., 14.])
-dirty = np.append(clean, 90.)           # ONE bad row: a typo, a whale, a broken bike
-grid = np.arange(0, 100.001, 0.001)     # every candidate constant prediction
+sq_total = 0               # running total of squared residuals, starts empty
+abs_total = 0              # running total of plain distances, starts empty
+for actual in y:           # take the deliveries one at a time
+    error = actual - guess           # the residual: actual minus prediction
+    sq_total = sq_total + error * error   # square it, then add it on
+    abs_total = abs_total + abs(error)    # abs() just removes any minus sign
 
-def fit(loss):                          # a FLAT minimum is a tie -> report its midpoint
-    hit = grid[loss <= loss.min() + 1e-9]
-    return 0.5 * (hit[0] + hit[-1])
-
-def best(y, delta=2.0):
-    r = y[None, :] - grid[:, None]      # residual = actual - prediction
-    a = np.abs(r)
-    hub = np.where(a <= delta, 0.5 * r ** 2, delta * (a - 0.5 * delta))
-    return dict(MSE=fit((r ** 2).mean(1)), MAE=fit(a.mean(1)), Huber=fit(hub.mean(1)))
-
-for tag, y in (('clean', clean), ('dirty', dirty)):
-    b = best(y)
-    print('%s  MSE-fit=%5.2f  MAE-fit=%5.2f  Huber-fit=%5.2f' % (tag, b['MSE'], b['MAE'], b['Huber']))
+print('MSE', sq_total / len(y))    # mean of the squares; len(y) is 5, the list length
+print('MAE', abs_total / len(y))   # mean of the distances - the second price list
 
 # ---- real output ----
-# clean  MSE-fit=12.00  MAE-fit=12.00  Huber-fit=12.00
-# dirty  MSE-fit=25.00  MAE-fit=12.50  Huber-fit=12.50`,
+# MSE 2.0
+# MAE 1.2`,
       annotations: {
-        5: 'Brute-force grid instead of a formula, on purpose: MAE has no closed form beyond "the median", and I want the actual minimiser of each loss, not a claim about it.',
-        7: 'MAE does not always have a unique minimiser. On an even-sized sample its loss surface is dead FLAT across a whole interval and every point in that interval is equally optimal, so a plain argmin would silently report the left edge. This helper reports the midpoint of the flat floor instead - which is exactly the median convention.',
-        12: 'One convention for the whole module: residual = actual - prediction. Sign only matters for the quantile loss later.',
-        14: 'Huber in one line: half-squared inside delta, then a straight line. delta=2 means "more than 2 minutes off is an outlier, stop escalating".',
-        17: 'Same data, same grid, three losses. Nothing differs except what each one charges for a miss.',
-        23: 'One bad row moved the MSE fit by 13.0 (12 -> 25) and the MAE/Huber fit by 0.5 (12 -> 12.5). That is the entire argument. Footnote on the MAE number: here the loss is flat across the whole of [12, 13], so 12.50 is the midpoint of that tie - and it is the median of [10, 11, 12, 13, 14, 90]. MSE and Huber each have a single sharp minimum, no tie to break.',
+        1: 'A plain Python list of five numbers. No library, nothing imported - this is all the machinery the whole idea needs.',
+        2: 'The prediction we are testing. One number stands in for all five rows, which is the simplest possible model.',
+        4: 'A counter set to zero. Each loop pass will add one row\'s squared residual to it.',
+        5: 'A second counter, for the un-squared version. Running both side by side is the entire point of this snippet.',
+        6: 'A for loop over the list. On each pass the variable "actual" holds one delivery time: 10, then 11, then 12, and so on.',
+        7: 'The residual, following the module convention: actual minus prediction. Across the five passes it is -2, -1, 0, 1, 2.',
+        8: 'error * error is the square. Squaring a negative gives a positive, so -2 and +2 both cost 4. The total accumulates 4 + 1 + 0 + 1 + 4 = 10.',
+        9: 'abs(error) is the built-in absolute value: it strips a minus sign and leaves everything else alone. This total is 2 + 1 + 0 + 1 + 2 = 6.',
+        11: '10 divided by 5 gives 2.0 - the "mean" in mean squared error. Dividing by the count keeps the number comparable across datasets of different sizes.',
+        12: '6 divided by 5 gives 1.2. Same five residuals, a different price list, a different number. Remember 2.0 and 1.2; step 2 breaks both of them.',
       },
     },
     {
-      type: 'note',
-      md: `Read the two output lines like an interviewer. On clean data all three losses agree perfectly — **12.00, 12.00, 12.00**. Loss choice looks like a non-issue. Then one row out of six goes bad, and MSE relocates the prediction to **25.0**, a value that is wrong about every single real delivery, while MAE and Huber move by half a minute. The lesson is not "MSE is bad" — it is that *the loss you pick is invisible until your data gets dirty, and then it is the only thing that matters.* Corollary you can say out loud: if switching MSE to MAE changes your predictions a lot, you have an outlier problem you have not looked at yet.`,
-    },
-    {
       type: 'intuition',
-      title: 'Huber: quadratic where it helps, linear where it hurts',
-      md: `MSE has a good gradient and a bad temper. MAE has a good temper and a bad gradient. Huber glues the good halves together.
+      title: 'MAE: pay the distance, do not square it',
+      md: `That second number has a name too. **MAE** is **Mean Absolute Error**: take each residual, make it positive with abs(), and average. No squaring anywhere.
 
-- Within **δ** of zero: behave like MSE (½r²) — smooth, self-slowing, converges cleanly.
-- Beyond δ: behave like MAE (a straight line of slope δ) — an outlier at 78 stops screaming.
-- The two pieces are chosen so the value *and* the slope match at |r| = δ. No kink, no jump — that is why it is differentiable everywhere, unlike MAE.
-- So: **smooth near the optimum AND robust to outliers.** That sentence is the whole interview answer.
-- The price is a hyperparameter. δ is where you draw the line between "a normal miss" and "an outlier".
-- Rules of thumb for δ: set it near the residual size you would call suspicious in domain terms; or standardise residuals and use **δ ≈ 1.345·σ**, which retains ~95% of MSE's efficiency on genuinely Gaussian data while capping outlier influence (this is scikit-learn's \`HuberRegressor(epsilon=1.35)\` default). Small δ → more like MAE. Huge δ → back to MSE.
-- **log-cosh** is the smooth cousin: log(cosh r) is ≈ ½r² for small r and ≈ |r| − log 2 for large r, infinitely differentiable, no δ to tune — you trade the knob for a fixed transition, which is why gradient-boosting libraries offer it as a drop-in.`,
-    },
-    {
-      type: 'math',
-      intro: 'Huber and log-cosh. r = y − ŷ throughout.',
-      latex: [
-        'L_\\delta(r) = \\begin{cases} \\tfrac{1}{2}r^2 & |r| \\le \\delta \\\\[4pt] \\delta\\left(|r| - \\tfrac{1}{2}\\delta\\right) & |r| > \\delta \\end{cases}',
-        '\\frac{dL_\\delta}{dr} = \\begin{cases} r & |r| \\le \\delta \\\\[4pt] \\delta\\,\\operatorname{sign}(r) & |r| > \\delta \\end{cases} \\quad\\Longrightarrow\\quad \\text{gradient magnitude is capped at } \\delta',
-        'L_{\\text{logcosh}}(r) = \\log\\!\\left(\\cosh r\\right) \\;\\approx\\; \\tfrac{1}{2}r^2 \\;(\\text{small } r), \\qquad \\approx\\; |r| - \\log 2 \\;(\\text{large } r)',
-      ],
-    },
-    {
-      type: 'note',
-      md: `The line worth memorising is the derivative, not the loss: **Huber caps the gradient magnitude at δ.** No single row can push harder than δ, no matter how wrong it is. That is *exactly* what gradient clipping does in deep learning, and it is why "Huber loss" and "clip the gradients" solve the same problem from two directions. Reinforcement learning's DQN uses Huber for this reason — a rare, enormous TD error would otherwise blow up the network.`,
+- Miss by 2 and you pay 2. Miss by 78 and you pay 78. The cost grows exactly as fast as the error does.
+- The consequence is the whole reason MAE exists: **one bad row cannot buy the model.** Under MSE that residual of 78 is worth 6,084 units of "please move towards me". Under MAE it is worth 78.
+- The two are not just different scales of the same thing. They pick different answers, and each answer has a name.
+- The single number that minimises MSE is the **mean** of the data. The single number that minimises MAE is the **median** - the middle value once the numbers are sorted.
+- Check that against the delivery list. The mean of 10, 11, 12, 13, 14 is 12 and the median is also 12, so on clean data the two agree and the choice of loss looks like it does not matter.
+
+That is the trap. The choice is invisible until the data gets dirty. Add the broken bike and watch.`,
     },
     {
       type: 'code',
       lang: 'python',
-      title: 'All four losses, same residual vector, one outlier — the penalty table',
-      code: `import numpy as np
+      title: 'Step 2: add the 90, then price three candidate predictions',
+      code: `def mse(y, guess):                    # same arithmetic as step 1, now reusable
+    total = 0
+    for actual in y:
+        total = total + (actual - guess) ** 2   # ** 2 is Python for "squared"
+    return total / len(y)
 
-y = np.array([10., 11., 12., 13., 14., 90.])   # the last row is the outlier
-r = y - 12.0                                   # residual = actual - prediction
-a, delta, tau = np.abs(r), 2.0, 0.9
+def mae(y, guess):                    # the un-squared twin
+    total = 0
+    for actual in y:
+        total = total + abs(actual - guess)
+    return total / len(y)
 
-mse = r ** 2
-mae = a
-hub = np.where(a <= delta, 0.5 * r ** 2, delta * (a - 0.5 * delta))
-pin = np.maximum(tau * r, (tau - 1) * r) + 0.0   # pinball / quantile, tau = 0.9
-
-print('  resid       MSE     MAE     Huber   Pinball')
-for row in np.c_[r, mse, mae, hub, pin]:
-    print('%7.1f %9.2f %7.2f %9.2f %9.2f' % tuple(row))
-print('   mean %9.2f %7.2f %9.2f %9.2f' % (mse.mean(), mae.mean(), hub.mean(), pin.mean()))
-print('one outlier vs the five good rows: MSE %.0fx  MAE %.0fx  Huber %.0fx'
-      % tuple(v[-1] / v[:-1].sum() for v in (mse, mae, hub)))
+dirty = [10, 11, 12, 13, 14, 90]      # the five good rows plus the broken bike
+for guess in [12, 12.5, 25]:          # three candidate predictions to price
+    print(guess, round(mse(dirty, guess), 2), round(mae(dirty, guess), 2))
 
 # ---- real output ----
-#   resid       MSE     MAE     Huber   Pinball
-#    -2.0      4.00    2.00      2.00      0.20
-#    -1.0      1.00    1.00      0.50      0.10
-#     0.0      0.00    0.00      0.00      0.00
-#     1.0      1.00    1.00      0.50      0.90
-#     2.0      4.00    2.00      2.00      1.80
-#    78.0   6084.00   78.00    154.00     70.20
-#    mean   1015.67   14.00     26.50     12.20
-# one outlier vs the five good rows: MSE 608x  MAE 13x  Huber 31x`,
+# 12 1015.67 14.0
+# 12.5 1002.92 14.0
+# 25 846.67 21.67`,
       annotations: {
-        4: 'Everything is evaluated at the same prediction (12.0) so the columns are directly comparable: identical residuals, four different price lists.',
-        9: 'Huber uses HALF the square inside delta, so its quadratic column reads as half of MSE. Compare shapes across a column, not absolute levels across rows.',
-        10: 'Pinball with tau=0.9 charges 0.9 per unit of UNDER-prediction (r > 0) and only 0.1 per unit of over-prediction. The +0.0 just cleans up a "-0.00" print artefact at r = 0.',
-        16: 'The number that decides everything: under MSE the single outlier outweighs the five good rows 608 to 1. Under MAE, 13 to 1. Under Huber, 31 to 1.',
-        26: 'Look at the outlier row across the table: 6084 vs 78 vs 154 vs 70.2. Same mistake, four completely different opinions about how much it should cost you.',
+        1: 'Wraps step 1\'s squared-error loop in a function, so we can call it with different data and different predictions instead of retyping it.',
+        2: 'The running total again, reset to zero on every call.',
+        3: 'The same walk through the list of actual values.',
+        4: '(actual - guess) is the residual and ** 2 squares it. ** is Python\'s power operator, so x ** 2 means x times x.',
+        5: 'Divide by the number of rows and hand the answer back to whoever called the function.',
+        7: 'The MAE version. Identical structure, one changed line - which is the only real difference between the two losses.',
+        8: 'Its own zeroed total.',
+        9: 'The same loop over the actual values.',
+        10: 'abs() instead of squaring. That single change is what the rest of this module is about.',
+        11: 'Return the average distance.',
+        13: 'The dirty dataset: exactly the clean list with one 90 added at the end. Nothing else changed, so anything that moves below is caused by that one row.',
+        14: 'Three predictions worth pricing: 12 (the clean answer), 12.5, and 25 (the mean of the dirty data).',
+        15: 'Print each candidate with its MSE and its MAE. round(x, 2) trims a long float to 2 decimal places so the columns line up.',
       },
+    },
+    {
+      type: 'note',
+      md: `Read the three output rows as a competition. **MSE** charges 1015.67 for predicting 12 and only 846.67 for predicting 25, so MSE prefers 25. **MAE** charges 14.0 for predicting 12 and 21.67 for predicting 25, so MAE prefers 12. Same six numbers, same three candidates, opposite winners. The reason is in the arithmetic you just ran: moving the prediction from 12 up to 25 costs each of the five good rows about 13 extra minutes of error, and in exchange it cuts the one bad row's error from 78 to 65. Under MAE that trade is a wash at best - about 65 saved against 65 spent. Under MSE the bad row's cost falls from 6,084 to 4,225, which swamps everything the five good rows just gave up.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Step 3: stop guessing candidates - scan for the best prediction of each loss',
+      code: `def scan(y, loss):                  # try many predictions, keep the cheapest
+    best_guess = None               # nothing tried yet
+    best_value = None
+    g = 0.0                         # start the sweep at 0 minutes
+    while g <= 100.0:               # ... and walk it up to 100 minutes
+        v = loss(y, g)              # what this loss charges for predicting g
+        if best_value is None or v < best_value - 1e-12:   # strictly cheaper? keep it
+            best_value, best_guess = v, g
+        g = round(g + 0.5, 1)       # step half a minute; round() clears float drift
+    return best_guess
+
+clean = [10, 11, 12, 13, 14]
+dirty = [10, 11, 12, 13, 14, 90]
+print('clean: MSE fit', scan(clean, mse), ' MAE fit', scan(clean, mae))
+print('dirty: MSE fit', scan(dirty, mse), ' MAE fit', scan(dirty, mae))
+
+# ---- real output ----
+# clean: MSE fit 12.0  MAE fit 12.0
+# dirty: MSE fit 25.0  MAE fit 12.0`,
+      annotations: {
+        1: 'Takes the data and a loss FUNCTION. In Python a function can be passed around like any other value, so the same scanner works for mse and for mae.',
+        2: 'The best prediction found so far. None means "nothing tried yet", so the first candidate always wins.',
+        3: 'The cost of that best prediction, also empty at the start.',
+        4: 'The candidate we are currently testing, starting at 0.0 minutes.',
+        5: 'A while loop: keep going while g is still at or below 100. Brute force, slow and completely clear - the right trade when learning.',
+        6: 'Call whichever loss was handed in, on the current candidate.',
+        7: 'Keep this candidate only if it is strictly cheaper. The tiny 1e-12 (0.000000000001) means an exact tie does not count as an improvement, so a tie keeps the earlier candidate.',
+        8: 'Python lets you assign two variables on one line: best_value gets v and best_guess gets g.',
+        9: 'Advance half a minute. Adding 0.5 repeatedly to a float accumulates tiny errors, and round(x, 1) snaps it back to one decimal place.',
+        10: 'Hand back the winning prediction.',
+        12: 'The five clean deliveries.',
+        13: 'The same list with the broken bike added.',
+        14: 'On clean data both losses land on 12.0 - the mean and the median of this list are both 12, so they agree.',
+        15: 'One bad row moves the MSE answer 13 minutes, from 12.0 to 25.0, which is the mean of the dirty list: (10+11+12+13+14+90)/6 = 25. The MAE answer does not move at all. That gap is the entire argument of this module.',
+      },
+    },
+    {
+      type: 'note',
+      md: `One honest footnote on that MAE result. With an even number of rows, MAE is charged **exactly the same** by every prediction between the two middle values - here anything from 12 to 13 costs 14.0. The scanner keeps the first one it meets, so it reports 12.0; the usual convention reports the midpoint 12.5, which is the median of 10, 11, 12, 13, 14, 90. Either way the answer moved by at most half a minute while the MSE answer moved by thirteen. MSE never has this tie: its cost curve is a single smooth bowl with one lowest point.`,
+    },
+    {
+      type: 'intuition',
+      title: 'RMSE: putting MSE back into minutes',
+      md: `MSE has an awkward feature you just met without noticing. Its units are squared. The deliveries are in minutes, so an MSE of 1015.67 is in **squared minutes**, which is not a thing anybody can picture.
+
+- **RMSE** is **Root Mean Squared Error**: compute MSE, then take the square root. Nothing else.
+- Here: MSE 1015.67, so RMSE is the square root of 1015.67, about **31.87 minutes**. That is back in units a person can read.
+- RMSE is used for reporting and MSE for training, but they always rank predictions the same way, because taking a square root never changes which of two positive numbers is larger.
+- People report RMSE and MAE side by side, and **RMSE is never smaller than MAE**. That is not a rule to memorise; here is why.
+- Take two rows with errors of 2 and 2. MAE is 2, and RMSE is the square root of (4+4)/2, which is 2. They are equal.
+- Now spread the same total error out: errors of 1 and 3. MAE is still (1+3)/2 = 2. RMSE is the square root of (1+9)/2 = 5, which is 2.236. Squaring rewarded the 3 more than it punished the 1, so RMSE rose while MAE stood still.
+
+The two are equal only when every error is the same size, and RMSE pulls further ahead the more uneven the errors are. That makes the **ratio RMSE / MAE** a free diagnostic: near 1 means your errors are all much of a muchness; 3 or 4 means a handful of rows are doing nearly all the damage, and you should go and read those rows.`,
+    },
+    {
+      type: 'intuition',
+      title: 'The training-signal difference, in plain terms',
+      md: `Training moves the prediction using the **slope** of the loss - how much the cost changes when you nudge the prediction by a tiny amount. That slope tells the model which way to move and how far. The two losses give very different instructions.
+
+- MSE's slope at residual r is proportional to r itself. Far from the answer r is large, so the step is large. Close to the answer r is small, so the step is small.
+- That automatic slowdown is a real convenience: the model takes big strides early and small careful ones at the end, with nobody tuning anything.
+- MAE's slope is +1 or -1 and nothing else. It says "go up" or "go down" and never says how far.
+- So MAE gives the same size of step when you are 50 minutes off as when you are 0.1 minutes off. Training bounces around the best answer instead of settling onto it, and you have to shrink the step size by hand as training goes on.
+- There is also one exact point, r = 0, where MAE has a sharp corner and no single slope: just left of zero the slope is -1, just right of it +1. Libraries pick 0 there by convention and carry on, and it causes no trouble in practice.
+
+The trade in one sentence each. MSE gives well-behaved training but lets one bad row dominate the answer. MAE ignores bad rows but gives a clumsy, never-slowing training signal.`,
+    },
+    {
+      type: 'math',
+      intro: 'The formulas you computed by hand, in symbols. n is the number of rows, y is the actual value, y-hat is the prediction, and r = y - y-hat.',
+      latex: [
+        '\\text{MSE} = \\frac{1}{n}\\sum_{i=1}^{n}\\left(y_i - \\hat{y}_i\\right)^2 \\qquad \\text{RMSE} = \\sqrt{\\text{MSE}} \\qquad \\text{MAE} = \\frac{1}{n}\\sum_{i=1}^{n}\\left|y_i - \\hat{y}_i\\right|',
+        '\\text{slope of } (y-\\hat{y})^2 = -2r \\;\\; \\text{(shrinks near the answer)} \\qquad \\text{slope of } |y-\\hat{y}| = \\pm 1 \\;\\; \\text{(never shrinks)}',
+        '\\text{the single number minimising MSE is } \\operatorname{mean}(y) \\qquad \\text{the single number minimising MAE is } \\operatorname{median}(y)',
+      ],
+    },
+    {
+      type: 'intuition',
+      title: 'Huber: squared for small misses, straight for big ones',
+      md: `You now have one loss with the training behaviour you want and another with the outlier behaviour you want. **Huber loss** takes the first part of one and the second part of the other.
+
+- Pick a cut-off, called **delta**, that separates "a normal miss" from "an outlier". For the deliveries, delta = 2 minutes.
+- If the residual is inside delta, Huber charges half the square, just like MSE. So near the right answer it slows down properly as training converges.
+- If the residual is bigger than delta, Huber charges a straight line instead: the cost keeps rising, but at a fixed rate of delta per extra minute rather than accelerating.
+- The two pieces are built so that at exactly the cut-off they meet with the same value and the same slope. There is no jump and no corner, so Huber has a proper slope everywhere - which MAE does not.
+- The one fact worth carrying: **Huber's slope never exceeds delta.** No single row, however wrong, can push the model harder than delta. Compare with MSE, where a residual of 78 pushes 78 times harder than a residual of 1.
+- Choosing delta is the price you pay. Set it at the residual size you would call suspicious in the actual units of the problem. A very large delta puts almost every row in the squared part, which is just MSE. A very small delta puts almost every row in the straight part, which is just MAE.
+
+On the dirty delivery list with delta = 2, Huber picks the same prediction MAE does. It buys the robustness without giving up the clean training signal.`,
     },
     {
       type: 'visual',
-      component: 'PointerBoxDiagram',
+      component: 'PythonPlayground',
       props: {
-        title: 'One residual vector, four price lists',
-        notice: 'Step through the losses. The residuals never change — only what each loss charges for them. Watch the bottom row.',
-        leftLabel: 'residual  r = y - y_hat',
-        rightLabel: 'penalty charged',
-        frames: [
-          {
-            note: 'MSE: total 6094.00, mean 1015.67. The outlier alone is 608x the five good rows combined. Minimise this and the fitted prediction jumps to 25.0 - a number that is wrong about every real delivery.',
-            stack: [
-              { name: 'r1 = -2.0', to: 'p1' },
-              { name: 'r2 = -1.0', to: 'p2' },
-              { name: 'r3 =  0.0', to: 'p3' },
-              { name: 'r4 = +1.0', to: 'p4' },
-              { name: 'r5 = +2.0', to: 'p5' },
-              { name: 'r6 = +78.0  OUTLIER', to: 'p6', danger: true },
-            ],
-            heap: [
-              { id: 'p1', value: 'r^2 = 4.00' },
-              { id: 'p2', value: 'r^2 = 1.00' },
-              { id: 'p3', value: 'r^2 = 0.00' },
-              { id: 'p4', value: 'r^2 = 1.00' },
-              { id: 'p5', value: 'r^2 = 4.00' },
-              { id: 'p6', value: 'r^2 = 6084.00', label: 'explodes' },
-            ],
-          },
-          {
-            note: 'MAE: total 84.00, mean 14.00. Same outlier, now 13x the good rows instead of 608x. Fitted prediction 12.5 - it barely moved. Cost: the gradient is a flat +/-1 everywhere, so training wobbles at the bottom.',
-            stack: [
-              { name: 'r1 = -2.0', to: 'p1' },
-              { name: 'r2 = -1.0', to: 'p2' },
-              { name: 'r3 =  0.0', to: 'p3' },
-              { name: 'r4 = +1.0', to: 'p4' },
-              { name: 'r5 = +2.0', to: 'p5' },
-              { name: 'r6 = +78.0  OUTLIER', to: 'p6' },
-            ],
-            heap: [
-              { id: 'p1', value: '|r| = 2.00' },
-              { id: 'p2', value: '|r| = 1.00' },
-              { id: 'p3', value: '|r| = 0.00' },
-              { id: 'p4', value: '|r| = 1.00' },
-              { id: 'p5', value: '|r| = 2.00' },
-              { id: 'p6', value: '|r| = 78.00', label: 'stays linear' },
-            ],
-          },
-          {
-            note: 'Huber, delta = 2: total 159.00, mean 26.50. Inside +/-2 it is half-squared (smooth, self-slowing); beyond that it charges a flat slope of 2 per unit. Fitted prediction 12.5, same as MAE - but differentiable everywhere.',
-            stack: [
-              { name: 'r1 = -2.0', to: 'p1' },
-              { name: 'r2 = -1.0', to: 'p2' },
-              { name: 'r3 =  0.0', to: 'p3' },
-              { name: 'r4 = +1.0', to: 'p4' },
-              { name: 'r5 = +2.0', to: 'p5' },
-              { name: 'r6 = +78.0  OUTLIER', to: 'p6' },
-            ],
-            heap: [
-              { id: 'p1', value: '0.5r^2 = 2.00', label: 'quadratic' },
-              { id: 'p2', value: '0.5r^2 = 0.50', label: 'quadratic' },
-              { id: 'p3', value: '0.5r^2 = 0.00', label: 'quadratic' },
-              { id: 'p4', value: '0.5r^2 = 0.50', label: 'quadratic' },
-              { id: 'p5', value: '0.5r^2 = 2.00', label: 'quadratic' },
-              { id: 'p6', value: '2(|r|-1) = 154.00', label: 'linear' },
-            ],
-          },
-          {
-            note: 'Pinball, tau = 0.9: total 73.20, mean 12.20. Now the price depends on the SIGN. Under-predicting (r > 0) costs 0.9 per unit; over-predicting costs 0.1. Minimising this fits the 90th percentile, not the middle - deliberately biased high.',
-            stack: [
-              { name: 'r1 = -2.0  over', to: 'p1' },
-              { name: 'r2 = -1.0  over', to: 'p2' },
-              { name: 'r3 =  0.0', to: 'p3' },
-              { name: 'r4 = +1.0  under', to: 'p4' },
-              { name: 'r5 = +2.0  under', to: 'p5' },
-              { name: 'r6 = +78.0  under', to: 'p6' },
-            ],
-            heap: [
-              { id: 'p1', value: '0.1 x 2.0 = 0.20', label: 'cheap' },
-              { id: 'p2', value: '0.1 x 1.0 = 0.10', label: 'cheap' },
-              { id: 'p3', value: '0.00' },
-              { id: 'p4', value: '0.9 x 1.0 = 0.90', label: 'expensive' },
-              { id: 'p5', value: '0.9 x 2.0 = 1.80', label: 'expensive' },
-              { id: 'p6', value: '0.9 x 78.0 = 70.20', label: 'expensive' },
-            ],
-          },
-        ],
+        code: `delta = 2.0            # Huber's cut-off between a normal miss and an outlier
+tau = 0.9              # pinball: 0.9 of the cost sits on under-predicting
+print('error   MSE     MAE    Huber  Pinball')
+for e in [-2.0, -1.0, 0.0, 1.0, 2.0, 78.0]:
+    size = abs(e)
+    if size <= delta:
+        hub = 0.5 * e * e
+    else:
+        hub = delta * (size - 0.5 * delta)
+    if e >= 0:
+        pin = tau * e
+    else:
+        pin = (tau - 1) * e
+    print('%5.1f %8.2f %6.2f %7.2f %7.2f' % (e, e * e, size, hub, pin))`,
+        precomputedOutput: `error   MSE     MAE    Huber  Pinball
+ -2.0     4.00   2.00    2.00    0.20
+ -1.0     1.00   1.00    0.50    0.10
+  0.0     0.00   0.00    0.00    0.00
+  1.0     1.00   1.00    0.50    0.90
+  2.0     4.00   2.00    2.00    1.80
+ 78.0  6084.00  78.00  154.00   70.20`,
+        caption: 'One column per price list. The residuals never change - only what each loss charges for them. Read the bottom row: the same 78-minute miss costs 6084, 78, 154 or 70.2 depending only on which rule you picked.',
+        annotations: {
+          1: 'The Huber cut-off, in minutes. Residuals up to 2 are treated as normal misses.',
+          2: 'The pinball setting, explained in the next section. For now read it as "under-predicting is 9 times more expensive than over-predicting".',
+          3: 'A header row so the printed columns have names.',
+          4: 'Loop over the six residuals from the dirty delivery list when the prediction is 12: five small ones and the broken bike at 78.',
+          5: 'abs() gives the size of the residual with the sign removed, which is what Huber compares against delta.',
+          6: 'Inside the cut-off? Then use the squared branch.',
+          7: 'Half the square. The half is a convention that makes the two branches join smoothly; it is why the Huber column reads as half the MSE column for small residuals.',
+          8: 'Otherwise this residual counts as an outlier.',
+          9: 'The straight-line branch: cost grows at a fixed delta per unit. For e = 78 that is 2 * (78 - 1) = 154, instead of MSE\'s 6084.',
+          10: 'Pinball asks about the sign, not the size. A residual of zero or more means the actual came in above the prediction: we predicted too low.',
+          11: 'Under-predicting is charged the full tau rate, 0.9 per minute.',
+          12: 'Otherwise we predicted too high.',
+          13: 'Over-predicting is charged (tau - 1), which is -0.1, times a negative residual - so a positive cost of 0.1 per minute. Nine times cheaper than the other direction.',
+          14: 'Print one formatted row. %5.1f means "a decimal number with 1 digit after the point, padded out to 5 characters" - it is only there to keep the columns aligned.',
+        },
       },
     },
     {
       type: 'intuition',
-      title: 'Quantile (pinball) loss: when being wrong up costs more than wrong down',
-      md: `All three losses so far are symmetric — a miss of +5 costs exactly what a miss of −5 costs. In business that is almost never true.
+      title: 'Quantile loss: when being wrong upwards costs more than wrong downwards',
+      md: `MSE, MAE and Huber are all **symmetric**: a miss of +5 costs exactly what a miss of -5 costs. In a business that is almost never true.
 
-- You run a warehouse. **Stock out** and you lose the sale plus a customer, say ₹900. **Overstock** and you carry one unit, say ₹100.
-- A symmetric loss will happily balance those, and you will run out of stock roughly half the time. That is not a modelling error — you told it they cost the same.
-- **Pinball loss** fixes it by charging different rates for the two directions: τ per unit of under-prediction, (1 − τ) per unit of over-prediction.
-- Minimise it and the model no longer predicts the middle. It predicts the **τ-th quantile** of y.
-- τ = 0.5 charges both sides 0.5, which is just half of MAE — hence the median. τ = 0.9 charges under-prediction 9× more, so the model deliberately aims high.
-- The τ you want is not a hyperparameter to tune, it is arithmetic: **τ = C_under / (C_under + C_over)**. With 900 and 100 that is 0.9. Stock the 90th percentile of demand.
-- This is the classic newsvendor result, and saying it in an interview lands hard, because it turns "which loss?" into a finance question with one right answer.`,
-    },
-    {
-      type: 'math',
-      intro: 'Pinball loss and what it estimates. r = y − ŷ, so r > 0 means you predicted too low.',
-      latex: [
-        'L_\\tau(r) = \\max\\!\\left(\\tau r,\\; (\\tau - 1) r\\right) = \\begin{cases} \\tau\\, r & r \\ge 0 \\;\\;(\\text{under-predicted}) \\\\[4pt] (\\tau - 1)\\, r & r < 0 \\;\\;(\\text{over-predicted}) \\end{cases}',
-        '\\arg\\min_{c}\\;\\mathbb{E}\\!\\left[L_\\tau(Y - c)\\right] \\;=\\; Q_\\tau(Y) \\qquad \\tau = 0.5 \\;\\Rightarrow\\; \\tfrac{1}{2}\\text{MAE} \\;\\Rightarrow\\; \\text{median}',
-        '\\tau^{*} = \\frac{C_{\\text{under}}}{C_{\\text{under}} + C_{\\text{over}}} \\qquad \\text{stockout } 900,\\; \\text{holding } 100 \\;\\Rightarrow\\; \\tau^{*} = 0.9',
-      ],
+- You run a warehouse. Stock too little and you lose the sale and annoy the customer: say that costs 900 rupees per unit short. Stock too much and you carry the unit: say 100 rupees per unit spare.
+- **Quantile loss**, also called **pinball loss**, charges the two directions at different rates. Under-predicting costs tau per unit; over-predicting costs (1 - tau) per unit. Tau is a number between 0 and 1 that you choose.
+- Minimising it does not give you the middle of the data. It gives you the value with a tau fraction of the data below it - the **tau-th quantile**. Tau = 0.5 charges both sides equally, which is MAE halved, so it gives the median.
+- Tau is not something to tune by trial. It comes out of the two costs, and you can derive it in three lines with the warehouse numbers.
+- Start at some stock level and ask: should I stock one more unit? Call p the chance that demand comes in **above** your current level. That extra unit saves the 900 shortfall with probability p, and wastes 100 with probability 1 - p.
+- Expected gain from stocking it = 900p - 100(1 - p). Keep adding units while that is positive and stop when it reaches zero. Solve 900p = 100(1 - p), so 1000p = 100, so **p = 0.1**.
+- At the right stock level only 10% of demand is above you, which means 90% is below: you are stocking the **90th percentile**, and tau = 0.9. In general, tau = cost of being short / (cost of being short + cost of being over) = 900/1000.
+
+Fit with tau = 0.9 and the model deliberately aims high, running short about one day in ten. That is not a bias to fix. It is the answer the two costs asked for.`,
     },
     {
       type: 'intuition',
-      title: 'The bonus: prediction intervals for free',
-      md: `Fit the same model twice with two different τ and you stop shipping a number — you ship a range.
+      title: 'Two quantile fits give you a range instead of a number',
+      md: `Fit the same model twice with two different values of tau and you can stop shipping a single number.
 
-- Fit τ = 0.1 → a line with ~10% of actuals below it. Fit τ = 0.9 → ~90% below it.
-- The gap between them is an **80% prediction interval**. No Gaussian assumption, no bootstrap, no conformal machinery — just two fits.
-- Why it beats a confidence interval from a linear model: the width is learned per-row, so it can be narrow where the data is tight and wide where it is noisy. Real data is heteroscedastic (spread changes with x) and this handles it natively.
-- Sanity check you must run: on held-out data, is the fraction below the τ = 0.1 line actually near 0.1? If not, the quantiles are not calibrated and the interval is decoration.
-- Two known warts. **Quantile crossing**: models fitted independently can predict the 0.9 line *below* the 0.1 line for some rows — fix by sorting the outputs or fitting them jointly. And coverage is only approximate; if you need a guarantee, conformal prediction is the tool.
-- Where this pays off: delivery ETAs ("12–19 min", not "15 min"), demand planning, capacity forecasting, anything a human reads and makes a decision from.`,
-    },
-    {
-      type: 'code',
-      lang: 'python',
-      title: 'Two quantile fits become an interval — with the calibration check',
-      code: `import numpy as np
-from sklearn.ensemble import GradientBoostingRegressor
-
-rng = np.random.default_rng(0)
-X = rng.uniform(0, 10, 4000).reshape(-1, 1)
-y = 5 + 2 * X.ravel() + rng.normal(0, 1 + 0.4 * X.ravel())   # spread GROWS with x
-Xtr, Xte, ytr, yte = X[:3000], X[3000:], y[:3000], y[3000:]
-
-band = {}
-for tau in (0.1, 0.5, 0.9):
-    gb = GradientBoostingRegressor(loss='quantile', alpha=tau, max_depth=3,
-                                   n_estimators=200, random_state=0).fit(Xtr, ytr)
-    band[tau] = gb.predict(Xte)
-    print('tau=%.1f -> fraction of test rows BELOW the line: %.3f' % (tau, (yte < band[tau]).mean()))
-
-w = band[0.9] - band[0.1]
-print('80%% interval coverage = %.3f' % ((yte >= band[0.1]) & (yte <= band[0.9])).mean())
-print('interval width: x<2 -> %.2f    x>8 -> %.2f' % (w[Xte.ravel() < 2].mean(), w[Xte.ravel() > 8].mean()))
-
-# ---- real output ----
-# tau=0.1 -> fraction of test rows BELOW the line: 0.125
-# tau=0.5 -> fraction of test rows BELOW the line: 0.511
-# tau=0.9 -> fraction of test rows BELOW the line: 0.904
-# 80% interval coverage = 0.779
-# interval width: x<2 -> 3.69    x>8 -> 11.56`,
-      annotations: {
-        6: 'Noise std is 1 + 0.4x, so the target is heteroscedastic on purpose. A single MSE fit would report one error number and hide this completely.',
-        11: "sklearn spells pinball loss loss='quantile' with alpha=tau. LightGBM: objective='quantile', alpha=tau. XGBoost: reg:quantileerror.",
-        14: 'The calibration check, not an afterthought. 0.125 / 0.511 / 0.904 against targets 0.1 / 0.5 / 0.9 - close, and the 0.1 line is slightly loose, which is exactly the kind of thing you report rather than hide.',
-        24: 'Coverage 0.779 against a nominal 0.80. Quantile intervals are approximate, not guaranteed - say so before someone else does.',
-        25: 'The payoff line: the interval is 3.69 wide where the data is tight and 11.56 wide where it is noisy. One MSE number could never have told you that.',
-      },
+- Fit tau = 0.1 and you get a low line with roughly 10% of actual values beneath it. Fit tau = 0.9 and you get a high line with roughly 90% beneath it.
+- The gap between them is an **80% prediction interval**: about 80% of real values should land inside it. A delivery app can then promise "12 to 19 minutes" instead of a bare "15 minutes".
+- Because each line is learned from the data separately, the gap can be narrow where deliveries are predictable and wide where they are not. A single MSE number could never say that.
+- One check is compulsory before you show anyone the range, and it has a name: is the model **calibrated**? Calibrated means the promise the number makes is actually true in fresh data. The tau = 0.9 line promises that 90 of every 100 actual values fall below it, so go and count them on data the model has not seen. If you count 65, the line is not calibrated and the range is decoration.
+- The other check: the tau = 0.9 line must never dip below the tau = 0.1 line. Two separately fitted models can cross, which is nonsense. Sorting the two outputs for each row fixes it.`,
     },
     {
       type: 'intuition',
       title: 'The decision list',
-      md: `Four losses, four situations. Memorise the mapping, not the formulas.
+      md: `Four losses, four situations. Learn the mapping, not the formulas.
 
-- **Clean data, symmetric costs, you want the average** → **MSE**. It is the default for a reason: correct under Gaussian noise, best-behaved gradient, and every downstream tool (R², standard errors) assumes it.
-- **Outliers you cannot clean** → **MAE** if you genuinely want the median and can live with the gradient, **Huber** if you are training with gradient descent and want convergence to behave. Huber is the safe default of the two.
-- **Over- and under-prediction cost different amounts** → **quantile loss**, with τ read off the cost ratio, not tuned.
-- **Heavy-tailed target** (revenue, session length, income, city population) → before changing the loss, consider **log-transforming the target** and fitting MSE on log(y). Often that is all it needed: the tail was multiplicative, not an error.
-- One caveat with teeth: MSE on log(y) estimates the mean of log y. Exponentiate it and you get roughly the **geometric mean / conditional median** of y, *not* the mean of y. If someone downstream sums your predictions to a total, that total will be biased low. Duan's smearing estimator exists for this; knowing it is needed is the interview point.
-- First move on any outlier problem is still not a loss change. **Look at the rows.** A residual of 78 minutes is usually a bug — a unit mix-up, a test order, a missing value coded as 0 — and deleting it beats any amount of robust loss engineering.`,
-    },
-    {
-      type: 'note',
-      md: `The honest note about log-transforming, because it flatters you and people fall for it. RMSE computed **in log space** will look wonderful: a prediction of 100 against an actual of 200 is a log error of 0.69, which reads as tiny next to an error of 100 in the original units. You have not become accurate, you have changed the units so that large multiplicative errors look small. Rule: you may *train* in whatever space helps, but **report the error in the units the business uses** — and report it separately for the small and large targets, because a single averaged number in original units will be dominated by the tail you transformed away in the first place.`,
+- **Clean data, both directions of error equally bad, and you want an average** - MSE. It is the default for good reasons: well-behaved training, and everything downstream expects it.
+- **Outliers you cannot remove** - MAE if you genuinely want the median, Huber if you are training with gradient steps and want them to behave. Huber is the safer of the two.
+- **Being too low costs a different amount from being too high** - quantile loss, with tau computed from the two costs rather than tuned.
+- **You want to publish a range, not a point** - two quantile fits, then check calibration.
+- **Before any of that** - look at the actual rows driving the error. A residual of 78 minutes is usually a bug: a test order, minutes recorded as seconds, a missing value stored as 0. Deleting one wrong row beats any amount of clever loss engineering.`,
     },
     {
       type: 'intuition',
-      title: 'The sentences that make you sound senior',
-      md: `Every one of these is one line long, and each one ends an argument.
+      title: 'Worked case: eight deliveries, computed by hand',
+      md: `Eight deliveries, in minutes: **20, 22, 24, 26, 28, 30, 32, 178**. The last is a rider who took a wrong turn into another city. Predict one number.
 
-- *"MSE estimates the conditional mean, MAE the conditional median. Which one does the business want?"*
-- *"MSE is the maximum-likelihood loss under Gaussian noise. My residuals have a fat right tail, so that assumption is false here."*
-- *"Huber caps the gradient at δ — it is gradient clipping expressed as a loss."*
-- *"Our stockout costs 9× our holding cost, so τ = 0.9. I am fitting the 90th percentile, not the mean, on purpose."*
-- *"I fitted τ = 0.1 and τ = 0.9 to ship an interval instead of a point, and here is the held-out coverage."*
-- And the one that separates levels: *"Before I changed the loss, I looked at the 12 rows driving the error. Nine of them were data bugs."*`,
+- **The MSE answer** is the mean. The eight add to 360, and 360 / 8 = **45**.
+- **The MAE answer** is the median. Sorted, the two middle values are 26 and 28, so the median is (26 + 28) / 2 = **27**.
+- Score the prediction 27. Residuals: -7, -5, -3, -1, 1, 3, 5, 151. Absolute values add to 176, so MAE = 176 / 8 = **22.0**. Squares add to 22,920, so MSE = **2865** and RMSE = square root of 2865 = **53.5**.
+- Score the prediction 45. Residuals: -25, -23, -21, -19, -17, -15, -13, 133. Absolute values add to 266, so MAE = **33.25**. Squares add to 20,328, so MSE = **2541** and RMSE = **50.4**.
+- Read the two rows together. Prediction 27 wins on MAE (22.0 against 33.25). Prediction 45 wins on RMSE (50.4 against 53.5). Each answer wins on its own scoreboard, and neither is cheating.
+- Now the useful part. At prediction 27 the RMSE is 53.5 and the MAE is 22.0, a ratio of 2.4. From the RMSE section, a ratio far above 1 means a few rows carry most of the squared error. Here that single 178 contributes 22,801 of the 22,920 total - **99.5% of it**.
+
+The decision is no longer a maths question. If one 178-minute delivery is genuinely worse for the business than a lot of small misses, predict 45. If it was a data bug or a freak nobody will repeat, delete the row and predict around 26.`,
+    },
+    {
+      type: 'intuition',
+      title: 'The classic mistake, walked into on purpose',
+      md: `A team trains a delivery-time model with MSE, the standard default. It has been fine for months. One Monday the dashboard shows predictions far too high across the whole city, and the reported RMSE has tripled. Someone opens a ticket: **"the model is broken, roll it back."**
+
+- The roll-back happens. The old model returns. By Wednesday the new model, retrained on the same data, produces the same too-high predictions again, and now two people are convinced the training pipeline is corrupt.
+- Here is what actually happened. Sunday's data contained 30 orders whose delivery times were logged in **seconds** instead of minutes, so a normal 25-minute delivery arrived in the table as 1500.
+- Under MSE, one row with a residual of 1475 contributes about 2.2 million to the sum of squares. Thirty of them contribute 65 million. Ten thousand ordinary rows with residuals of about 5 contribute 250,000 in total.
+- So those 30 rows out of 10,030 - **0.3% of the data** - own more than 99% of the loss. The model did exactly what it was told: it moved the predictions towards the 30 rows, because that is where nearly all the cost was.
+- The model was not broken. The loss was doing its job on data that had a bug in it, and rolling back does nothing because the bug is in the input, not in the code.
+- The diagnosis that would have taken two minutes: sort the rows by absolute residual and read the top 20. The unit error is visible immediately. A second clue was already on the dashboard - the RMSE tripled while the MAE barely moved, and that gap is precisely the signature of a few rows carrying the error.
+
+The general lesson, and the reason this module exists: **MSE is not a neutral measurement, it is an instruction about what matters.** Feed it a handful of corrupt rows and it will faithfully rebuild your model around them. Before you change the loss and before you blame the model, go and look at the rows with the biggest residuals.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Practice problems',
+      md: `Pen and paper first. All the arithmetic is deliberately small.
+
+1. Four actual values are **4, 6, 8, 10** and the prediction is **7**. Compute the MSE, the RMSE and the MAE.
+2. For that same list of four values, which single prediction minimises MSE, and which minimises MAE? Now append a fifth value, **100**, and answer both again. How far did each answer move?
+3. Two residuals are **3** and **20**, and Huber uses delta = **5**. Compute what MSE charges for each, and what Huber charges for each. Which residual does the choice of loss change most?
+4. Delivering later than promised costs you 5 rupees per minute in refunds; delivering earlier costs 1 rupee per minute in an idle rider. What tau do you fit, and does the model then aim high or low?
+5. A model reports MAE 22 and RMSE 53.5 on a test set. A colleague says "the model has an accuracy problem, let us try a bigger network." What do you say, and what do you do first?`,
+    },
+    {
+      type: 'intuition',
+      title: 'Worked solutions',
+      md: `Check every step, not just the final number.
+
+1. Residuals are 4-7 = -3, 6-7 = -1, 8-7 = 1, 10-7 = 3. Squares 9, 1, 1, 9 add to 20, so **MSE = 20/4 = 5** and **RMSE = square root of 5 = 2.236**. Absolute values 3, 1, 1, 3 add to 8, so **MAE = 8/4 = 2**. RMSE sits above MAE, as always, because the errors are not all the same size.
+2. MSE is minimised by the mean, (4+6+8+10)/4 = **7**. MAE is minimised by the median, the middle of 6 and 8, which is also **7**. With 100 appended: the mean becomes 128/5 = **25.6**, and the median of 4, 6, 8, 10, 100 is the third value, **8**. So the MSE answer moved **18.6** and the MAE answer moved **1**. One row, an 18-fold difference in how far the two answers travelled.
+3. MSE charges 3 squared = **9** and 20 squared = **400**. Huber with delta 5: the residual 3 is inside the cut-off, so it costs half of 9 = **4.5**; the residual 20 is outside, so it costs 5 * (20 - 2.5) = **87.5**. The small residual barely changes in relative terms, while the big one drops from 400 to 87.5. That is the point of Huber: it only changes its mind about the outliers.
+4. Being late means the actual time came in above your promise, so late is the under-prediction direction and costs 5. Early costs 1. So tau = 5/(5+1) = **0.833**. The model aims **high**, promising a time that about 83% of deliveries beat, so it is late about one time in six.
+5. The ratio RMSE/MAE is 53.5/22 = 2.4, far above 1, so the squared error is concentrated in a few rows. A typical prediction is off by about 22, not 53. A bigger network will fit those few extreme rows harder, which is the opposite of what you want if they are bad data. **Do first:** sort the test rows by absolute residual and read the worst 20, checking for unit errors, test records and missing values coded as zero. Only if they are genuine should you talk about the model - and then the honest options are Huber, a separate model for that segment, or a new feature that explains them.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Beyond the basics - skip this on your first read',
+      md: `Everything above stands on its own. None of this is needed to explain why one bad row moves an MSE fit.
+
+- **Where the mean and the median come from.** These two facts have a common origin. If you assume the noise around the true value follows the bell-shaped **normal (Gaussian)** distribution, then the most likely setting of the model is exactly the one minimising the sum of squared errors - MSE is the maximum-likelihood answer under Gaussian noise. Swap the assumption to the **Laplace** distribution, which has heavier tails, and the same argument produces MAE. You will meet maximum likelihood properly in the Math subject. The practical takeaway: MSE quietly assumes big errors are rare, and if your errors have a fat tail that assumption is false.
+- **log-cosh** is Huber without the knob. It is squared-ish for small residuals and straight-ish for big ones, with a fixed transition instead of a delta you choose. It is smooth everywhere and available as a drop-in loss in gradient-boosting libraries.
+- **Log-transforming the target.** If the target is heavy-tailed - revenue, session length, city population - a common move is to fit MSE on log(y) instead of y. Two warnings. RMSE measured in log space always looks wonderful, because a prediction of 100 against an actual of 200 is a log error of about 0.69; you did not become accurate, you changed the units. And undoing the log gives roughly a median rather than a mean, so if anyone adds your predictions into a total, that total comes out too low.
+- **Quantile crossing and guarantees.** Independently fitted quantile lines can cross; fitting them jointly or sorting the outputs fixes it. And the 80% coverage of a quantile range is approximate, not promised - when you need a real guarantee there is a family of methods called conformal prediction that provides one.
+- **Capping influence is a general idea.** Huber limits how hard any one row can push. The same idea appears elsewhere in training under other names, so if you have seen a technique that clips how large an update may be, it is solving this problem from the other end.`,
     },
   ],
   quiz: [
     {
-      question: 'You train the same model twice, once with MSE and once with MAE, and the predictions differ noticeably. What does that tell you?',
+      question: 'You fit the same model twice, once with MSE and once with MAE, and the two sets of predictions differ noticeably. What does that tell you?',
       options: [
+        { text: 'One of the two runs did not finish training', explanation: 'Possible, but not the first conclusion. The two losses have different best answers by design, so a gap between them is expected rather than a bug.' },
         {
-          text: 'One of the two runs did not converge',
-          explanation: 'Possible but not the first conclusion. Both losses have different optima by design — they estimate different quantities.',
+          text: 'The target has outliers or is skewed, so its mean and its median genuinely differ',
+          explanation: 'Correct. MSE lands on the mean and MAE on the median, and those two agree only on clean, symmetric data. A gap between the fits is a signal to go and look at the tail.',
         },
-        {
-          text: 'The target distribution is skewed or has outliers — mean and median genuinely differ',
-          explanation: 'Correct. MSE targets the conditional mean, MAE the conditional median. They agree only on symmetric, outlier-free data, so a gap between them is a diagnostic: go look at the tail.',
-        },
-        {
-          text: 'MAE is simply less accurate',
-          explanation: '"Accurate" is undefined until you say against which loss. MAE wins on MAE, MSE wins on MSE. Neither is more correct in the abstract.',
-        },
+        { text: 'MAE is simply the less accurate loss', explanation: 'Accurate against which price list? MAE wins on MAE and MSE wins on MSE. Neither is more correct in the abstract.' },
       ],
       correct: 1,
     },
     {
-      question: 'Why is MSE, specifically, the maximum-likelihood loss under Gaussian noise?',
+      question: 'Adding one 90 to the list 10, 11, 12, 13, 14 moved the MSE answer from 12 to 25 but left the MAE answer near 12. Why?',
       options: [
-        { text: 'Because the Gaussian is symmetric', explanation: 'Symmetry alone gives you many losses — MAE is symmetric too. The link is more specific than that.' },
-        { text: 'Because the Gaussian has finite variance', explanation: 'True but irrelevant; the derivation never uses it. What matters is the shape of the exponent.' },
+        { text: 'MAE ignores the outlier completely', explanation: 'It does not ignore it. The 90 still contributes 78 to the MAE total, more than all five good rows combined. Its influence is limited, not zero.' },
         {
-          text: 'Because the Gaussian density has exp(−(y−ŷ)²/2σ²), so its log-likelihood is a negative constant times the sum of squared errors',
-          explanation: 'Correct. Take logs, everything except the exponent becomes a constant, and maximising the log-likelihood collapses exactly to minimising the sum of squares. Assume Laplace noise instead and the same derivation yields MAE.',
+          text: 'Under MSE the bad row costs 78 squared = 6,084, which outweighs the five good rows; under MAE it costs 78, which does not',
+          explanation: 'Correct. Squaring turns a distant row into an enormous cost, so moving the prediction towards it pays. Without the square, giving up 13 minutes on five rows to gain 13 on one row is a losing trade.',
         },
-      ],
-      correct: 2,
-    },
-    {
-      question: 'What is the practical consequence of MAE having a constant ±1 gradient?',
-      options: [
-        {
-          text: 'Steps do not shrink as you approach the optimum, so training oscillates around it unless you decay the learning rate',
-          explanation: 'Correct. MSE has gradient −2r, which self-anneals as r → 0. MAE does not, so the final convergence is noisy and a learning-rate schedule becomes mandatory rather than optional.',
-        },
-        { text: 'Training diverges', explanation: 'It does not diverge — the gradient is bounded, which is precisely why MAE is stable against outliers. The problem is at the destination, not on the way there.' },
-        { text: 'The loss becomes non-convex', explanation: 'MAE is convex. A kink at zero is not the same as non-convexity.' },
-      ],
-      correct: 0,
-    },
-    {
-      question: 'Huber loss with a very large δ behaves like which loss?',
-      options: [
-        { text: 'MAE, because it always ends up linear', explanation: 'Backwards. A very large δ means almost every residual falls inside the quadratic region and never reaches the linear branch.' },
-        { text: 'Quantile loss with τ = 0.5', explanation: 'That is half of MAE — the small-δ limit, not the large-δ one.' },
-        {
-          text: 'MSE, since almost every residual stays inside the quadratic region',
-          explanation: 'Correct. δ → ∞ recovers MSE (up to the ½ factor); δ → 0 recovers MAE. δ is literally the dial between the two, which is the cleanest way to state what Huber is.',
-        },
-      ],
-      correct: 2,
-    },
-    {
-      question: 'A stockout costs ₹900 and holding one extra unit costs ₹100. What τ do you fit, and what does the model then predict?',
-      options: [
-        { text: 'τ = 0.5 — the median demand, since that minimises average error', explanation: 'That is the symmetric answer, and it is the mistake: it assumes the two costs are equal when they differ by 9×.' },
-        {
-          text: 'τ = 0.9 — the 90th percentile of demand',
-          explanation: 'Correct. τ = C_under/(C_under + C_over) = 900/1000 = 0.9, so the model deliberately over-forecasts, stocking out roughly 10% of the time. This is the newsvendor result.',
-        },
-        { text: 'τ = 0.1 — because you only want to be short 10% of the time', explanation: 'Right intent, wrong number: τ = 0.1 fits the 10th percentile, which makes you stock LESS and run out about 90% of the time.' },
+        { text: 'MSE found the wrong minimum', explanation: 'It found the exact minimum: 25 is the mean of the dirty list. The loss moved, not the search.' },
       ],
       correct: 1,
     },
     {
-      question: 'Your target is revenue, extremely right-skewed. You fit MSE on log(revenue) and report an excellent RMSE. What should you be worried about?',
+      question: 'A test set gives MAE 40 and RMSE 180. What is the first thing this tells you?',
       options: [
+        { text: 'The model is uniformly bad, since both numbers are large', explanation: 'The two numbers disagree by a factor of 4.5, so they cannot both describe a typical row. That disagreement is the information.' },
         {
-          text: 'RMSE in log space flatters you, and exponentiating the fit gives roughly a conditional median, so any total your predictions are summed into will be biased low',
-          explanation: 'Correct on both halves. Log space compresses large multiplicative errors into small numbers, and exp(E[log y]) is the geometric mean, not E[y]. Report error in business units and apply a smearing correction if anyone sums your output.',
+          text: 'A small number of rows carry most of the squared error, because RMSE only runs far above MAE when the errors are very uneven',
+          explanation: 'Correct. Equal-sized errors make RMSE equal MAE; unevenness is the only thing that pushes RMSE up. Sort by absolute residual and read the worst rows.',
         },
-        { text: 'Nothing — log-transforming is the standard fix for skew', explanation: 'It is a standard and often correct fix, but it silently changes both the quantity being estimated and the scale the error is reported on. Those are the two things you must declare.' },
-        { text: 'Logs make the loss non-differentiable', explanation: 'log is perfectly differentiable for positive targets. That is not the issue.' },
+        { text: 'RMSE must have been computed on a different test set', explanation: 'It need not be. The same rows produce this gap whenever the error distribution has a long tail.' },
       ],
-      correct: 0,
+      correct: 1,
     },
     {
-      question: 'You fit τ = 0.1 and τ = 0.9 separately and use the gap as an 80% prediction interval. What must you check before shipping it?',
+      question: 'What does Huber loss with a very large delta behave like?',
       options: [
-        { text: 'That both models used the same learning rate', explanation: 'Irrelevant to whether the interval is honest. Optimisation settings are not the risk here.' },
-        { text: 'That the interval is symmetric around the τ = 0.5 fit', explanation: 'It should NOT be symmetric on skewed data — asymmetry is the feature you paid for by fitting quantiles instead of assuming a Gaussian.' },
+        { text: 'MAE, since it always becomes a straight line eventually', explanation: 'Backwards. A large delta means almost every residual stays inside the squared branch and never reaches the straight one.' },
+        { text: 'Quantile loss with tau = 0.5', explanation: 'That is MAE halved, which is the small-delta end, not the large-delta end.' },
         {
-          text: 'Held-out coverage, plus that the 0.9 line never dips below the 0.1 line',
-          explanation: 'Correct. Independently fitted quantiles can cross (fix by sorting or joint fitting), and nominal 80% is only approximate — measured coverage here was 0.779. Report the measured number, not the nominal one.',
+          text: 'MSE, because almost every residual falls inside the squared region',
+          explanation: 'Correct. A huge delta gives MSE and a tiny delta gives MAE, so delta is literally the dial between the two.',
         },
       ],
       correct: 2,
     },
     {
-      question: 'Adding a single extreme row to a five-point dataset moved the MSE-optimal constant from 12.0 to 25.0 and the MAE-optimal one from 12.0 to 12.5. Why the 26× difference?',
+      question: 'Being short one unit costs 900 and holding one spare costs 100. What tau do you fit, and what does the model then predict?',
       options: [
-        { text: 'MAE ignores the outlier entirely', explanation: 'It does not ignore it — the outlier still contributes 78 units of loss, more than every other row combined. Its influence on the fitted value is bounded, not zero.' },
+        { text: 'tau = 0.5, the median demand, since that minimises the average error', explanation: 'That is the symmetric answer, and it assumes the two costs are equal when one is nine times the other.' },
         {
-          text: 'MSE weights each row by its residual, so the outlier pulls with force proportional to 78, while MAE pulls with a constant force of 1 regardless of distance',
-          explanation: 'Correct. The gradient of r² is 2r (unbounded), the gradient of |r| is ±1 (bounded). Bounded influence is the entire definition of a robust loss — and it is why Huber, which caps the gradient at δ, lands at 12.5 too.',
+          text: 'tau = 900/(900+100) = 0.9, so the model predicts the 90th percentile of demand',
+          explanation: 'Correct. At the right stock level the chance of running short is 100/1000 = 0.1, which puts 90% of demand below your prediction. You run short about one day in ten, deliberately.',
         },
-        { text: 'MSE is not convex, so it found a different local minimum', explanation: 'MSE in the prediction is a perfect parabola — one global minimum, no local traps. 25.0 is the true optimum; the loss, not the optimiser, is what moved.' },
+        { text: 'tau = 0.1, because you only want to be short 10% of the time', explanation: 'Right intent, wrong number. tau = 0.1 fits the 10th percentile, which stocks far less and runs short about 90% of the time.' },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'You fit tau = 0.1 and tau = 0.9 and want to publish the gap as an 80% range. What must you check first?',
+      options: [
+        { text: 'That the range is symmetric around the tau = 0.5 fit', explanation: 'It should not be symmetric on skewed data. Asymmetry is exactly what you paid for by fitting quantiles.' },
+        {
+          text: 'Calibration on held-out data - does about 80% of fresh actual values really land inside the range - and that the high line never dips below the low line',
+          explanation: 'Correct. Calibrated means the promise the number makes is true in data the model has not seen. Separately fitted quantile lines can also cross, which is nonsense; sorting the two outputs per row fixes that.',
+        },
+        { text: 'That both fits used the same learning rate', explanation: 'Irrelevant to whether the published range is honest.' },
       ],
       correct: 1,
     },
@@ -486,127 +459,104 @@ print('interval width: x<2 -> %.2f    x>8 -> %.2f' % (w[Xte.ravel() < 2].mean(),
     {
       question: 'When would you use MAE instead of MSE, and what do you give up?',
       answer:
-        'Use MAE when the target has outliers you cannot remove, or when the business genuinely wants a typical value rather than an average — "half of deliveries arrive within X" is a median statement. MAE is robust because the gradient of |r| is bounded at ±1, so no single row can dominate the fit. What you give up: (1) that same constant gradient never shrinks near the optimum, so training oscillates and needs a decaying learning rate; (2) the derivative is undefined at r = 0, so frameworks fall back to the subgradient 0; (3) you are now estimating the conditional median, so if anyone downstream sums your predictions to get a total, that total will be biased whenever the distribution is skewed. If the only motivation is outlier robustness, Huber is usually the better trade — it buys the robustness without breaking the gradient.',
+        'Use MAE when the target has outliers you cannot remove, or when the business wants a typical value rather than an average - "half of deliveries arrive within X minutes" is a median statement. MAE is robust because a distant row is charged its distance and nothing more, so no single row can buy the model. Concretely: adding one 90 to 10, 11, 12, 13, 14 moves the MSE answer from 12 to 25 and the MAE answer by at most half a minute. What you give up is the training signal. MAE\'s slope is a constant plus or minus one, so steps never shrink as you approach the answer and training wobbles unless you decay the step size by hand. If robustness is the only motivation, Huber is usually the better trade.',
       isCaseBased: false,
     },
     {
-      question: 'Explain the statistical meaning of MSE and MAE. What is each one actually estimating?',
+      question: 'What is each loss actually estimating? Argue it, do not just assert it.',
       answer:
-        'MSE minimised over a constant gives the mean: argmin_c E[(Y−c)²] = E[Y]. MAE gives the median: argmin_c E[|Y−c|] = median(Y). Conditioned on x, an MSE-trained model estimates E[y|x] and an MAE-trained model estimates median(y|x). Both come from maximum likelihood under different noise assumptions: Gaussian noise makes the log-likelihood proportional to −Σ(y−ŷ)², so MLE is exactly least squares; Laplace noise gives −Σ|y−ŷ|, so MLE is exactly MAE. That framing is the useful one, because it converts "which loss?" into "what does my noise actually look like?" — a question you can answer by plotting a residual histogram.',
+        'MSE lands on the mean and MAE on the median. For MSE: each row is charged in proportion to its distance, so a far-away row pulls proportionally harder, and the point that balances those pulls is exactly a mean. For MAE: every row pulls with the same force of one, in the direction of its own side, so the balance point is wherever there are as many rows above as below - the median. Quantile loss is the asymmetric version: it charges tau per unit for rows above the prediction and one minus tau for rows below, so the balance sits where the fraction of data below equals tau. That reframes "which loss?" as "which summary of the target does the business want?", which is a question a product owner can actually answer.',
       isCaseBased: false,
     },
     {
-      question: 'Derive, or at least argue clearly, why minimising E[(Y−c)²] gives the mean and E[|Y−c|] gives the median.',
+      question: 'Define RMSE and explain why it is never smaller than MAE.',
       answer:
-        'For MSE: differentiate E[(Y−c)²] with respect to c to get −2E[Y−c], set it to zero, and you get c = E[Y]. For MAE: the derivative of |Y−c| with respect to c is −1 when Y > c and +1 when Y < c, so the derivative of the expectation is P(Y < c) − P(Y > c). Setting that to zero requires exactly as much probability mass above c as below it — the definition of the median. The mechanism worth naming out loud is that the squared loss weights each point by its distance while the absolute loss weights every point equally by count, which is precisely why one is dragged by outliers and the other is not.',
+        'RMSE is the square root of the mean squared error, which puts the number back into the units of the target so a person can read it. It is never smaller than MAE because squaring exaggerates large errors more than small ones. Take two rows with errors of 2 and 2: MAE is 2 and RMSE is 2 as well. Now spread the same total across errors of 1 and 3: MAE is still 2, but the mean square is 5 and RMSE is 2.236. Any unevenness pushes RMSE up while leaving MAE alone, and only perfectly equal errors make them meet. That makes the ratio a free diagnostic - near 1 means uniform errors, while 3 or 4 means a handful of rows own most of the squared error and should be read one by one.',
       isCaseBased: false,
     },
     {
-      question: 'What is Huber loss, why does it exist, and how do you choose δ?',
+      question: 'What is Huber loss, and how do you choose delta?',
       answer:
-        'Huber is ½r² for |r| ≤ δ and δ(|r| − δ/2) beyond, with the two pieces built so both value and slope match at the boundary — quadratic where you want smooth self-slowing convergence, linear where you want an outlier to stop screaming. It exists because MSE has the good gradient and the bad temper while MAE has the reverse. The key derivative fact: the gradient magnitude is capped at δ, so Huber is gradient clipping written as a loss. Choosing δ: set it at the residual size you would call suspicious in domain units, or standardise residuals and use δ ≈ 1.345σ, which keeps ~95% of MSE efficiency on truly Gaussian data (scikit-learn defaults to epsilon 1.35). δ → ∞ recovers MSE, δ → 0 recovers MAE. If you would rather not tune it, log-cosh is the smooth cousin with the same shape and no knob.',
+        'Huber charges half the square for residuals within delta and a straight line beyond it, with the two pieces joined so the value and the slope match at the boundary. That gives the squared loss\'s well-behaved, self-slowing training near the answer and the absolute loss\'s bounded cost far away. The fact to carry is that its slope never exceeds delta, so no single row can push the model harder than delta no matter how wrong it is. Choose delta as the residual size you would call suspicious in the units of the problem - for delivery times in minutes, perhaps two or three. A very large delta collapses Huber into MSE and a very small one into MAE, so delta is the dial between them. If you would rather not choose, log-cosh has the same shape with no knob.',
       isCaseBased: false,
     },
     {
-      question: 'Case: you forecast daily demand for a warehouse. Stocking out costs about 9× more than holding one extra unit. Your current model uses MSE and stocks out roughly half the time. What do you change and why?',
+      question: 'Case: you forecast daily warehouse demand. Running short costs about nine times more than holding a spare unit. Your MSE model runs short roughly half the time. What do you change?',
       answer:
-        'Nothing is broken — the model is doing exactly what MSE asks. MSE estimates the conditional mean, and actual demand lands above the mean roughly half the time, so you stock out roughly half the time. Switch to pinball loss with τ = C_under/(C_under + C_over) = 9/(9+1) = 0.9, which fits the 90th percentile of demand and brings the stockout rate to about 10%. τ is computed from the cost ratio, not tuned by cross-validation, and that is the point being tested. Then check on held-out data that ~10% of actuals really do exceed the forecast, because a miscalibrated quantile silently reintroduces the original problem. Two extensions worth mentioning: also fit τ = 0.1 to give planners an interval rather than a number, and revisit τ whenever the cost ratio changes — a promotion or a perishable SKU changes it, and the model should follow.',
+        'Nothing is broken; the model is doing what MSE asks. MSE estimates the mean, and real demand lands above the mean about half the time, so you run short about half the time. Switch to quantile loss with tau derived from the costs, not tuned. The derivation: at the right stock level, one extra unit saves the shortfall cost with probability p and wastes the holding cost with probability one minus p. Setting 9p = 1(1 - p) gives p = 0.1, so only 10% of demand should sit above you and tau = 0.9 - the 90th percentile. Then verify on held-out data that about 10% of actual demand really does exceed the forecast, because a miscalibrated quantile quietly reintroduces the original problem. Two follow-ups worth naming: fit tau = 0.1 as well so planners get a range rather than a point, and recompute tau whenever the cost ratio changes, which a promotion or a perishable item does immediately.',
       isCaseBased: true,
     },
     {
-      question: 'Case: your house-price model has MAE ₹40k and RMSE ₹180k on the same test set. What does that gap tell you, and what do you do next?',
+      question: 'Case: your house-price model reports MAE 40 thousand and RMSE 180 thousand on the same test set. What does the gap mean and what do you do?',
       answer:
-        'RMSE being 4.5× MAE means the squared-error average is dominated by a small number of very large residuals — RMSE is always ≥ MAE, and the ratio grows with the heaviness of the error tail. So this is not a uniformly mediocre model; it is a decent model with a handful of disasters. Next steps in order: (1) sort by absolute residual and read the worst 20 rows — in practice a large share turn out to be data bugs (unit mix-ups, a listing in a different currency, a missing field coded as 0) and deleting or fixing them beats any loss engineering; (2) if the extremes are genuine, ask whether they are a distinct segment (luxury properties, commercial listings) that deserves its own model or a feature that currently is not there; (3) only then change the loss — Huber to cap their influence, or log-transform the target if the spread is multiplicative. And decide which metric to report from the cost function: if being ₹1M wrong is more than 25× as bad as being ₹40k wrong, RMSE is the honest headline and MAE is the flattering one.',
+        'RMSE 4.5 times MAE means the squared error is concentrated in a few very wrong rows, since equal-sized errors would make the two numbers meet. So this is not a uniformly mediocre model, it is a decent model with a handful of disasters. In order: first, sort by absolute residual and read the worst twenty rows - in practice a large share turn out to be data bugs such as a listing in a different currency, a unit mix-up, or a missing field stored as zero, and fixing those beats any loss engineering. Second, if the extremes are genuine, ask whether they are a distinct segment - luxury or commercial properties - that deserves its own model or a feature that does not exist yet. Third, and only then, change the loss: Huber to cap their influence, or a log transform if the spread is multiplicative. Finally, decide which number to headline from the cost function: if being a million wrong is far worse than being forty thousand wrong, RMSE is the honest headline and MAE is the flattering one.',
       isCaseBased: true,
     },
     {
-      question: 'How do you produce prediction intervals without assuming Gaussian errors?',
+      question: 'How would you publish a range instead of a single predicted number?',
       answer:
-        'Fit the same model twice with pinball loss at τ = 0.1 and τ = 0.9; the gap between the two predictions is an ~80% prediction interval. No distributional assumption, and because each quantile is learned per-row the interval widens exactly where the data is noisy — in my demo it was 3.69 wide at low x and 11.56 wide at high x on deliberately heteroscedastic data, which no single Gaussian error bar could express. The mandatory checks: measured held-out coverage (I got 0.779 against a nominal 0.80 — approximate, not guaranteed) and quantile crossing, since independently fitted models can put the 0.9 line below the 0.1 line for some rows; sort the outputs or fit jointly. Alternatives to name: bootstrap or ensemble spread, which capture model uncertainty rather than target spread, and conformal prediction when you need an actual finite-sample coverage guarantee.',
+        'Fit the same model twice with quantile loss, once at tau = 0.1 and once at tau = 0.9. The gap between the two predictions is roughly an 80% prediction range, and because each line is learned from the data the gap widens exactly where the target is noisy and narrows where it is predictable - something a single error number cannot express. Two checks before publishing. Calibration: on held-out data, count what fraction of actual values falls inside the range, and report that measured number rather than the nominal 80%. Crossing: two independently fitted models can put the high line below the low line for some rows, which is nonsense, so sort the pair per row or fit them jointly. If you need a genuine coverage guarantee rather than an approximate one, that is what conformal prediction is for.',
       isCaseBased: false,
     },
     {
-      question: 'Is MAE differentiable? Answer precisely.',
+      question: 'Case: a colleague swapped MSE for Huber and says the model got worse on the holdout. Diagnose it.',
       answer:
-        'Almost everywhere, but not at r = 0. For r ≠ 0 the derivative is −sign(r), a constant ±1. At r = 0 there is a kink and no derivative exists; the subdifferential is the whole interval [−1, 1], and libraries pick 0 by convention. Practically it never matters, because hitting exactly zero in floating point has measure zero and the subgradient is a valid descent direction anyway. What does matter is the neighbourhood of zero: the gradient magnitude stays at 1 right up to the optimum, so there is no automatic step-size annealing and the parameters wobble instead of settling — which is the real cost of MAE, and why Huber replaces that neighbourhood with a quadratic.',
-      isCaseBased: false,
-    },
-    {
-      question: 'Your target is heavy-tailed — customer lifetime value, say. Walk me through your options.',
-      answer:
-        'Four in escalating order. (1) Look at the tail first: is it real behaviour or bad data? Whales are real; a ₹40 crore order from a test account is not. (2) Log-transform the target and fit MSE on log(y), which is right when the spread is multiplicative — but declare the two consequences: RMSE in log space looks great without you being more accurate, and exponentiating the fit gives roughly a conditional median, so summed totals come out biased low unless you apply a smearing correction. (3) Change the loss — Huber or log-cosh to bound the tail\'s influence while keeping a usable gradient. (4) Change the problem: heavy-tailed targets are often better as a two-stage model (probability of any spend × expected spend given spend) or as a quantile problem, because for CLV nobody actually wants the mean — they want "who will be in the top decile", which is a ranking or classification task. Naming that reframe is usually what the question is looking for.',
-      isCaseBased: false,
-    },
-    {
-      question: 'Case: a colleague swapped MSE for Huber and the model got worse on the holdout. Diagnose it.',
-      answer:
-        'Start with what "worse" was measured on. If the holdout metric is still RMSE, this is expected and not a regression: Huber deliberately refuses to chase large residuals, so it will lose on the metric that rewards chasing them. You changed the training objective without changing the evaluation objective, so the comparison is rigged. If the metric was MAE or business cost and it still got worse, then look at δ — δ far below the typical residual scale turns Huber into MAE on the entire dataset, throwing away the smooth quadratic region for no robustness benefit; standardise the residuals or set δ from their empirical spread rather than copying a default. Third possibility: there were no meaningful outliers to begin with, in which case the data was Gaussian enough that MSE was already the maximum-likelihood answer and Huber can only lose efficiency. The general principle to state: train loss and eval metric must be chosen together, and a loss swap should always be judged on the metric the business actually pays for.',
+        'First ask what "worse" was measured on. If the holdout number is still RMSE, this is expected and not a regression: Huber deliberately refuses to chase large residuals, so it will lose on the number that rewards chasing them. The training objective changed and the evaluation objective did not, so the comparison is rigged. If the measurement was MAE or a business cost and it still got worse, look at delta. A delta far below the typical residual size turns Huber into MAE across the whole dataset, throwing away the smooth region for no robustness benefit; set delta from the actual spread of the residuals rather than copying a default. Third possibility: there were no meaningful outliers, in which case MSE was already the right answer and Huber can only lose. The principle to state is that the training loss and the reported number must be chosen together, and a loss swap is judged on what the business actually pays for.',
       isCaseBased: true,
-    },
-    {
-      question: 'Why does every regression loss have to be differentiable, and how do MAE and Huber get away with their corners?',
-      answer:
-        'Gradient-based training needs a direction to step in, and that direction comes from the derivative of the loss with respect to the prediction. Strictly, what you need is a subgradient at every point plus differentiability almost everywhere — not differentiability everywhere. MAE qualifies: it is convex with a single non-differentiable point, and the subgradient 0 at that point is a valid descent direction. Huber qualifies more comfortably: it is C¹, built so that value and slope match at |r| = δ, so there is no corner at all. This is also the distinction between a loss and a metric — a metric like R² or MAPE never needs a gradient because nothing optimises it directly, which is exactly why you are free to train on one thing and report another, as long as you say which is which.',
-      isCaseBased: false,
     },
   ],
   flashcards: [
-    { front: 'MSE — formula and what it estimates', back: 'mean((y − ŷ)²). Quadratic penalty, smooth everywhere, derivative −2r shrinks near the optimum. Estimates the conditional MEAN.' },
-    { front: 'MSE and maximum likelihood', back: 'Assume Gaussian noise: the density exponent is −(y−ŷ)²/2σ², so max log-likelihood ⇔ min sum of squares. MSE IS Gaussian MLE. (MAE is Laplace MLE.)' },
-    { front: 'MAE — formula and what it estimates', back: 'mean(|y − ŷ|). Linear penalty so outliers cannot dominate. Estimates the conditional MEDIAN.' },
-    { front: "MAE's two gradient problems", back: 'Derivative is a constant ±1 — no slowdown near the optimum, so training wobbles and needs a decaying LR. Undefined at r = 0; subgradient ∈ [−1,1], libraries use 0.' },
-    { front: 'The outlier demo, with numbers', back: '[10,11,12,13,14] fits 12.0 under every loss. Add one 90: MSE-fit → 25.0 (+13.0), MAE/Huber-fit → 12.5 (+0.5). 26× difference from one row.' },
-    { front: 'Huber loss', back: '½r² for |r| ≤ δ, then δ(|r| − δ/2). Smooth near zero AND robust far out. δ→∞ is MSE, δ→0 is MAE.' },
-    { front: 'The one Huber fact to memorise', back: 'It caps the gradient magnitude at δ. No row pushes harder than δ, however wrong it is — gradient clipping expressed as a loss.' },
-    { front: 'Picking δ (and log-cosh)', back: 'Set δ where a residual becomes "an outlier" in domain units, or δ ≈ 1.345σ on standardised residuals (~95% Gaussian efficiency; sklearn epsilon=1.35). log-cosh: same shape, smooth everywhere, no knob.' },
-    { front: 'Pinball / quantile loss', back: 'max(τr, (τ−1)r) with r = y − ŷ. Charges τ per unit of under-prediction, (1−τ) per unit of over-prediction. Minimiser = the τ-th quantile. τ=0.5 is ½·MAE ⇒ median.' },
-    { front: 'Choosing τ, and free intervals', back: 'τ = C_under/(C_under + C_over) — arithmetic, not tuning. Stockout 900 vs holding 100 ⇒ τ = 0.9. Fit τ=0.1 and τ=0.9 for an 80% prediction interval; check held-out coverage and quantile crossing.' },
+    { front: 'MSE, in words and in one number', back: 'Mean Squared Error: square each residual, average them. Penalises big misses far more than small ones. Its best single prediction is the MEAN. On 10, 11, 12, 13, 14 predicting 12: (4+1+0+1+4)/5 = 2.0.' },
+    { front: 'MAE, in words and in one number', back: 'Mean Absolute Error: make each residual positive with abs(), average them. A big miss costs exactly as much as it is big. Its best single prediction is the MEDIAN. Same five rows predicting 12: (2+1+0+1+2)/5 = 1.2.' },
+    { front: 'RMSE, and why it is never below MAE', back: 'RMSE = square root of MSE, which puts the error back into the target\'s units. Errors 2 and 2 give MAE 2 and RMSE 2. Errors 1 and 3 give MAE 2 and RMSE 2.236. Only equal-sized errors make them meet; unevenness raises RMSE alone.' },
+    { front: 'The outlier demo, with numbers', back: '10, 11, 12, 13, 14 fits 12.0 under both losses. Append one 90 and the MSE fit jumps to 25.0 while the MAE fit stays between 12 and 12.5. One row out of six, a thirteen-minute difference.' },
+    { front: 'The training-signal trade-off', back: 'MSE\'s slope shrinks as the residual shrinks, so training slows down and settles. MAE\'s slope is a flat plus or minus one, so steps never shrink and training wobbles at the optimum. Robustness and a good training signal pull in opposite directions.' },
+    { front: 'Huber loss', back: 'Half the square inside delta, a straight line beyond it, joined so value and slope match. Smooth near zero AND bounded far out. Its slope never exceeds delta, so no row can push harder than delta. Large delta gives MSE, small delta gives MAE.' },
+    { front: 'Quantile (pinball) loss', back: 'Charges tau per unit for under-predicting and 1 - tau for over-predicting. Its best prediction is the tau-th quantile. tau = 0.5 is MAE halved, so the median. tau = 0.9 aims deliberately high.' },
+    { front: 'Choosing tau, and free ranges', back: 'tau = cost of being short / (cost short + cost over). Short 900, holding 100 gives tau = 0.9, so stock the 90th percentile. Fit tau = 0.1 and 0.9 for an 80% range, then check calibration: does about 80% of held-out data really land inside?' },
   ],
   mindmapMarkdown: `- Regression Losses: MSE, MAE, Huber & Quantile
   - The core idea
-    - A loss defines what "typical" means
-    - You are choosing what to be wrong about
-    - r = y − ŷ (actual − prediction)
+    - A loss is a price list for residuals
+    - residual r = actual - prediction
+    - Choosing a loss = choosing what to be wrong about
   - MSE
-    - mean((y − ŷ)²), derivative −2r
-    - Quadratic: doubling error quadruples cost
-    - Smooth everywhere → gradient self-slows
-    - Estimates the conditional MEAN
-    - = maximum likelihood under Gaussian noise
-    - Fails when noise is not Gaussian
+    - square each residual, then average
+    - big misses cost far more than small ones
+    - best single prediction = the MEAN
+    - slope shrinks near the answer: training settles
+    - one bad row can own the whole loss
+  - RMSE
+    - square root of MSE, back in the target's units
+    - never smaller than MAE
+    - equal errors: RMSE = MAE
+    - uneven errors: RMSE climbs, MAE does not
+    - ratio RMSE/MAE is a free diagnostic
   - MAE
-    - mean(|y − ŷ|), derivative −sign(r)
-    - Linear: outliers cannot dominate
-    - Estimates the conditional MEDIAN
-    - = MLE under Laplace noise
-    - Gradient constant ±1 → wobble at the optimum
-    - Undefined at 0 → subgradient convention (0)
-  - Outlier demo
-    - [10,11,12,13,14] → all losses fit 12.0
-    - add one 90 → MSE 25.0, MAE/Huber 12.5
-    - MSE outlier weight 608× the good rows
+    - average of abs(residual)
+    - best single prediction = the MEDIAN
+    - outliers cannot buy the model
+    - slope is a flat +1 or -1, so training wobbles
+    - sharp corner at r = 0, libraries use 0
+  - The outlier demo
+    - 10 11 12 13 14 fits 12.0 both ways
+    - add one 90: MSE fit 25.0, MAE fit 12
   - Huber
-    - ½r² inside δ, linear beyond
-    - Smooth near zero AND robust far out
-    - Caps gradient magnitude at δ
-    - δ ≈ 1.345σ, or "where a miss is suspicious"
-    - δ→∞ = MSE, δ→0 = MAE
-    - log-cosh = smooth cousin, no knob
+    - half-square inside delta, straight line beyond
+    - joined so value and slope match
+    - slope never exceeds delta
+    - big delta = MSE, small delta = MAE
   - Quantile (pinball)
-    - max(τr, (τ−1)r) — asymmetric
-    - Minimiser = the τ-th quantile
-    - τ = C_under/(C_under + C_over)
-    - Inventory: stockout 9× holding → τ = 0.9
-    - τ=0.1 + τ=0.9 → 80% prediction interval
-    - Check coverage; watch quantile crossing
-  - Decision list
-    - Clean data → MSE
-    - Outliers you cannot clean → MAE / Huber
-    - Asymmetric costs → quantile
-    - Heavy tail → log-transform the target
-    - But logs change what "average" means
-    - And log-space RMSE flatters you
-    - First move: read the worst rows, not the loss`,
+    - tau per unit under, 1-tau per unit over
+    - best prediction = the tau-th quantile
+    - tau = C_short / (C_short + C_over)
+    - short 900, hold 100 gives tau = 0.9
+    - two fits give an 80% range
+    - check calibration and crossing
+  - First move on any outlier problem
+    - sort by absolute residual, read the worst rows
+    - units, test orders, zeros for missing values
+    - delete the bug before changing the loss`,
 }
 
 export default m
