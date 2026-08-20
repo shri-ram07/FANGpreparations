@@ -65,6 +65,19 @@ export function Component() {
 
       {module ? (
         <>
+          {module.assumes && module.assumes.length > 0 && (
+            <aside className="mt-5 max-w-[70ch] rounded-lg border border-line px-4 py-3">
+              <p className="text-[13px] font-semibold tracking-wide text-ink-soft uppercase">Before you start</p>
+              <ul className="mt-1 space-y-0.5">
+                {module.assumes.map((a) => (
+                  <li key={a} className="text-[15px]">
+                    {a}
+                  </li>
+                ))}
+              </ul>
+            </aside>
+          )}
+
           <aside className="mt-5 max-w-[70ch] border-l-[3px] border-accent bg-raised px-4 py-3">
             <p className="text-[13px] font-semibold tracking-wide text-ink-soft uppercase">Why this matters for FAANG</p>
             <p className="mt-1">{module.whyItMatters}</p>

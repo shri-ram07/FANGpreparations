@@ -70,6 +70,9 @@ export interface Module {
   level: Level
   title: string
   whyItMatters: string
+  /** Plain-language list of what the reader should already know, shown at the top
+   *  of the page. Fixes the "term defined four modules later" problem. */
+  assumes?: string[]
   estMinutes: number
   sections: Section[]
   quiz: MCQ[] // 5–10

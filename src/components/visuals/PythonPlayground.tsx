@@ -5,6 +5,9 @@ interface Props {
   /** Shown in static mode and as the fallback when the runtime can't load. */
   precomputedOutput?: string
   caption?: string
+  /** 1-based line number -> what that line does. Keyed against the ORIGINAL code,
+   *  so the notes still make sense after the reader edits the box. */
+  annotations?: Record<number, string>
 }
 
 type Mode =
@@ -19,7 +22,7 @@ const TIMEOUT_MS = 20_000
 // Static-first: an editable code box with precomputed output. "Run live" spawns
 // a worker that pulls the Pyodide runtime (~12 MB, CDN-cached). Interrupt =
 // worker.terminate() + respawn — no SharedArrayBuffer/COOP-COEP needed.
-export default function PythonPlayground({ code: initialCode = '', precomputedOutput = '', caption }: Props) {
+export default function PythonPlayground({ code: initialCode = '', precomputedOutput = '', caption, annotations = {} }: Props) {
   const [code, setCode] = useState(initialCode)
   const [mode, setMode] = useState<Mode>({ kind: 'static' })
   const [output, setOutput] = useState<string[]>([])
@@ -91,6 +94,8 @@ export default function PythonPlayground({ code: initialCode = '', precomputedOu
 
   const live = mode.kind === 'ready' || mode.kind === 'running'
 
+  const srcLines = initialCode.split('\n')
+
   return (
     <figure className="my-4">
       <figcaption className="flex items-baseline justify-between rounded-t-lg border border-b-0 border-line bg-raised px-4 py-1.5">
@@ -104,6 +109,23 @@ export default function PythonPlayground({ code: initialCode = '', precomputedOu
         rows={Math.min(Math.max(code.split('\n').length + 1, 4), 18)}
         className="block w-full resize-y border border-line bg-bg p-4 font-mono text-[13.5px] leading-relaxed focus:border-accent focus:outline-none"
       />
+      {Object.keys(annotations).length > 0 && (
+        <div className="border border-t-0 border-line bg-raised px-4 py-3">
+          <p className="mb-1.5 text-[11px] font-semibold tracking-wide text-ink-soft uppercase">Line by line</p>
+          <ul className="space-y-1.5">
+            {Object.entries(annotations)
+              .map(([k, note]) => [Number(k), note] as const)
+              .sort((a, b) => a[0] - b[0])
+              .map(([n, note]) => (
+                <li key={n} className="text-[13px] leading-snug">
+                  <code className="mr-2 rounded bg-bg px-1 font-mono text-[12px] text-ink-soft">{n}</code>
+                  <span className="font-mono text-[12px] text-ink-soft">{srcLines[n - 1]?.trim()}</span>
+                  <span className="mt-0.5 block text-ink">{note}</span>
+                </li>
+              ))}
+          </ul>
+        </div>
+      )}
       <div className="flex flex-wrap items-center gap-3 rounded-b-lg border border-t-0 border-line px-4 py-2">
         {mode.kind === 'static' && (
           <button onClick={init} className="rounded-md bg-accent px-3 py-1 text-sm font-medium text-white hover:bg-accent/90">

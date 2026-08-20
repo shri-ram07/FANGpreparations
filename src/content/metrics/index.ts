@@ -38,10 +38,10 @@ export const metrics: SubjectDef = {
     - Precision@K, MAP, NDCG
     - BLEU, ROUGE, perplexity; IoU, mAP`,
   modules: [
-    mod('metrics-l0-loss-vs-metric', 0, 'Loss vs Metric: The Distinction That Exposes Candidates', 40, () => import('./l0-loss-vs-metric')),
+    mod('metrics-l0-loss-vs-metric', 0, 'Loss vs Metric: The Number the Model Uses, and the Number You Judge By', 45, () => import('./l0-loss-vs-metric')),
     mod('metrics-l1-regression-losses', 1, 'Regression Losses: MSE, MAE, Huber & Quantile', 50, () => import('./l1-regression-losses')),
     mod('metrics-l1-classification-losses', 1, 'Classification Losses: Cross-Entropy, Focal & Hinge', 55, () => import('./l1-classification-losses')),
-    mod('metrics-l2-confusion-matrix', 2, 'The Confusion Matrix: Precision, Recall & F1', 55, () => import('./l2-confusion-matrix')),
+    mod('metrics-l2-confusion-matrix', 2, 'The Confusion Matrix: Precision, Recall & F1', 44, () => import('./l2-confusion-matrix')),
     mod('metrics-l2-roc-pr-curves', 2, 'ROC, AUC & PR Curves: Threshold-Free Judgement', 55, () => import('./l2-roc-pr-curves')),
     mod('metrics-l2-regression-metrics', 2, 'Regression Metrics: R², Adjusted R² & the MAPE Trap', 45, () => import('./l2-regression-metrics')),
     mod('metrics-l3-unsupervised-metrics', 3, 'Unsupervised Metrics: Inertia, Silhouette & Agreement Scores', 45, () => import('./l3-unsupervised-metrics')),

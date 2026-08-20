@@ -16,6 +16,10 @@ interface Props {
 export function CodeBlock({ code, lang, title, annotations = {} }: Props) {
   const [tokens, setTokens] = useState<ThemedToken[][] | null>(null)
   const [open, setOpen] = useState<number | null>(null)
+  // Notes are SHOWN BY DEFAULT. They used to be click-only, which meant a first
+  // read saw bare code and none of the explanation. Collapsing is the opt-in now.
+  const [showAll, setShowAll] = useState(true)
+  const noteCount = Object.keys(annotations).length
 
   useEffect(() => {
     let live = true
@@ -37,7 +41,18 @@ export function CodeBlock({ code, lang, title, annotations = {} }: Props) {
       {(title ?? lang) && (
         <figcaption className="flex items-baseline justify-between rounded-t-lg border border-b-0 border-line bg-raised px-4 py-1.5">
           <span className="text-sm font-medium">{title}</span>
-          <span className="font-mono text-[11px] text-ink-soft">{lang}</span>
+          <span className="flex items-center gap-3">
+            {noteCount > 0 && (
+              <button
+                type="button"
+                onClick={() => setShowAll((v) => !v)}
+                className="font-sans text-[11px] text-ink-soft underline-offset-2 hover:text-accent hover:underline"
+              >
+                {showAll ? 'Hide line notes' : `Show line notes (${noteCount})`}
+              </button>
+            )}
+            <span className="font-mono text-[11px] text-ink-soft">{lang}</span>
+          </span>
         </figcaption>
       )}
       <pre className={`overflow-x-auto border border-line bg-bg p-4 text-[13.5px] leading-relaxed ${title ?? lang ? 'rounded-b-lg' : 'rounded-lg'}`}>
@@ -58,10 +73,12 @@ export function CodeBlock({ code, lang, title, annotations = {} }: Props) {
                         </span>
                       ))
                     : plainLines[i]}
-                  {note && <span className="ml-2 align-middle font-sans text-[11px] text-energy select-none">●</span>}
+                  {note && !showAll && (
+                    <span className="ml-2 align-middle font-sans text-[11px] text-energy select-none">●</span>
+                  )}
                   {'\n'}
                 </span>
-                {note && open === n && (
+                {note && (showAll || open === n) && (
                   <span className="mb-1 block border-l-2 border-energy bg-hinglish py-1 pl-3 font-sans text-[13px] whitespace-normal text-ink">
                     {note}
                   </span>
