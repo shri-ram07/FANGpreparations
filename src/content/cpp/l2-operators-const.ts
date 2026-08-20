@@ -1,0 +1,474 @@
+import type { Module } from '../types'
+
+const m: Module = {
+  id: 'cpp-l2-operators-const',
+  subjectId: 'cpp',
+  level: 2,
+  title: 'Operator Overloading, friend & const-correctness',
+  whyItMatters:
+    '"What does the const after the parentheses mean?" is a five-second filter question in C++ rounds — answer it cleanly and the interview moves on; fumble it and everything after is uphill. Operator overloading is how vector, string and every STL type manage to feel built-in, and const-correctness is the discipline that keeps million-line C++ codebases reviewable. One Money class carries the whole module.',
+  estMinutes: 40,
+  sections: [
+    {
+      type: 'intuition',
+      title: 'Operators are functions with famous names',
+      md: `\`a + b\` on your own type is not magic — it is a function call in costume: \`operator+(a, b)\` or \`a.operator+(b)\`. This is C++'s cousin of Python dunders (\`__add__\` and friends from the Python module) — same idea, different spelling.
+
+- **Operator overloading** = writing that function yourself, so your type plugs into syntax readers already know.
+- Taste: overload when the symbol's meaning is obvious before opening the definition — \`+\` on Money, \`==\` on Vector2D, \`<<\` for printing.
+- Abuse: a \`+\` that saves a user to the database, a \`--\` that sends an email. If readers must open the definition to guess, you built a trap.
+- The rule interviewers want to hear: **overload to match existing intuition, never to invent notation.**
+- Limits: you cannot create new symbols or change precedence. You only give existing symbols meaning *for your types*.`,
+    },
+    {
+      type: 'code',
+      lang: 'cpp',
+      title: 'Money: the member operators',
+      code: `class Money {
+  long long paise;                        // smallest unit: no float rounding
+public:
+  explicit Money(long long p = 0) : paise(p) {}
+
+  Money& operator+=(const Money& rhs) {   // a += b  is  a.operator+=(b)
+    paise += rhs.paise;
+    return *this;                         // hand back yourself
+  }
+
+  bool operator==(const Money& rhs) const {
+    return paise == rhs.paise;
+  }
+
+  Money operator-() const {               // unary minus: -m
+    return Money(-paise);
+  }
+};`,
+      annotations: {
+        4: 'explicit blocks silent int -> Money conversion. On a money type, "was that 500 rupees or 500 paise?" is a production bug — make callers write Money(500) out loud.',
+        6: 'Mutating operators (+=, -=, =) live INSIDE the class as members: they change *this, so they need direct access to it.',
+        8: 'Returning Money& (yourself) matches how built-in += behaves and lets expressions chain. Returning void here would make Money feel alien.',
+        11: 'The const after the parens: comparing must not mutate. Without it, two const Money objects could not even be compared.',
+        15: 'Unary minus as a member takes no parameters — the single operand IS *this. It returns a NEW Money; negating should not edit the original.',
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'Member or non-member? The symmetry test',
+      md: `\`operator+\` has two possible homes: inside the class (\`a.operator+(b)\`) or outside (\`operator+(a, b)\`). The choice is not style — it changes what compiles.
+
+- A member operator makes the LEFT operand special: it must already be your type. For a type with implicit conversions, \`m + 2\` works (2 converts into the parameter) but \`2 + m\` dies — the int on the left has no member \`operator+\` for your type.
+- A non-member takes both sides as ordinary parameters, so BOTH get the same conversion chances. That is the **symmetric conversions** argument.
+- The working convention: mutators (\`+=\`, \`-=\`) are members; symmetric operators (\`+\`, \`==\`) are non-members *built on* the members.
+- Four operators get no choice: \`=\`, \`[]\`, \`()\`, \`->\` MUST be members. Language rule — memorize the list.`,
+    },
+    {
+      type: 'code',
+      lang: 'cpp',
+      title: 'operator+ built from operator+=',
+      code: `// Non-member: both operands get identical treatment.
+Money operator+(Money lhs, const Money& rhs) {
+  lhs += rhs;         // reuse the member: one implementation, zero drift
+  return lhs;
+}
+
+Money a(100), b(250);
+Money c = a + b;      // 350; a and b untouched`,
+      annotations: {
+        2: 'lhs comes in BY VALUE on purpose: the copy is your result buffer. Mutate the copy, return it — the caller\'s object never moves.',
+        3: 'The addition logic lives in ONE place (+=). If Money grows a currency field tomorrow, you fix one function and + is correct for free.',
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'operator<<: the one you cannot make a member',
+      md: `\`std::cout << m\` — look at the left operand. It is a \`std::ostream\`, a class you do not own.
+
+- A member \`operator<<\` would have to live inside \`std::ostream\`. You cannot add members to the standard library. Dead end.
+- So printing is ALWAYS a non-member: \`operator<<(std::ostream&, const Money&)\`.
+- Problem: a non-member cannot see \`paise\` — private. Two exits: a public getter, or declare the function a **friend** — a non-member the class explicitly allows to touch its private members.
+- Return \`std::ostream&\` — the same stream, by reference. That is what makes \`cout << a << b\` work: each \`<<\` returns the stream so the next one has something to write to.`,
+    },
+    {
+      type: 'code',
+      lang: 'cpp',
+      title: 'The printing idiom, in full',
+      code: `#include <ostream>
+
+class Money {
+  long long paise;
+public:
+  explicit Money(long long p = 0) : paise(p) {}
+
+  // The class grants ONE outside function access to paise:
+  friend std::ostream& operator<<(std::ostream& os, const Money& m);
+};
+
+std::ostream& operator<<(std::ostream& os, const Money& m) {
+  os << "Rs " << m.paise / 100 << '.';
+  if (m.paise % 100 < 10) os << '0';   // pad: 5 paise -> .05
+  return os << m.paise % 100;
+}
+
+// std::cout << Money(49905) << '\\n';  // prints: Rs 499.05`,
+      annotations: {
+        9: 'The friend declaration sits INSIDE the class: access is granted by the class, never taken by the function. Encapsulation is pierced only where Money itself consented.',
+        12: 'A free function — not a member of anything. It reads m.paise directly, which only the friend grant makes legal.',
+        15: 'Returning os is the chaining trick: cout << a << b evaluates as (cout << a) << b, and each call hands the stream to the next.',
+      },
+    },
+    {
+      type: 'note',
+      md: '`friend` discipline: a `friend` function (or a whole `friend class`) sees private and protected members as if it were written inside the class. Every friend widens the surface you must re-audit when an invariant changes — so grant it only where the design forces it: `operator<<`, and tightly-coupled pairs like a container and its iterator. If a class has five friends, it does not have a private section — it has a rumor.',
+    },
+    {
+      type: 'intuition',
+      title: 'const after the parens: a promise the compiler enforces',
+      md: `\`std::size_t size() const\` — that trailing const is a signed contract: "this method mutates nothing".
+
+- Inside a const member function, \`this\` has type \`const Wallet*\`. Every write to a member field is a **compile error**, not a code-review hope.
+- Const objects — and \`const Wallet&\` references — can ONLY call const member functions. Forget the const on a getter and every read-only caller in the codebase breaks.
+- So the habit: every member function that does not mutate gets the const. Not polish — plumbing.
+- Position matters: const BEFORE the parens belongs to the return type. const AFTER the parens is the promise.`,
+    },
+    {
+      type: 'code',
+      lang: 'cpp',
+      title: 'const methods, const parameters, and mutable',
+      code: `class Wallet {
+  std::vector<Money> coins;
+  mutable long long peeks = 0;    // mutable: writable even under const
+public:
+  void add(const Money& m) { coins.push_back(m); }
+
+  std::size_t size() const {      // the promise: mutates nothing
+    ++peeks;                      // legal ONLY because peeks is mutable
+    return coins.size();
+  }
+};
+
+void audit(const Wallet& w) {     // read-only view: no copy, no edits
+  w.size();                       // OK — size() signed the const contract
+  // w.add(Money(5));             // compile error: add() is not const
+}`,
+      annotations: {
+        3: 'mutable exempts ONE field from the const promise. Everything else in a const method stays locked.',
+        7: 'Inside this function, this is a const Wallet*. Writing coins.push_back(...) here would not compile.',
+        13: 'const Wallet& is the default way to pass anything bigger than a pointer: no copy (reference) and no mutation (const). It also binds to temporaries — audit(Wallet{}) works.',
+        15: 'Through a const reference, only const members are callable. The compiler is checking signatures, not trusting comments.',
+      },
+    },
+    {
+      type: 'note',
+      md: '`mutable` is the escape hatch, not a loophole. Legit uses: caches, memo tables, access counters, a mutex you must lock inside a const getter — things that change the object\'s *physical* bytes without changing its *logical* value. That distinction is the contract: const promises callers the observable value stays put. A mutable field that changes what callers can observe is a lie with compiler assistance.',
+    },
+    {
+      type: 'intuition',
+      title: 'const and pointers: read right-to-left',
+      md: `\`const int* p\` and \`int* const p\` are different creatures, and mixing them up is a classic screen-out question. The decoder: **read the declaration right-to-left.**
+
+- \`const int* p\` — "p is a pointer to an int that is const". Arrow free to move; cell locked (through p).
+- \`int* const p\` — "p is a const pointer to int". Arrow frozen; cell editable.
+- \`const int* const p\` — both locked.
+- The const locks whatever sits immediately left of it; a const at the very front locks the pointed-at type.
+- Step through the diagram — watch which half freezes in each frame.`,
+    },
+    {
+      type: 'visual',
+      component: 'PointerBoxDiagram',
+      props: {
+        title: 'const T* vs T* const, drawn',
+        notice: 'Read each declaration right-to-left. The const locks either the cell (the data) or the arrow (the pointer) — never both unless you write it twice.',
+        leftLabel: 'pointers',
+        rightLabel: 'the data',
+        frames: [
+          {
+            note: 'const int* p = &a — right-to-left: "p is a pointer to an int that is const". The arrow is free; the cells are locked through p.',
+            stack: [{ name: 'const int* p', to: 'a' }],
+            heap: [
+              { id: 'a', value: '10', label: 'int a' },
+              { id: 'b', value: '20', label: 'int b' },
+            ],
+          },
+          {
+            note: '*p = 99 — REFUSED at compile time. Through p the data is read-only, even though a itself is a plain, writable int. const T* restricts the view, not the object.',
+            stack: [{ name: 'const int* p', to: 'a' }],
+            heap: [
+              { id: 'a', value: '10', label: 'int a' },
+              { id: 'b', value: '20', label: 'int b' },
+            ],
+          },
+          {
+            note: 'p = &b — compiles fine. The pointer itself was never const, so the arrow reseats freely. Cells stay locked through p wherever it points.',
+            stack: [{ name: 'const int* p', to: 'b' }],
+            heap: [
+              { id: 'a', value: '10', label: 'int a' },
+              { id: 'b', value: '20', label: 'int b' },
+            ],
+          },
+          {
+            note: 'int* const q = &a — right-to-left: "q is a const pointer to int". The opposite deal: the ARROW is welded to a, the cell is open.',
+            stack: [
+              { name: 'const int* p', to: 'b' },
+              { name: 'int* const q', to: 'a' },
+            ],
+            heap: [
+              { id: 'a', value: '10', label: 'int a' },
+              { id: 'b', value: '20', label: 'int b' },
+            ],
+          },
+          {
+            note: '*q = 99 — works. The data was never const through q, so the write lands: a is now 99.',
+            stack: [
+              { name: 'const int* p', to: 'b' },
+              { name: 'int* const q', to: 'a' },
+            ],
+            heap: [
+              { id: 'a', value: '99', label: 'int a' },
+              { id: 'b', value: '20', label: 'int b' },
+            ],
+          },
+          {
+            note: 'q = &b — REFUSED. The arrow is frozen for life. Want both locks? const int* const r — frozen arrow AND locked cell.',
+            stack: [
+              { name: 'const int* p', to: 'b' },
+              { name: 'int* const q', to: 'a' },
+            ],
+            heap: [
+              { id: 'a', value: '99', label: 'int a' },
+              { id: 'b', value: '20', label: 'int b' },
+            ],
+          },
+        ],
+      },
+    },
+    {
+      type: 'code',
+      lang: 'cpp',
+      title: 'operator[]: the const/non-const pair',
+      code: `class Ledger {
+  std::vector<Money> rows;
+public:
+  Money& operator[](std::size_t i)             { return rows[i]; }
+  const Money& operator[](std::size_t i) const { return rows[i]; }
+};
+
+void report(const Ledger& led) {   // const view of the ledger
+  Money first = led[0];            // compiler picks the const overload
+  // led[0] += Money(1);           // error: const Money& refuses +=
+}`,
+      annotations: {
+        4: 'The non-const overload hands back a writable Money& — on a mutable Ledger, led[0] += Money(1) just works. This is why [] must be a member: it needs to return a reference into YOUR storage.',
+        5: 'Same name, same parameters — the trailing const alone makes it a different function. The compiler picks by the constness of the object. std::vector does exactly this.',
+        10: 'The const overload returns const Money&: callers can read row 0 but += on it will not compile. The const-ness of the container flows out through the return type.',
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'Const correctness is viral — and that is the point',
+      md: `Declare one parameter \`const Wallet&\` and the compiler starts pulling a thread.
+
+- Inside that function you can only call const methods of Wallet. If \`size()\` forgot its const — compile error.
+- So you mark \`size() const\`. Now everything *size()* calls must be const too. The requirement propagates outward until the whole call chain has declared itself.
+- The interview sentence: **const is viral — one const parameter forces every function it touches to declare its honesty, and the compiler audits the entire chain.**
+- This is also why you cannot "add const later" to a mature codebase in an afternoon. Start const-correct from line one; retrofitting means fighting the whole graph at once.
+- The payoff compounds: \`const T&\` parameters accept temporaries, skip copies, and document read-only intent — while the compiler, not the reviewer, guarantees it.`,
+    },
+  ],
+  quiz: [
+    {
+      question: 'Why can operator<< for printing Money not be a member function of Money?',
+      options: [
+        {
+          text: 'The left operand of cout << m is std::ostream — and you cannot add members to a class you do not own',
+          explanation: 'Correct. A member operator makes its class the LEFT operand. Here the left side is the stream, so the function would have to live inside std::ostream — impossible. Hence: non-member, usually friend.',
+        },
+        {
+          text: 'It could be a member of Money; non-member is just the popular style',
+          explanation: 'As a member of Money it would be called as m << cout — Money on the left. That is backwards and nobody could write cout << m.',
+        },
+        {
+          text: 'Member functions are not allowed to take stream parameters',
+          explanation: 'Members can take any parameter type, streams included. The problem is which operand is on the LEFT.',
+        },
+      ],
+      correct: 0,
+    },
+    {
+      question: 'What exactly does the compiler enforce inside `std::size_t size() const`?',
+      options: [
+        {
+          text: 'this becomes const Wallet* — any write to a member field or call to a non-const member is a compile error',
+          explanation: 'Correct. The trailing const changes the type of this. Mutation attempts fail at compile time, not review time. mutable fields are the single exemption.',
+        },
+        {
+          text: 'The return value becomes read-only for the caller',
+          explanation: 'The return type is unchanged — that would be a const BEFORE the parens (in the return type), not after.',
+        },
+        {
+          text: 'Nothing — it is an optimizer hint, like inline',
+          explanation: 'It is a hard type-system rule with compile errors attached, not a hint. (And it is what makes the method callable on const objects at all.)',
+        },
+      ],
+      correct: 0,
+    },
+    {
+      question: 'Given `int a = 1, b = 2; const int* p = &a; int* const q = &a;` — which line fails to compile?',
+      options: [
+        { text: 'p = &b;', explanation: 'Compiles. p itself is not const — the arrow reseats freely. Only the data seen through p is locked.' },
+        { text: '*q = 7;', explanation: 'Compiles. q is a const POINTER to plain int: the arrow is frozen but the cell is fully writable.' },
+        {
+          text: '*p = 7;',
+          explanation: 'Correct — this fails. Right-to-left: p is a pointer to an int that is const, so writing through p is refused even though a is a plain int.',
+        },
+      ],
+      correct: 2,
+    },
+    {
+      question: 'In `Money operator+(Money lhs, const Money& rhs)`, why is lhs taken by value?',
+      options: [
+        {
+          text: 'The copy is the result buffer: mutate it with += and return it, leaving the caller\'s object untouched',
+          explanation: 'Correct. + must not modify its operands but must produce a new value — so you copy the left one on the way in, add into the copy, and return it.',
+        },
+        { text: 'References cannot bind to temporaries, so by-value is required', explanation: 'const references DO bind to temporaries — rhs proves it in the same signature. That is not the reason.' },
+        { text: 'Pass-by-value is always faster than pass-by-reference', explanation: 'Usually the opposite for big objects. The by-value lhs is a deliberate design (you need a copy anyway), not a speed trick.' },
+      ],
+      correct: 0,
+    },
+    {
+      question: 'A free function needs to read Money\'s private paise field. How does friend make that legal?',
+      options: [
+        { text: 'The function declares itself a friend of Money in its own definition', explanation: 'Backwards — if functions could grant themselves access, private would mean nothing.' },
+        {
+          text: 'Money writes the friend declaration inside its own class body, granting that one function access',
+          explanation: 'Correct. friend is granted BY the class, never taken by the outsider. The class controls exactly who pierces its encapsulation.',
+        },
+        { text: 'The compiler grants it automatically to any function taking a const Money&', explanation: 'Parameter types grant no access. Without the class-side friend declaration, m.paise is a compile error in any outside function.' },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'void audit(const Wallet& w) calls w.add(Money(5)), and add() is not const. What happens?',
+      options: [
+        {
+          text: 'Compile error — through a const reference, only const member functions are callable',
+          explanation: 'Correct. The compiler cannot prove add() leaves the Wallet unchanged (its signature says otherwise), so the call is refused before the program exists.',
+        },
+        { text: 'It runs, but the mutation is silently discarded afterwards', explanation: 'C++ never "discards" mutations — there is no rollback machinery. The protection is refusing to compile.' },
+        { text: 'It throws a std::const_violation exception at runtime', explanation: 'No such exception exists. const is enforced entirely at compile time, which is exactly what makes it free.' },
+      ],
+      correct: 0,
+    },
+    {
+      question: 'What is `mutable` for?',
+      options: [
+        {
+          text: 'Letting a specific field be written inside const member functions — for caches and counters that do not change the logical value',
+          explanation: 'Correct. It preserves logical constness: physical bytes change (a memo, a peek counter, a mutex), the observable value does not.',
+        },
+        { text: 'Making a field safe to share between threads', explanation: 'mutable says nothing about threads. If anything it adds risk: two const readers may now race on the mutable field — you still need a mutex.' },
+        { text: 'Making an entire const object writable again', explanation: 'It applies per-field, and only to the fields you mark. The rest of the object stays locked inside const methods.' },
+      ],
+      correct: 0,
+    },
+  ],
+  interviewQuestions: [
+    {
+      question: 'How do you decide whether an operator should be a member or a non-member?',
+      answer:
+        'Three-part rule. (1) No choice: =, [], (), -> must be members — language rule. (2) Mutators (+=, -=, unary ++) are members: they modify *this and belong to it. (3) Symmetric binary operators (+, ==, <) are non-members built on the members, because a member makes the left operand special — with implicit conversions, m + 2 compiles but 2 + m does not, since the int on the left has no member operator+. A non-member gives both operands equal conversion chances. Bonus pattern to name: operator+(Money lhs, const Money& rhs) takes lhs by value as the result buffer and reuses += inside — one implementation, no drift.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Why is operator<< a non-member and typically a friend? Is there a friendless alternative?',
+      answer:
+        'Non-member is forced: in cout << m the left operand is std::ostream, and a member operator would have to live inside ostream — you cannot extend the standard library. friend is then the usual convenience: the free function needs the private fields to format them. The friendless alternative is a public accessor or to_string()/print() method that the free operator<< calls. Tradeoff: friend keeps the field private to everyone except one named function; a public getter opens the data to the entire world just to serve printing. friend is actually the MORE encapsulated option here — the class names exactly one trusted outsider.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Explain what the const after a member function\'s parameter list actually does — mechanically.',
+      answer:
+        'It changes the type of the hidden this parameter from Wallet* to const Wallet*. Consequences: (1) inside the function, writing any member field or calling any non-const member is a compile error; (2) the function becomes callable on const objects and through const references — which non-const members are not; (3) it participates in overloading: size() and size() const are different functions, and the compiler picks by the constness of the object — exactly how vector\'s operator[] serves both const and mutable containers. The one-liner: const-before-parens belongs to the return type, const-after-parens is a contract on *this.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Decode these three and give the trick for never mixing them up: const int* p, int* const p, const int* const p.',
+      answer:
+        'Read right-to-left. const int* p: "p is a pointer to an int that is const" — the pointer reseats freely, the data is read-only through it. int* const p: "p is a const pointer to int" — the pointer is frozen at initialization, the data is writable through it. const int* const p: both — frozen pointer, locked data. Worth adding: const T* restricts the VIEW, not the object — the pointee itself may be a plain int that others mutate freely. The right-to-left reading resolves any declaration, including the messy ones.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Case: a teammate adds a lazily-computed cached total to Report. getTotal() must write the cache, so they delete the const from getTotal() — and 40 call sites taking const Report& stop compiling. They propose const_cast inside instead. Your call?',
+      answer:
+        'Neither. The right tool is mutable: mark the cache fields (cachedTotal, cacheValid) mutable, restore const on getTotal(). This is the textbook case — the cache is physical state, not logical state; callers observe the same total either way, so the const contract stays honest. Why not the alternatives: removing const punishes 40 correct call sites for one implementation detail and erodes const-correctness codebase-wide; const_cast-then-write is undefined behavior if any Report is ever genuinely const (const objects may live in read-only memory). Tradeoff to volunteer: mutable + const implies thread-visible mutation under a "read-only" call — two threads calling getTotal() concurrently now race on the cache, so pair it with a mutable std::mutex or std::atomic. That answer names logical vs physical constness, UB, and concurrency — the full checklist.',
+      isCaseBased: true,
+    },
+    {
+      question: 'Case: Money\'s constructor is implicit — Money(long long). Code review finds `if (total == 100)` and `100 + total` compiling all over the codebase, and one bug where 500 rupees was recorded as 500 paise. Product likes the terse syntax. What do you change and what do you tell them?',
+      answer:
+        'Make the constructor explicit. The terse syntax IS the bug factory: with implicit conversion, every bare integer silently becomes Money, and nothing in the type system asks "paise or rupees?" — that is exactly how the 500 bug shipped. After explicit, comparisons and arithmetic require Money(100) or better, named factories: Money::fromRupees(5), Money::fromPaise(500) — self-documenting at every call site. Tradeoff stated honestly: you lose one-character convenience and touch every implicit call site once; you gain that an entire bug class no longer compiles. On a money type that trade is not close. General rule: single-argument constructors are explicit by default; implicit conversion is something you justify, not something you get for free.',
+      isCaseBased: true,
+    },
+    {
+      question: 'Why does operator[] usually come as a const/non-const pair? What breaks with only the non-const version?',
+      answer:
+        'The non-const overload returns T& so callers can write led[0] += x. But a non-const member is uncallable through const Ledger& — so with only that overload, every read-only function taking const Ledger& cannot even READ an element. The const overload (const T& operator[](size_t) const) fixes it: callable on const objects, returns a const reference so the container\'s constness flows out through the return type. The two differ only by trailing const — that alone makes them distinct overloads, selected by the constness of the object. std::vector ships exactly this pair; it is the canonical const-correctness pattern.',
+      isCaseBased: false,
+    },
+    {
+      question: 'What does "const correctness is viral" mean? Is that a bug or a feature?',
+      answer:
+        'One const T& parameter means you can only call const methods on it; marking those methods const constrains everything THEY call, and the requirement propagates through the whole call graph until every function has declared whether it mutates. Feature, deliberately: the compiler becomes an auditor of read-only claims across the entire chain — a guarantee no code review scales to. The cost is real too: it must be adopted from day one, because retrofitting const into a large codebase means fighting the whole propagation at once (the classic "const poisoning" complaint). The interview sentence: one const forces the chain honest.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Where is your line between tasteful operator overloading and abuse?',
+      answer:
+        'The test: does the symbol mean to readers what it means everywhere else? Tasteful — arithmetic on value types (Money, Vector2D, complex), == and < with value semantics, [] on containers, << for streaming (a historical oddity, but 30 years of convention made it intuition). Abuse — operators that perform business actions (+ that persists to a database), operators whose meaning needs the definition opened (& for string concat), and asymmetric surprises (== that mutates a cache visibly). Also name the hard limits: no new symbols, no precedence changes — overloading a*b + c still parses with built-in precedence, whatever your types think. Principle of least surprise, stated as a rule: overload to match existing intuition, never to invent notation.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Why does operator+= return Money& while operator+ returns Money by value? Could + return a reference to avoid the copy?',
+      answer:
+        'operator+= returns *this by reference because the result IS the (modified) left operand — matching built-in behavior and allowing chaining. operator+ must produce a NEW value: its result is a local object, and returning a reference to a local is the classic dangling-reference bug — the object dies at the closing brace, the caller reads freed stack. So + returns by value, and that is fine: RVO (return value optimization) and move semantics make the "copy" cheap-to-free in practice. Rule of thumb worth saying: mutators return *this by reference; value-producing operators return by value, never by reference.',
+      isCaseBased: false,
+    },
+  ],
+  flashcards: [
+    { front: 'Right-to-left decoder for pointer const', back: 'const int* p — arrow free, cell locked. int* const p — arrow frozen, cell open. const int* const p — both locked.' },
+    { front: 'const after the parens — one line', back: 'this becomes const T*: no member writes, no non-const calls. Only const members are callable on const objects/refs.' },
+    { front: 'operator<< signature', back: 'friend std::ostream& operator<<(std::ostream& os, const T& x) — non-member (ostream is the left operand), returns os so << chains.' },
+    { front: 'Operators that MUST be members', back: '=, [], (), -> — language rule. Everything else may be a non-member.' },
+    { front: 'Non-member operator+ pattern', back: 'Money operator+(Money lhs, const Money& rhs) { lhs += rhs; return lhs; } — by-value lhs is the result buffer; += holds the only implementation.' },
+    { front: 'friend — granted or taken?', back: 'Granted by the class, inside its own body — never taken by the outsider. Use sparingly: every friend widens the invariant-audit surface.' },
+    { front: 'mutable — purpose and limit', back: 'One field stays writable inside const methods. For caches/counters/mutexes: physical change, logical value untouched. Not a thread-safety tool.' },
+    { front: 'The viral-const interview sentence', back: 'One const parameter forces every function it touches to declare its honesty — the compiler audits the whole chain.' },
+    { front: 'Return types: += vs +', back: '+= returns Money& (*this) — chaining, matches built-ins. + returns by VALUE: a reference to a local would dangle.' },
+  ],
+  mindmapMarkdown: `- Operator Overloading, friend & const-correctness
+  - Operators = named functions
+    - a + b is operator+(a, b)
+    - overload intuition, never invent
+  - Member vs non-member
+    - mutators (+=) → member
+    - symmetric (+, ==) → non-member from +=
+    - = [] () -> members only
+  - operator<<
+    - ostream is the left operand
+    - non-member + friend, return os
+  - friend
+    - class grants, outsider receives
+    - sparingly: audit surface grows
+  - const member functions
+    - const AFTER parens = promise
+    - this becomes const T*
+    - [] const/non-const pair
+  - const with pointers
+    - read right-to-left
+    - const T*: cell locked, arrow free
+    - T* const: arrow frozen, cell open
+  - Viral const
+    - one const → whole chain honest
+    - mutable: the cache escape hatch`,
+}
+
+export default m

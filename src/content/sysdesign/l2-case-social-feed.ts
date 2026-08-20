@@ -1,0 +1,580 @@
+import type { Module } from '../types'
+
+const m: Module = {
+  id: 'sysdesign-l2-case-social-feed',
+  subjectId: 'sysdesign',
+  level: 2,
+  title: 'Case Study: Twitter/Instagram Feed (Fanout on Write vs Read)',
+  whyItMatters:
+    'This is the most-asked design question after the URL shortener, and it hides exactly one real decision: do you build a timeline when someone POSTS, or when someone READS? Everything else — the API, the schema, the caches — falls out of that answer. Get the celebrity case wrong and your fanout queue is hours behind; get it right and you have said the sentence that separates a senior answer from a component tour.',
+  estMinutes: 60,
+  sections: [
+    {
+      type: 'intuition',
+      title: 'The one decision this case study is about',
+      md: `A newspaper has two ways to reach you. Print a copy for every subscriber overnight and drop it at their door — mornings are instant, but printing scales with subscribers. Or keep one master copy at the office and let every reader come assemble their own edition — printing is trivial, reading is a chore.
+
+- That is **fanout on write** (push) versus **fanout on read** (pull), and it is the whole interview.
+- Everything else in this design — the API, the tables, the caches, the queues — is downstream of which one you pick.
+- We will walk the plan's method in order: **requirements → estimation → API → data model → HLD → deep-dive → bottlenecks.**
+- Each step is posed as a question first. Stop and answer it yourself before reading on. That is how the real 45 minutes goes: the interviewer asks, you answer, they push back.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Step 1 — Requirements. What are you actually building?',
+      md: `*Your turn first: list the functional requirements in one line each, then the non-functional ones. Scope hard — a feed design that also does DMs, search, and notifications fails on time.*
+
+**Functional** — three verbs, nothing more:
+
+- **Post**: a user publishes a short post (text plus optional media).
+- **Follow**: a user follows another user. The relationship is *directed* — you following me does not make me follow you.
+- **View home timeline**: a user opens the app and sees posts from the accounts they follow, in roughly reverse-chronological order, paginated.
+
+**Non-functional** — this is where the design is decided:
+
+- **Timeline load must be fast.** It is the app's front door: p99 under ~200 ms. Every extra millisecond here is felt by every user on every session.
+- **Posting can be slower.** A second or two to publish is invisible — the user is already looking at their own post.
+- **Eventual consistency is fine.** A post showing up in a follower's timeline 3 seconds late is not a bug. Nobody can prove your feed was missing something.
+- **Massive read:write skew.** Reads outnumber writes by roughly 50:1. Optimize the read path; spend freely on the write path.
+- Out of scope, said out loud: DMs, search, notifications, trending, moderation.`,
+    },
+    {
+      type: 'note',
+      md: `Why "roughly reverse-chronological" and not "exactly"? Because exact global ordering across a sharded cluster costs a synchronization you do not need. Posts carry a time-sortable id (a Snowflake-style id: timestamp bits + machine bits + sequence), timelines sort by that id, and two posts written in the same millisecond on different machines may swap. No user will ever notice. Say this in the interview — it shows you know which guarantees are worth paying for.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Step 2 — Estimation. Find the number that decides the architecture.',
+      md: `*Your turn: 200M daily active users, 2 posts per user per day, 100 timeline views per user per day. Compute post QPS, timeline QPS, and daily storage. Then find the fourth number — the one that actually drives the design.*
+
+- **Posts**: 200M × 2 = **400M posts/day** → 400M / 86,400 ≈ **4,600 QPS** average. Traffic is not flat, so apply a peak factor of ~3× → **~14,000 QPS** peak writes.
+- **Timeline views**: 200M × 100 = **20B views/day** → **~231,000 QPS** average, **~700,000 QPS** peak. That is the front door.
+- **Ratio**: 100 views to 2 posts = **50:1 read:write.** Confirmed: this is a read-optimization problem.
+- **Storage**: 400M posts × ~300 bytes (text, ids, timestamps — no media) ≈ **120 GB/day ≈ 44 TB/year.** Small. Text is never the storage problem; media is, and it lives elsewhere.
+- **The number that decides everything**: **average followers per user ≈ 350.** One post is not one write — it is potentially 350 writes. And the distribution has a monstrous tail: accounts with **10M–100M+ followers exist.**
+- Hold those two facts together. The average says "fanout is cheap". The tail says "fanout is a bomb". The entire design is the reconciliation.`,
+    },
+    {
+      type: 'math',
+      intro: 'The back-of-envelope, written out. Round aggressively — interviewers want the magnitude, not the decimals.',
+      latex: [
+        '\\text{post QPS} = \\frac{200{,}000{,}000 \\times 2}{86{,}400} \\approx 4{,}600 \\quad\\Rightarrow\\quad \\text{peak}\\,(3\\times) \\approx 14{,}000',
+        '\\text{timeline QPS} = \\frac{200{,}000{,}000 \\times 100}{86{,}400} \\approx 231{,}000 \\quad\\Rightarrow\\quad \\text{peak} \\approx 700{,}000',
+        '\\text{storage/day} = 4\\times10^{8} \\times 300\\,\\text{B} = 1.2\\times10^{11}\\,\\text{B} \\approx 120\\ \\text{GB}',
+        '\\text{push writes/day} = 4\\times10^{8}\\ \\text{posts} \\times 350\\ \\text{followers} \\approx 1.4\\times10^{11} \\;\\Rightarrow\\; \\approx 1.6\\ \\text{M writes/sec}',
+      ],
+    },
+    {
+      type: 'intuition',
+      title: 'Step 3 — API. Three endpoints, one of them subtle.',
+      md: `*Your turn: write the three endpoints. One of them has a trap that a junior design walks straight into.*
+
+- \`POST /posts\` — body \`{ text, media_ids[] }\`, auth from the token. Returns the created post with its id. Takes an **idempotency key** header so a client retry after a timeout does not double-post.
+- \`POST /follow\` — body \`{ followee_id }\`. Idempotent by nature: following twice is following once.
+- \`GET /feed?cursor=<opaque>&limit=20\` — the timeline, newest first, plus a \`next_cursor\` for the following page.
+
+**The trap is \`offset\`.** \`GET /feed?page=3\` (i.e. \`OFFSET 40\`) breaks on a feed for two independent reasons:
+
+- **The feed mutates while you scroll.** Five new posts arrive between page 1 and page 2, everything shifts down five slots, and page 2 re-shows you five posts you already read. Users report it as "the feed is duplicating".
+- **Offset gets slower the deeper you go.** The database must walk and discard every skipped row; \`OFFSET 100000\` reads 100,020 rows to return 20.
+
+**Cursor (keyset) pagination** fixes both: the cursor encodes the last post id you saw, and the next page is "the 20 posts immediately older than this id". Constant cost at any depth, and new posts arriving at the top cannot shift the window. This is the same mechanism as the Backend module *Production Patterns: Middleware, Caching, Rate Limits & Testing* — here it is not an optimization, it is a correctness requirement.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Step 4 — Data model. Four things, and one index most people forget.',
+      md: `*Your turn: name the tables. Then ask which queries each one has to serve — that is what picks the indexes.*
+
+- **users**: \`user_id\`, handle, display name, and one denormalized counter — \`follower_count\`. That counter is not vanity; it is the input to the celebrity decision, so it must be cheap to read on the write path.
+- **follows**: the edge table, \`(follower_id, followee_id)\`. Small rows, enormous count — ~72 billion edges at our scale.
+- **posts**: \`post_id\` (time-sortable), \`author_id\`, \`body\`, \`created_at\`, media keys. Sharded by \`post_id\` or \`author_id\`.
+- **timeline store**: per-user list of **post ids**, newest first, capped. Not a table — a Redis sorted set per user, in RAM, because it serves 700k QPS.
+
+**The index nobody mentions until pushed**: \`follows\` must be indexed in **both directions**, because two completely different queries hit it:
+
+1. *"Who does bob follow?"* — by \`follower_id\`. This is the **pull** query, and the query that renders a profile's "following" list.
+2. *"Who follows @star?"* — by \`followee_id\`. This is the **fanout** query: every push job starts by scanning it. For a celebrity it returns 10 million rows, so it must be streamed in pages, not loaded into memory.
+
+One index serves one direction. You need two, and you pay double the write cost on every follow. That is a fine trade — follows are rare, these two reads are not.`,
+    },
+    {
+      type: 'code',
+      lang: 'sql',
+      title: 'The schema that matters: posts and the two-direction edge table',
+      code: `CREATE TABLE posts (
+  post_id    BIGINT PRIMARY KEY,      -- Snowflake id: unique AND time-sortable
+  author_id  BIGINT NOT NULL,
+  body       TEXT,                    -- media lives in blob storage, not here
+  created_at TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX posts_by_author ON posts (author_id, post_id DESC);
+
+CREATE TABLE follows (
+  follower_id BIGINT NOT NULL,        -- who is doing the following
+  followee_id BIGINT NOT NULL,        -- who is being followed
+  PRIMARY KEY (follower_id, followee_id)
+);
+CREATE INDEX follows_by_followee ON follows (followee_id, follower_id);`,
+      annotations: {
+        2: 'Time-sortable ids mean the timeline can sort by id alone — no join to created_at, and merging two sorted lists at read time is trivial.',
+        7: 'Direction of the PULL path: "give me @star\'s newest 50 posts". Without this index, every celebrity merge is a table scan.',
+        12: 'The primary key already indexes direction 1: "who does bob follow?" — the prefix (follower_id, …) makes it a range scan.',
+        14: 'Direction 2: "who follows @star?" — the query every fanout job runs. 10 million rows for a celebrity, so read it in pages and stream jobs out as you go.',
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'Step 5a — Fanout on write (push). Do the amplification arithmetic.',
+      md: `*Your turn: when a user posts, write that post id into every follower's precomputed timeline. What does a timeline read cost now? And what does one post cost?*
+
+- **Read cost: one lookup.** \`LRANGE timeline:bob 0 19\` — a single Redis call, sub-millisecond, no joins, no merge, no matter how many people bob follows. This is why push exists.
+- **Write cost: multiplied by your follower count.** One post by an average account = **~350 writes**. Across the platform: 400M posts × 350 = **~140 billion timeline writes/day ≈ 1.6M writes/sec**, and ~5M/sec at peak.
+- **Write amplification** is the name for that ratio. Here it is 350×. You have moved *all* the work from the 20-billion-a-day read path to the 400-million-a-day write path — a good trade, because 400M × 350 is still less than 20B × 350.
+- **Then the tail arrives.** An account with 10M followers posts once: **10,000,000 writes from one HTTP request.** At 16 bytes per timeline entry that is **160 MB of duplicated ids** for a single post, and even at a million writes/sec of fanout capacity it takes 10 seconds — during which every ordinary user's fanout is queued behind it.
+- **Second waste**: most of those timelines are never read. If only 20% of a celebrity's followers open the app today, 8 million of those 10 million writes were computed for nobody.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Step 5b — Fanout on read (pull). The mirror image, and its own cliff.',
+      md: `*Your turn: store each post exactly once and build the timeline when someone asks. What just got cheap, and what just got expensive?*
+
+- **Write cost: one row.** \`INSERT INTO posts\` and you are done. A celebrity post costs exactly the same as anyone else's. The celebrity problem vanishes completely.
+- **Read cost: fan-in instead of fan-out.** To render bob's feed: look up the ~350 accounts bob follows, fetch each one's newest posts, merge them by post id, take the top 20.
+- **The arithmetic**: 20B views/day × 350 author queries = **~7 trillion queries/day ≈ 83 million queries/sec**. No cluster serves that. Pull is not "slower" — it is off by orders of magnitude.
+- **It degrades with engagement.** The more accounts you follow, the slower *your* feed gets. The power users you most want to keep get the worst experience. That is a product problem, not just a latency one.
+- **Where pull is genuinely right**: low-traffic accounts, users who log in rarely, and — the key insight — **any author whose posts are read by so many people that a single fetch of their recent posts is shared across millions of readers.** Hold on to that sentence; it is the hybrid.`,
+    },
+    {
+      type: 'visual',
+      component: 'PointerBoxDiagram',
+      props: {
+        title: 'Push, pull, and the hybrid — one post, drawn three ways',
+        notice: 'Left column is the work being done; right column is what it touches. Watch which column explodes in each strategy.',
+        leftLabel: 'work',
+        rightLabel: 'stores',
+        frames: [
+          {
+            note: 'PUSH, ordinary account. @asha (350 followers) posts p9. The fanout worker writes the post id into every follower timeline. 350 small writes, done in milliseconds — nobody notices.',
+            stack: [
+              { name: 'write -> bob', to: 'tb' },
+              { name: 'write -> cara', to: 'tc' },
+              { name: 'write -> dev', to: 'td' },
+            ],
+            heap: [
+              { id: 'tb', value: 'bob: p9 p7 p4', label: 'timeline' },
+              { id: 'tc', value: 'cara: p9 p6 p2', label: 'timeline' },
+              { id: 'td', value: 'dev: p9 p5 p1', label: 'timeline' },
+            ],
+          },
+          {
+            note: 'PUSH, the read path. bob opens the app: ONE cache lookup returns his 20 newest post ids, already ordered. No merge, no joins, no dependence on how many accounts he follows. This is the whole reason push exists.',
+            stack: [{ name: 'GET /feed bob', to: 'tb' }],
+            heap: [
+              { id: 'tb', value: 'bob: p9 p7 p4', label: '1 lookup, done' },
+              { id: 'tc', value: 'cara: p9 p6 p2', label: 'untouched' },
+              { id: 'td', value: 'dev: p9 p5 p1', label: 'untouched' },
+            ],
+          },
+          {
+            note: 'PUSH, the celebrity. @star (10M followers) posts p10 — one HTTP request becomes ten million writes and 160 MB of duplicated ids. The job hogs the fanout fleet for ~10 seconds, and every ordinary post queued behind it goes stale.',
+            stack: [{ name: '@star posts p10', to: 'burst', danger: true }],
+            heap: [
+              { id: 'burst', value: '10,000,000 writes', label: 'one job', danger: true },
+              { id: 'mem', value: '160 MB of copies', label: 'in RAM', danger: true },
+              { id: 'lag', value: 'lag: minutes', label: 'everyone else', danger: true },
+            ],
+          },
+          {
+            note: 'PULL, the write path. Same celebrity post, stored exactly once. No fanout, no queue, no burst — the write path does not care how famous you are. Compare this box with the previous frame.',
+            stack: [{ name: '@star posts p10', to: 'p' }],
+            heap: [
+              { id: 'p', value: 'p10 stored once', label: '1 write' },
+              { id: 'idx', value: 'star -> p10', label: 'for read-time' },
+            ],
+          },
+          {
+            note: 'PULL, the read path. bob follows 350 accounts, so his feed means 350 lookups plus a merge-and-sort, on every refresh, at 231k QPS. And the more accounts he follows, the slower his feed gets.',
+            stack: [{ name: 'GET /feed bob', to: 'q1', danger: true }],
+            heap: [
+              { id: 'q1', value: 'query 350 authors', label: 'per view', danger: true },
+              { id: 'q2', value: 'merge + sort', label: 'per view', danger: true },
+              { id: 'q3', value: '83M queries/sec', label: 'platform', danger: true },
+            ],
+          },
+          {
+            note: 'HYBRID. Ordinary authors were pushed, so bob gets his one fast lookup. Celebrities were not, so their recent posts are pulled from a small globally-cached list and merged by post id. Bounded writes, bounded reads — neither column explodes.',
+            stack: [
+              { name: 'timeline lookup', to: 'tl' },
+              { name: 'celeb merge (x10)', to: 'cel' },
+            ],
+            heap: [
+              { id: 'tl', value: 'bob: p9 p7 p4', label: 'pushed' },
+              { id: 'cel', value: '@star recent', label: 'pulled, shared' },
+              { id: 'out', value: 'merged feed', label: '~11 reads' },
+            ],
+          },
+        ],
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'Step 5c — The hybrid that every real system actually runs',
+      md: `Push for ordinary accounts, pull for celebrities, merge at read time. Say it in that order and you have given the answer.
+
+- **"Celebrity" must be operational, not vibes.** It is a **follower-count threshold** — a config value, say 1,000,000 — checked against the denormalized \`follower_count\` on the write path. Above it: skip fanout entirely. Below it: fan out normally. The threshold is tunable per environment and you should say so; the right value is whatever keeps p99 fanout lag inside your budget.
+- **The merge, concretely**: on \`GET /feed\`, (1) read the user's pushed timeline — one lookup; (2) read the "celebrities I follow" list — a tiny, cached, rarely-changing set, typically under ~20 entries; (3) fetch each celebrity's recent post ids from a **globally shared** per-celebrity cache — one cached list serves all 10M of that celebrity's followers; (4) merge the two sorted lists by post id and take the top 20. Merging two sorted lists is linear and trivial.
+- **Why the shared cache is the trick**: pull is catastrophic for 350 ordinary authors because each fetch serves one reader. For a celebrity, the exact same fetch is reused by millions of readers — the read is hot, so it caches perfectly. Celebrities are the *best* pull candidates precisely because they are popular.
+- **Exclude inactive users from fanout.** Keep a "logged in within N days" bitmap; skip fanout for everyone else. At 20% daily-active that cuts push writes by **5×** on its own.
+- **Backfill on login.** A skipped user comes back, finds a cold or stale timeline, and the read path rebuilds it once with a pull query over the accounts they follow — then writes it back and resumes normal push. One expensive read, amortized over the whole session.
+- **The line that lands in an interview**: *"Push is the default because reads are 50× writes. I break that default exactly where the write amplification stops being bounded — above a follower-count threshold — and pay a small read-time merge instead."*`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'The three strategies, costed — real output at the bottom',
+      code: `DAU, POSTS, VIEWS = 200_000_000, 2, 100
+ACTIVE = 0.20             # share of a user's followers who open the app that day
+CELEB = 1_000_000         # follower count above which we stop pushing
+TIERS = [('normal', 198_000_000, 150),
+         ('popular', 1_999_800, 20_000),
+         ('celebrity', 200, 10_000_000)]
+
+edges = sum(n * f for _, n, f in TIERS)              # total follow edges
+noncel = sum(n * f for _, n, f in TIERS if f < CELEB)
+following = edges / DAU                              # avg accounts a user follows
+cel_follow = (edges - noncel) / DAU                  # ...of which are celebrities
+views, big = DAU * VIEWS, max(f for _, _, f in TIERS)
+
+def row(name, w, burst, r):
+    print(f'{name:<23}{w:>11.3g}{burst:>15,.0f}{r:>11.3g}{w + r:>11.3g}')
+
+print(f'edges {edges:,.0f}   avg following {following:.0f}   celeb follows {cel_follow:.0f}')
+print(f'{"strategy":<23}{"writes/day":>11}{"worst 1 post":>15}{"reads/day":>11}{"total":>11}')
+row('pull  (fanout-on-read)', DAU * POSTS, 1, views * following)
+row('push  (fanout-on-write)', POSTS * edges, big, views * 1.0)
+row('push, active-only', POSTS * edges * ACTIVE, big * ACTIVE, views * 1.0)
+row('hybrid', POSTS * noncel * ACTIVE, CELEB * ACTIVE, views * (1 + cel_follow))
+
+# --- actual output -------------------------------------------------------
+# edges 71,696,000,000   avg following 358   celeb follows 10
+# strategy                writes/day   worst 1 post  reads/day      total
+# pull  (fanout-on-read)       4e+08              1   7.17e+12   7.17e+12
+# push  (fanout-on-write)   1.43e+11     10,000,000      2e+10   1.63e+11
+# push, active-only         2.87e+10      2,000,000      2e+10   4.87e+10
+# hybrid                    2.79e+10        200,000    2.2e+11   2.48e+11`,
+      annotations: {
+        2: 'The inactive-user lever. Only ~20% of a follower list opens the app on a given day — fanning out to the other 80% is work thrown away.',
+        6: '200 accounts with 10M followers each. That single row — 0.0001% of users — is what breaks pure push.',
+        19: 'PULL row: writes are trivial (4e+08, one per post) but reads hit 7.17e+12/day ≈ 83 million queries/sec. Dead on arrival.',
+        20: 'PUSH row: reads are perfect (2e+10 = one lookup per view) but a single celebrity post fires 10,000,000 writes. That burst column is what pages you at 3am.',
+        22: 'HYBRID row: writes bounded at 2.79e+10, worst single post capped at 200,000 (the threshold times the active fraction), reads at 11 per view.',
+        30: 'Read the COLUMNS, not the total. Pull explodes on reads (33x hybrid). Push explodes on burst (50x hybrid). Hybrid is the only row with no exploding tail — and tails, not daily sums, are what take systems down.',
+      },
+    },
+    {
+      type: 'note',
+      md: `Be honest about that table in an interview, because a good interviewer will notice: hybrid does **not** have the smallest daily total — "push, active-only" does. Hybrid trades an 11× increase in read operations (2e+10 → 2.2e+11) for a 50× reduction in worst-case burst (10M → 200k). That is the right trade because the read increase is 10 extra *cached* lookups spread evenly across the day, while the burst is 10 million writes landing in one queue in one instant. Aggregates never fail systems. Spikes do.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Step 6 — HLD. The two paths, end to end.',
+      md: `*Your turn: draw the write path and the read path. What crosses between them, and what does the timeline actually store?*
+
+**Write path** (target: a couple of seconds, and it is allowed to be asynchronous):
+
+1. \`POST /posts\` hits the API gateway → post service. Validate, generate a Snowflake id, **persist to the posts store**, return 201 to the client. The user's own post is now durable — everything after this is background work.
+2. Enqueue a **fanout job** \`{post_id, author_id}\` onto a queue (Kafka-style, partitioned).
+3. If \`author.follower_count > threshold\` → do nothing more; the post will be pulled at read time. Otherwise **fanout workers** page through \`follows\` by \`followee_id\`, filter to active users, and write the post id into each follower's timeline cache.
+
+**Read path** (target: p99 under ~200 ms, 700k QPS at peak):
+
+1. \`GET /feed?cursor=…\` → timeline service reads the user's **timeline cache** — one call, post ids only.
+2. Read the user's small cached "celebrities I follow" set, fetch each celebrity's recent post ids from the shared per-celebrity cache, and **merge** the sorted lists by post id.
+3. **Hydrate**: take the top 20 ids and fetch the actual post bodies — a single multi-get against a post cache, falling back to the posts store on a miss. Authors' names and avatars come from a user cache in the same batch.
+4. Return posts plus a \`next_cursor\`.
+
+**The observation the interviewer is waiting for: the timeline stores POST IDS, not post bodies.**
+
+- **Storage**: 16 bytes per entry instead of ~300+. Storing bodies would multiply every post by 350 copies in RAM.
+- **Correctness**: an edited or deleted post is fixed in **one** place. Copies would mean chasing 10 million duplicates, and you never fully win that race.
+- **Cost**: one extra hop, which is a batched cache multi-get — a millisecond, on a path where the alternative is terabytes of duplication.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Step 7a — Deep dive: the fanout worker',
+      md: `A queue between the post service and the timeline writes. That queue is the whole design, not plumbing.
+
+- **Why a queue at all**: it decouples posting latency from fanout cost. The user gets their 201 in 50 ms whether they have 12 followers or 900,000. It also absorbs spikes — the queue is the shock absorber, exactly as in the Level 0 message-queues module.
+- **Idempotent, because retries are guaranteed.** A worker that crashes mid-job will re-run it. Make the write \`ZADD timeline:<user> <post_id> <post_id>\` into a sorted set: re-adding an existing member is a no-op. Never \`LPUSH\` blindly onto a list — a retry duplicates the post in someone's feed.
+- **Ordering per user, without ordering the queue.** Do not try to serialize the queue globally. Score each entry by the **time-sortable post id**, so the timeline is correct no matter what order the writes land in. Order becomes a property of the data, not of the delivery. (If you do need per-user serialization for another reason, partition the queue by \`follower_id\`.)
+- **Chunk the big jobs.** A 900,000-follower fanout must be split into batches of a few thousand followers, each its own queue message. Otherwise one job holds a partition for minutes and every small job behind it is **head-of-line blocked** — the celebrity's post is not late, *everyone else's* is.
+- **When it falls behind**: consumer lag is your alarm, not CPU. Lag rising means timelines are going stale. Responses, in order — scale workers out (they are stateless); shed work (drop fanout for inactive users first, they get a backfill on login anyway); run a separate low-priority queue for large fanouts so small ones stay fast; and if lag keeps climbing, **apply backpressure to the producer** rather than letting the queue grow without bound. An unbounded queue does not prevent failure, it delays and disguises it.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Step 7b — Deep dive: the timeline cache',
+      md: `One Redis sorted set per user: key \`timeline:<user_id>\`, members are post ids, scores are the same post ids. That is the entire data structure.
+
+- **Capped at N entries** (~800). After each write, \`ZREMRANGEBYRANK timeline:<user> 0 -801\` drops the oldest. Nobody scrolls past 800 posts; if they do, that request falls through to a pull-based deep-history query. Uncapped lists are how a cache turns into an unplanned database.
+- **Sizing, honestly**: 200M users × 800 entries × 16 bytes ≈ **2.6 TB** of raw ids — and Redis per-entry overhead roughly doubles that in practice. That is a large dedicated cluster, and it is why N and the active-user filter are the two knobs you tune first. Halving N halves the bill.
+- **Eviction**: TTL the key on inactive users and let LRU evict whole timelines under memory pressure. Evicting a *whole* timeline is safe because it is rebuildable; evicting *part* of one would silently corrupt it, which is another reason the entry cap must be explicit rather than accidental.
+- **Rebuilding a cold timeline**: a miss triggers a pull — read the accounts the user follows, fetch each one's recent post ids, merge, take the newest N, write the set back with a TTL, then serve. It is expensive (hundreds of queries), so protect it: a per-key lock or single-flight so a thundering herd of refreshes rebuilds once, not a thousand times.
+- **This one path does triple duty**: cold start for a new user, backfill for a returning inactive user, and recovery after a cache node dies. Build it once, name all three uses in the interview.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Step 8 — Bottlenecks and tradeoffs. Where this design hurts.',
+      md: `- **The celebrity problem never fully goes away** — you relocate it. Hybrid moves it from the write path to a read-time merge, and the merge cost grows with how many celebrities a user follows. Follow 200 celebrities and your feed is quietly doing 200 extra lookups. Mitigation: cap the merge at the top few by recency, and treat those cached celebrity lists as the hottest keys in the fleet (replicate them across nodes).
+- **Fanout lag under load.** Consumer lag is the health metric for the write path. Sustained lag means timelines are stale by minutes, which users see as "my friend's post never showed up". Alarm on lag, not throughput.
+- **Cache memory is the real bill.** ~2.6 TB of ids before overhead, at RAM prices. The knobs: N per timeline, the active-user filter, and how long you keep an inactive user's timeline before evicting it.
+- **The shift from chronological to ranked feeds.** Real products stopped showing reverse-chronological feeds. Ranking changes the read path from "read a list" into a **candidate generation → feature fetch → model scoring → re-rank** pipeline: pull a few thousand candidates (your timeline, celebrity posts, recommended posts you do not follow), fetch features for each, score them with a model, show 20. See the ML module *Recommendation Systems & Time-Series Basics* for what that model is.
+  1. What it costs: a feature store and a model-serving tier on the p99 read path, an order of magnitude more compute per view, and the loss of the "one lookup" property that justified push in the first place.
+  2. What it also costs: debuggability. "Why is this post in my feed?" stops having an answer you can print, and every ranking change needs an A/B test to know whether it helped.
+  3. What survives: the timeline is still the cheapest source of candidates. Ranking sits **on top of** fanout, it does not replace it.
+- **Media never goes through this system.** Images and video go to blob storage and are served by a CDN; the feed carries URLs. Rough scale: 20B timeline views × ~10 images × 150 KB ≈ **30 PB/day** of image bytes. No origin fleet serves that — the CDN does, and your servers never see the traffic. Cross-ref the Level 0 blob-storage-and-CDN building block.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Step 9 — The Instagram variant: same skeleton, heavier payload',
+      md: `Instagram is this design with one substitution: the post is mostly *media*, and media does not belong in your database or your fanout.
+
+- **The post record is metadata only**: \`post_id\`, \`author_id\`, caption, and a set of **media keys** pointing at object storage. The bytes never enter the posts table — a row stays ~300 bytes whether it carries a haiku or a 4K video.
+- **Upload goes around the API.** The client asks for a **presigned URL** and uploads directly to object storage (S3-style). Your app servers never proxy the bytes; they would be a bandwidth bottleneck for zero benefit.
+- **A transcoding pipeline generates multiple resolutions asynchronously.** The upload lands, an event fires, workers produce thumbnail / feed / full variants (and for video, several bitrates), and write the keys back onto the post. The same queue-plus-workers shape as fanout, with much heavier jobs.
+- **Publish when a variant is ready, not when all are.** Mark the post visible once the feed-size image exists; higher resolutions can land later. Otherwise your post latency is your slowest encoder.
+- **The client picks the resolution** from its screen size and network. Serving a 4K original into a phone thumbnail is the single most common way to burn a CDN bill.
+- **What is unchanged**: requirements, estimation, the API, the follows table, push-vs-pull, the fanout worker, the timeline cache. Only the payload changed. That is the point of learning this case study — the feed skeleton is reused for Instagram, TikTok, LinkedIn, and every "here is what your network is doing" screen ever shipped.`,
+    },
+    {
+      type: 'note',
+      md: `**The 60-second version, for when the interviewer says "summarize".** Reads beat writes 50:1, so precompute: fan out on write into a per-user Redis timeline of post ids, and a feed read becomes one lookup plus a hydration multi-get. That breaks for accounts above a follower-count threshold, where one post would mean millions of writes — so those are excluded from fanout and merged in at read time from a globally cached list, which works precisely because celebrity posts are read-hot. Fanout runs on an idempotent, chunked queue whose consumer lag is the alarm; timelines are capped, evictable, and rebuildable by a pull query on login. Media goes to blob storage plus CDN and never touches this path.`,
+    },
+  ],
+  quiz: [
+    {
+      question: 'Timeline reads are 700k QPS at peak; posts are 14k QPS. Which fanout strategy does that ratio argue for as the DEFAULT, and why?',
+      options: [
+        { text: 'Fanout on read — writes are rare, so keep them cheap', explanation: 'It optimizes the path that is already cheap. Making 400M posts/day cheaper while making 20B views/day expensive is the wrong direction.' },
+        { text: 'Neither — the ratio says nothing about fanout', explanation: 'The ratio is exactly the input to this decision: you move work toward whichever path runs less often.' },
+        { text: 'Fanout on write — do the work once per post so the 50x-more-frequent read is a single lookup', explanation: 'Correct. With reads outnumbering writes 50:1, precomputing at write time trades 400M expensive operations for 20B cheap ones.' },
+        { text: 'Fanout on write, because it also removes the celebrity problem', explanation: 'The direction is right but the reason is backwards — fanout on write is what CREATES the celebrity problem.' },
+      ],
+      correct: 2,
+    },
+    {
+      question: 'An account with 10M followers posts once under pure fanout-on-write. What is the immediate cost?',
+      options: [
+        { text: '10 million timeline writes and ~160 MB of duplicated post ids, from one HTTP request', explanation: 'Correct. At 16 bytes per entry, one post replicates into 10M timelines — seconds of fanout capacity and 160 MB of RAM for a single post.' },
+        { text: 'One write; the celebrity is stored once and read by everyone', explanation: 'That is fanout on READ. Under push, the post id is physically copied into every follower timeline.' },
+        { text: '10 million reads', explanation: 'Reads happen later, when followers open the app. The cost here is on the write path, at post time.' },
+        { text: 'Nothing unusual — Redis handles it', explanation: 'Redis handles each individual write fine. The problem is 10M of them arriving in one job, blocking every ordinary post queued behind it.' },
+      ],
+      correct: 0,
+    },
+    {
+      question: 'Why does `GET /feed?page=3` (offset pagination) misbehave on a home timeline specifically?',
+      options: [
+        { text: 'Offsets are not supported by Redis sorted sets', explanation: 'They are — ZREVRANGE takes ranks. The problem is semantic, not a missing feature.' },
+        { text: 'Offset returns results in the wrong order', explanation: 'Ordering is unaffected. What changes is which items land on which page.' },
+        { text: 'It requires a total count, which is expensive', explanation: 'True of paginated UIs generally, but not the failure users actually report here.' },
+        { text: 'New posts arriving at the top shift every item down, so page 2 re-shows rows from page 1 — and deep offsets get slower', explanation: 'Correct. A mutating feed makes position-based paging duplicate or skip items, and the database must walk every skipped row. Cursor pagination anchors on the last id seen, fixing both.' },
+      ],
+      correct: 3,
+    },
+    {
+      question: 'Why must the `follows` table be indexed in both directions?',
+      options: [
+        { text: 'To enforce that follows are mutual', explanation: 'Follows are directed and deliberately not mutual — the index has nothing to do with reciprocity.' },
+        { text: 'Because push needs "who follows X?" (fanout) and pull needs "who does X follow?" — two different lookups', explanation: 'Correct. The fanout job scans by followee_id; the pull/merge path and the following-list UI scan by follower_id. One index serves only one direction.' },
+        { text: 'To make follower_count accurate', explanation: 'The count is denormalized on the users row precisely so nobody has to aggregate the edge table on the write path.' },
+        { text: 'Because the table is sharded', explanation: 'Sharding affects where rows live, not which access paths need indexing. Both directions are needed even unsharded.' },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'In the hybrid design, why is pulling celebrity posts at read time cheap, when pulling ordinary authors is catastrophic?',
+      options: [
+        { text: 'Celebrities post less often', explanation: 'Usually the opposite. Post frequency is not what makes the difference.' },
+        { text: 'Celebrity posts are stored on faster hardware', explanation: 'Nothing in the design implies special storage — the win comes from access patterns, not hardware.' },
+        { text: 'One fetch of a celebrity\'s recent posts is shared by millions of readers, so it caches perfectly; an ordinary author\'s fetch serves one reader', explanation: 'Correct. Pull cost is per (reader, author) pair unless the fetch is reusable. Celebrity fetches are extremely reusable — being popular is exactly what makes them good pull candidates.' },
+        { text: 'Because there are only a few hundred celebrities in total', explanation: 'Their small number bounds the cache size, but the real reason is read-sharing: even many celebrities would be cheap if each fetch serves millions.' },
+      ],
+      correct: 2,
+    },
+    {
+      question: 'Fanout workers write with `ZADD timeline:<user> <post_id> <post_id>` rather than `LPUSH`. What does that buy?',
+      options: [
+        { text: 'Idempotency and order-independence: a retried job re-adds an existing member (a no-op), and the score orders the timeline regardless of arrival order', explanation: 'Correct. Queues deliver at-least-once, so retries WILL happen; a set membership write is safe to repeat, and scoring by the time-sortable post id means late writes still land in the right slot.' },
+        { text: 'Less memory per entry', explanation: 'A sorted set costs MORE per entry than a list. You pay that for correctness.' },
+        { text: 'Faster writes', explanation: 'ZADD is O(log n) versus LPUSH at O(1). Speed is not the reason.' },
+        { text: 'Automatic capping of the list length', explanation: 'Capping still needs an explicit ZREMRANGEBYRANK after the write — nothing trims itself.' },
+      ],
+      correct: 0,
+    },
+    {
+      question: 'Your timeline cache stores post IDs, not post bodies. A candidate proposes storing bodies to "save the hydration hop". What is the strongest objection?',
+      options: [
+        { text: 'Bodies are too slow to serialize', explanation: 'Serialization is negligible next to the two real costs of duplication.' },
+        { text: 'Redis cannot store strings that large', explanation: 'It can, easily. The problem is how many copies exist, not how big one is.' },
+        { text: 'Nothing — it is a valid latency optimization', explanation: 'It buys one batched cache call while costing terabytes of duplication and making deletes unreliable. Bad trade.' },
+        { text: 'Storage explodes ~20x AND every edit or delete must chase millions of copies you can never fully catch', explanation: 'Correct. 16 bytes becomes 300+, multiplied by ~350 timelines per post — and a deleted post lingering in copies is a correctness and compliance failure, not just a cost one.' },
+      ],
+      correct: 3,
+    },
+    {
+      question: 'The fanout queue\'s consumer lag has been climbing for 20 minutes. Which response is WRONG?',
+      options: [
+        { text: 'Scale out fanout workers — they are stateless', explanation: 'Correct first move, and safe: more consumers directly increase drain rate.' },
+        { text: 'Skip fanout for inactive users and backfill their timeline on next login', explanation: 'Legitimate load shedding — that work was likely to be wasted anyway, and the rebuild path already exists.' },
+        { text: 'Raise the queue\'s retention and buffer size so it stops filling up', explanation: 'This is the wrong answer. A bigger buffer hides the symptom while timelines keep going staler; an unbounded queue delays and disguises failure instead of preventing it. Shed load or apply backpressure instead.' },
+        { text: 'Route large fanouts to a separate low-priority queue so small jobs stay fast', explanation: 'Sound: it removes head-of-line blocking, where one celebrity job makes everyone else\'s post late.' },
+      ],
+      correct: 2,
+    },
+  ],
+  interviewQuestions: [
+    {
+      question: 'Design a Twitter-style home timeline. Start wherever you like — but tell me your non-functional requirements before any component.',
+      answer:
+        'Functional: post, follow, view a reverse-chronological home timeline with pagination. Non-functional, and these decide the design: timeline reads must be fast (p99 ~200 ms — it is the app\'s front door), posting may be slower and asynchronous, eventual consistency is acceptable (a post arriving seconds late is invisible), and reads outnumber writes about 50:1. That skew is the whole argument: 200M DAU × 100 views = 20B reads/day (~231k QPS avg, ~700k peak) against 200M × 2 = 400M posts/day (~4.6k QPS avg). So I precompute at write time. Fanout on write into a per-user Redis timeline of post IDs; a feed read is one lookup plus a batched hydration. Then I immediately name what breaks it — average followers ~350 makes push cheap, but accounts with 10M+ followers make one post into millions of writes — and go hybrid: skip fanout above a follower threshold and merge those authors in at read time.',
+      isCaseBased: true,
+    },
+    {
+      question: 'Do the write amplification arithmetic for fanout on write, out loud.',
+      answer:
+        'Average followers ≈ 350, so one post is ~350 timeline writes. Platform-wide: 400M posts/day × 350 = ~1.4×10^11 timeline writes/day ≈ 1.6M writes/sec average, ~5M/sec at peak. That is large but tractable on a Redis fleet, and it is still cheaper than the alternative, because the pull path would be 20B views × 350 = ~7×10^12 queries/day ≈ 83M queries/sec. The number that actually matters is the tail, not the mean: one 10M-follower account posting once is 10 million writes and, at 16 bytes per entry, 160 MB of duplicated ids — from a single HTTP request. Even at a million writes/sec of fanout capacity that is ten seconds during which everyone else\'s fanout is queued behind it. Averages say push is fine; the tail says push needs an escape hatch.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Explain fanout on read and why it is not simply "the slower option".',
+      answer:
+        'Pull stores each post once and assembles the timeline at read time: look up who you follow, fetch each author\'s recent posts, merge by post id, take the top N. Writes become trivial and the celebrity problem disappears entirely — a 100M-follower post costs one row. The reason it is not merely slower is scale: 20B views/day × ~350 authors is ~83 million queries/sec, which is not a tuning problem, it is off by orders of magnitude. It also has a nasty product property — feed latency grows with how many accounts you follow, so your most engaged users get your worst experience. Where pull is genuinely correct: rarely-active users (computing their timeline is wasted work), deep history beyond the cached window, and authors whose posts are read by so many people that one fetch is shared across millions of readers. That last case is what the hybrid exploits.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Case: a celebrity with 90 million followers joins your platform and posts hourly. Your current design is pure fanout on write. Walk me through what breaks and what you change.',
+      answer:
+        'What breaks: each post enqueues a fanout job that must page 90M rows out of follows by followee_id and issue 90M timeline writes — ~1.4 GB of duplicated ids per post at 16 bytes an entry. That single job saturates the fanout fleet for minutes, and because queue partitions are consumed in order, every ordinary user\'s post sits behind it: consumer lag climbs, timelines go stale platform-wide, and the pager fires for a problem no ordinary user caused. The fix is the hybrid: a follower-count threshold (say 1M) checked against the denormalized follower_count on the write path. Above it, skip fanout entirely and store the post once; the read path pulls that author\'s recent post ids from a globally shared cache — one cached list serving all 90M followers — and merges by post id with the user\'s pushed timeline. Two extra hardening steps I would ship alongside: chunk any remaining large fanouts into batches of a few thousand so no single job holds a partition, and skip fanout for users inactive beyond N days, backfilling their timeline on login. If pushed on the threshold, I would say it is a tunable config, not a constant, and the right value is whatever keeps p99 fanout lag inside budget.',
+      isCaseBased: true,
+    },
+    {
+      question: 'Follow-up: your hybrid pushes below 1M followers and pulls above. I follow 300 accounts that are all above the threshold. Defend your design.',
+      answer:
+        'Fair hit — my merge cost is not free, it is proportional to how many pulled authors a user follows, and 300 makes it 300 cache reads on a p99-sensitive path. Three answers. First, measure: the p50 user follows fewer than 20 such accounts, so this is a tail case, and I would rather have a slow tail than a broken write path. Second, bound the merge: fetch only the top K pulled authors by recency of last post — most of those 300 have nothing new — using a small "authors with posts since your last visit" set, which turns 300 lookups into a handful. Third, make it self-correcting: if a user\'s merge cost exceeds a threshold, materialize their merged timeline into their own cache with a short TTL, so the second refresh in a session is one lookup again. The general principle: the threshold is not a wall, it is a knob, and a user whose read cost blows past budget can be individually promoted back to push.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Why does the timeline store post IDs rather than post content? Someone on your team wants to denormalize the content in to skip a hop.',
+      answer:
+        'Two reasons, one economic and one about correctness. Economic: an id is ~16 bytes and a post record is 300+, and every post is replicated into ~350 timelines — storing bodies multiplies the cache footprint roughly twentyfold, and that cache lives in RAM. Correctness is the stronger argument: edits, deletions, privacy changes and blocks all need to take effect everywhere, and with ids they are a single update in one place while the copies would have to be chased across millions of timelines — a race you never fully win, and a legal problem when the delete is a takedown request. The cost of keeping ids is one hydration hop, which is a batched multi-get against a post cache — a millisecond on a path that already spends more than that on the network. I would take the hop.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Design the fanout worker. I care about failures, ordering, and what happens when it falls behind.',
+      answer:
+        'Queue-based: the post service persists the post, returns 201, and enqueues {post_id, author_id}; stateless workers consume, page through follows by followee_id, and write. Failures: delivery is at-least-once, so every job WILL sometimes re-run — I make the write idempotent with ZADD timeline:<user> <post_id> <post_id> into a sorted set, where re-adding an existing member is a no-op. LPUSH onto a list would duplicate the post in someone\'s feed on every retry. Ordering: I do not serialize the queue; I score entries by the time-sortable post id, so out-of-order arrival still produces a correctly ordered timeline — order becomes a property of the data, not of the delivery. Large fanouts get chunked into batches of a few thousand followers, each its own message, so no job holds a partition and blocks small ones (head-of-line blocking). Falling behind: consumer lag is the alarm, not CPU. Response order: scale workers out, shed fanout for inactive users (they get a login backfill anyway), route large fanouts to a low-priority queue, and if lag still climbs, apply backpressure at the producer rather than growing the buffer. A bigger buffer does not prevent failure, it hides it while timelines keep going stale.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Design the timeline cache. Size it, and tell me what happens on a cache miss.',
+      answer:
+        'One Redis sorted set per user — key timeline:<user_id>, member and score both the post id — capped at ~800 entries with ZREMRANGEBYRANK after each write. Sizing: 200M users × 800 × 16 bytes ≈ 2.6 TB of raw ids, and per-entry overhead roughly doubles it, so this is a large dedicated cluster and N is the first knob I would tune; halving N halves the bill, and the active-user filter is the second knob. Eviction: TTL keys for inactive users and let LRU drop whole timelines under pressure — whole ones, because a partially evicted timeline is silently wrong, which is another reason the cap is explicit. On a miss, rebuild by pull: read the accounts the user follows, fetch each one\'s recent post ids, merge, keep the newest N, write it back with a TTL, then serve. It is expensive — hundreds of queries — so it is protected by single-flight so a refresh storm rebuilds once rather than a thousand times. That one path covers three cases worth naming: new-user cold start, backfill for a returning inactive user, and recovery after a cache node dies.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Case: users report "the feed keeps showing me posts I already scrolled past". Diagnose, then fix.',
+      answer:
+        'The symptom is duplication on page boundaries, which points at offset pagination. With OFFSET/LIMIT, position is computed against a list that is actively growing at the top: if five posts arrive between the page-1 and page-2 requests, everything shifts down five slots and page 2 begins five items inside what page 1 already returned. I would confirm it by correlating reports with the posting rate of accounts those users follow — heavy-following users see it constantly, light-following users almost never — and by reproducing with a post injected between page requests. Fix: cursor (keyset) pagination — the response carries an opaque next_cursor encoding the last post id returned, and the next page asks for "the 20 posts strictly older than this id". That is immune to insertions at the top and costs the same at page 1 and page 500, whereas OFFSET 100000 makes the store walk and discard 100,000 rows. What I give up: no jump-to-page-N and no total count — which is exactly why every infinite-scroll feed shows "load more" instead of page numbers. Second, unrelated fix worth checking: a fanout retry that used LPUSH instead of an idempotent ZADD would also duplicate posts, but that shows up as duplicates within a page, not at page boundaries.',
+      isCaseBased: true,
+    },
+    {
+      question: 'Your feed is slow — diagnose it.',
+      answer:
+        'I do not start with causes, I start with two questions that halve the search space. Slow for whom: everyone or a tail? Is p50 up, or only p99? A p50 shift points at capacity or a deploy; a p99-only shift points at one hop, one shard, or one queue. And since when: a step change at a deploy or config push, or a gradual drift over weeks that means growth quietly outran a cache. I also ask what it correlates with — follow count, number of pulled celebrity accounts, region, client version. Then I walk the read path in order and measure every hop, because the path is short and each hop has a signal that indicts it. Client render: server-side timing flat while user-perceived time is up means image decode or JS, not my backend. CDN and edge: edge latency up with origin latency flat means routing, TLS, or one bad POP. API tier: time spent queueing before any work starts, and connection-pool saturation. Timeline cache: the signal is hit rate — a collapse turns every read into a rebuild, which is hundreds of queries, so miss rate and posts-store read QPS climb together and p99 goes non-linear. Fanout workers: rising consumer lag means stale timelines, and stale timelines push rebuild work onto the read path, so a write-path problem surfaces as read latency. Hydration: the tell for an N+1 is post-cache operations per feed request jumping from about one multi-get to twenty single gets, almost always right after a deploy. Celebrity merge: merge fan-in per request rising, typically because an account just crossed the follower threshold and all of its followers now pay an extra pull. Ranking: model-serving p99 and candidates scored per request. Hot shard: one node p99 far above its peers while the fleet average is flat. Three checks come FIRST, and the reason is information per minute, not suspicion: is it p99 only or the whole distribution, did the timeline cache hit rate move, and is fanout consumer lag rising. Each is one dashboard, each kills a whole branch of the tree, and between them they cover the two failure modes that explain most feed slowdowns. Those two, with fixes: a cache hit rate collapse from evictions or a lost node — fixed with memory, or with a smaller N per timeline, plus single-flight on rebuild so a refresh storm rebuilds a cold timeline once instead of a thousand times; and an N+1 hydration introduced by a code change — fixed by restoring the batched multi-get. Both get confirmed rather than assumed: for the cache I correlate miss rate against evicted-keys per node and rebuild query volume, and I verify p99 actually recovers on one canary pool before rolling the fleet; for the N+1 I compare post-cache gets per feed request across the deploy boundary. One change at a time, each with a metric that must move, and if it does not move I revert instead of stacking a second fix on a wrong first one. If pushed on why I would not simply add cache nodes first: that is the fastest-looking fix and also the one that hides the cause — if rebuilds are unprotected, more memory buys a quiet month and the identical outage at the next node loss. I would ship single-flight first, because it is a small change that bounds the worst case, then size the fleet against a hit-rate target I can defend.',
+      isCaseBased: true,
+    },
+    {
+      question: 'Product wants to switch from chronological to a ranked feed. What changes in your architecture, and what does it cost?',
+      answer:
+        'The read path stops being a list read and becomes a pipeline: candidate generation (your pushed timeline, plus celebrity posts, plus recommended posts from accounts you do not follow — a few thousand candidates), feature fetch for each candidate from a feature store, model scoring, then re-ranking for diversity and freshness, and finally the 20 you show. What survives: fanout. The timeline is still the cheapest candidate source, so ranking sits on top of it rather than replacing it. Costs, in order of how much they hurt: a model-serving tier and a feature store now sit on a 700k-QPS p99-sensitive path, which is an order of magnitude more compute per view and a much harder latency budget — you end up scoring fewer candidates than you would like, or precomputing scores offline and staleness creeps in. Then debuggability: "why am I seeing this?" no longer has a printable answer, and every ranking change needs an A/B test to know if it helped. And a feedback-loop risk: the model trains on what it already showed. I would keep a chronological mode as a fallback and a debugging tool — it is also the escape hatch when the ranker is degraded.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Case: same feed, but Instagram — media-heavy. What changes and what stays?',
+      answer:
+        'Almost everything stays: requirements, estimation, the API shape, the follows table with both indexes, push-vs-pull with a celebrity threshold, the fanout worker, the capped timeline cache. What changes is the payload. The post row becomes metadata only — post_id, author_id, caption, and media keys pointing at object storage — so a row stays ~300 bytes whether it carries a haiku or a 4K video. Uploads bypass the API entirely: the client requests a presigned URL and writes straight to object storage, because proxying bytes through app servers is pure bandwidth cost. The upload fires an event into a transcoding pipeline — the same queue-and-workers shape as fanout, with much heavier jobs — that produces thumbnail, feed and full variants, and several bitrates for video, then writes the keys back onto the post. I publish as soon as the feed-size variant exists rather than waiting for all of them, otherwise post latency equals my slowest encoder. Delivery is CDN, non-negotiable: roughly 20B views × ~10 images × 150 KB is on the order of 30 PB/day, which no origin fleet serves. And the client picks the variant by screen size and network — shipping 4K originals into phone thumbnails is the most common way to burn a CDN budget.',
+      isCaseBased: true,
+    },
+    {
+      question: 'How do you know your feed is healthy in production? Name the metrics that would actually catch a fanout problem.',
+      answer:
+        'Four, and the first one is the one people forget. (1) Fanout consumer lag, per partition, alarmed on trend not absolute value — rising lag means timelines are going stale, and it is the only signal that catches a celebrity-post pileup before users do. Throughput and worker CPU both look healthy while lag climbs. (2) End-to-end post-to-visible latency, measured by a synthetic account that posts and then reads a follower\'s feed; that is the number the product actually promises. (3) Timeline read p99 split by cache hit and miss, plus the miss rate — a rising miss rate means evictions are outrunning the rebuild path, and rebuilds are hundreds of queries each, so this can go non-linear fast. (4) Timeline cache memory and eviction rate per node, because the failure mode is quiet: you evict more, you rebuild more, rebuilds cost reads, and reads slow down. I would also track merge fan-in on the read path — how many pulled authors an average request touches — since that is the metric that tells you the celebrity threshold needs retuning.',
+      isCaseBased: false,
+    },
+  ],
+  flashcards: [
+    { front: 'Fanout on write (push), one breath', back: 'At post time, write the post id into every follower\'s precomputed timeline. Read = one cache lookup. Cost = write amplification equal to follower count (~350 avg), and a celebrity post becomes millions of writes.' },
+    { front: 'Fanout on read (pull), one breath', back: 'Store the post once; build the timeline at read time by querying everyone you follow and merging. Writes trivial, celebrity problem gone — but ~350 queries per view, ~83M queries/sec platform-wide, and it degrades as you follow more.' },
+    { front: 'The hybrid, and what "celebrity" means', back: 'Push for ordinary accounts, pull for accounts above a follower-count threshold (e.g. 1M, checked against a denormalized follower_count), merge the two sorted lists by post id at read time. The threshold is a tunable config, not a constant.' },
+    { front: 'Why pulling celebrities is cheap', back: 'One fetch of a celebrity\'s recent posts is shared by millions of readers, so it caches perfectly. Pull is only catastrophic when each fetch serves one reader. Popularity is exactly what makes an author a good pull candidate.' },
+    { front: 'Feed estimation, memorized', back: '200M DAU × 2 posts = 400M/day ≈ 4.6k QPS (peak ~14k). × 100 views = 20B/day ≈ 231k QPS (peak ~700k). 50:1 read:write. Storage ~120 GB/day text-only. Avg followers ~350 = the number that decides the architecture.' },
+    { front: 'Why the timeline stores IDs, not bodies', back: '16 bytes vs 300+, multiplied by ~350 copies per post — and edits/deletes stay a single update instead of chasing millions of copies. Price: one batched hydration multi-get on read.' },
+    { front: 'Why `follows` needs indexes in BOTH directions', back: 'By follower_id: "who does bob follow?" — the pull/merge path. By followee_id: "who follows @star?" — the query every fanout job runs, 10M rows deep for a celebrity. One index serves one direction only.' },
+    { front: 'Cursor vs offset pagination on a feed', back: 'Offset shifts when new posts arrive at the top (page 2 re-shows page 1 rows) and gets slower with depth. Cursor anchors on the last post id seen: constant cost, immune to insertions. Price: no jump-to-page-N, no total count.' },
+    { front: 'Fanout worker: the three non-negotiables', back: 'Idempotent (ZADD by post_id — retries are guaranteed, a re-add is a no-op). Order from the time-sortable post id score, not from delivery order. Chunk large fanouts so one celebrity job does not head-of-line block every small one.' },
+    { front: 'Timeline cache sizing + cold rebuild', back: 'Redis sorted set per user, capped ~800 entries: 200M × 800 × 16 B ≈ 2.6 TB before overhead. Miss → pull over the accounts you follow, merge, write back with TTL, single-flight to avoid a rebuild stampede. Same path serves cold start, inactive backfill, and node recovery.' },
+  ],
+  mindmapMarkdown: `- Case Study: Twitter/Instagram Feed
+  - Step 1 Requirements
+    - Post, follow, view home timeline
+    - Fast reads, slow posts OK
+    - Eventual consistency acceptable
+    - 50:1 read:write skew
+  - Step 2 Estimation
+    - 400M posts/day, 4.6k QPS (14k peak)
+    - 20B views/day, 231k QPS (700k peak)
+    - 120 GB/day text, media elsewhere
+    - Avg 350 followers = the deciding number
+    - Tail: 10M-100M follower accounts
+  - Step 3 API
+    - POST /posts (idempotency key)
+    - POST /follow
+    - GET /feed?cursor= (never offset)
+    - Offset shifts + deep-scan cost
+  - Step 4 Data model
+    - users (denormalized follower_count)
+    - follows indexed BOTH directions
+    - posts (Snowflake id, time-sortable)
+    - timeline store = Redis sorted set of ids
+  - Step 5 THE decision
+    - Push: 1 lookup read, 350x write amp
+    - Push breaks: 10M writes, 160 MB, 1 post
+    - Pull: 1 write, 83M queries/sec reads
+    - Hybrid: push ordinary, pull celebrities
+    - Threshold = follower count, tunable
+    - Merge two sorted lists by post id
+    - Skip inactive, backfill on login
+  - Step 6 HLD
+    - Write: persist, ack, enqueue, workers
+    - Read: timeline, merge, hydrate, return
+    - Timeline stores POST IDS not bodies
+  - Step 7 Deep dives
+    - Fanout worker: queue, idempotent ZADD
+    - Order from score, chunk big jobs
+    - Lag rising: scale, shed, backpressure
+    - Timeline cache: capped ~800, ~2.6 TB
+    - Cold rebuild by pull, single-flight
+  - Step 8 Bottlenecks
+    - Celebrity problem relocated, not gone
+    - Fanout lag = the alarm metric
+    - Cache RAM is the real bill
+    - Ranked feed: candidates then scoring
+    - Media: blob + CDN, ~30 PB/day
+  - Step 9 Instagram variant
+    - Post row = metadata + media keys
+    - Presigned upload, bytes skip the API
+    - Transcoding pipeline, many resolutions
+    - Skeleton unchanged, payload changed`,
+}
+
+export default m

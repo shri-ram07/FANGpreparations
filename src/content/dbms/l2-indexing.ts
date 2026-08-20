@@ -1,0 +1,538 @@
+import type { Module } from '../types'
+
+const m: Module = {
+  id: 'dbms-l2-indexing',
+  subjectId: 'dbms',
+  level: 2,
+  title: 'Indexing: B+ Trees, Clustered & Composite',
+  whyItMatters:
+    '"Why do databases use B+ trees?" is a guaranteed interview question, and "the query is slow" is a guaranteed job task — both have the same answer. This module gives you the tree, the math that makes a billion rows cost four page reads, and the two traps (leftmost prefix, write amplification) that separate people who CREATE INDEX from people who know what it did.',
+  estMinutes: 55,
+  sections: [
+    {
+      type: 'intuition',
+      title: 'Why indexes exist: the phone book move, on disk',
+      md: `Find "Mehta" in a phone book. You do not read page 1 — the book is sorted, so a few flips land you there. Now find "the shop with phone number 98200-11223". Nothing is sorted by number, so you read every page. Same book, opposite costs.
+
+- A table on disk is split into **pages** — fixed-size blocks (4–16 KB, holding ~50–200 rows each) that the database reads as a unit. I/O is counted in *pages*, not rows.
+- A 1M-row table is thousands of pages. \`WHERE email = ?\` with no index = a **full scan**: read every page, check every row.
+- An **index** is a separately stored, sorted structure over one or more columns. Sorted means searchable: a few page hops instead of thousands.
+- That is the entire product: **trade extra storage and slower writes for reads that skip almost everything.**`,
+    },
+    {
+      type: 'intuition',
+      title: 'B-tree vs B+ tree: where the data lives',
+      md: `Both are wide, self-balancing search trees built for pages. One design decision separates them:
+
+- **B-tree**: every node stores keys *and* the row data next to them. A match can end anywhere — root, middle, leaf.
+- **B+ tree**: internal nodes store **keys only** — pure signposts. All data sits in the **leaves**, and the leaves are chained left-to-right in a **linked list**.
+- Why B+ won for databases, three reasons:
+- **Fan-out**: with no fat row data inside, an internal page packs hundreds of keys → each hop divides the search by hundreds, not by 2 → a shorter tree.
+- **Range scans**: \`BETWEEN\`, \`ORDER BY\`, \`>\` — find the first leaf, then just ride the leaf chain sideways. A B-tree would have to climb back up and down for the next key.
+- **Uniform depth**: every row lives at leaf level, so every lookup costs the same number of hops. Predictable latency — databases love boring.`,
+    },
+    {
+      type: 'note',
+      md: `Same machine you stepped through in the DSA **BTreeExplorer** lesson — only now each node is a disk page, and "fewer levels" means "fewer disk reads". Insert keys below and watch a full leaf split, pushing one signpost key up — that is how the tree stays balanced forever.`,
+    },
+    { type: 'visual', component: 'BTreeExplorer', props: {} },
+    {
+      type: 'intuition',
+      title: 'The height math: three hops to a million rows',
+      md: `How tall is the tree? That number IS your query cost, so compute it once and remember it.
+
+- An internal page holds a few hundred key+pointer pairs — call the **fan-out** ~300.
+- Each level multiplies reach by 300: level 1 → 300 rows, level 2 → 90,000, level 3 → **27 million**, level 4 → ~8 billion.
+- So: millions of rows = **3 page hops**. A billion = 4. Compare a binary tree: log₂(10⁹) ≈ 30 hops — 30 disk reads instead of 4.
+- Better still: the root and second level are tiny and hot, so they live in the **buffer pool** (RAM cache). A "3-hop" lookup often touches disk once.
+- Interview sentence: *"fan-out of a few hundred per page keeps the tree 3–4 levels deep for any realistic table — lookups are a constant handful of page reads."*`,
+    },
+    {
+      type: 'math',
+      intro: 'Height h needed for N rows at fan-out f — read once, then just quote 3 and 4.',
+      latex: [
+        'h = \\lceil \\log_f N \\rceil',
+        'f = 300,\\ N = 10^6:\\quad h = \\lceil 2.37 \\rceil = 3',
+        'f = 300,\\ N = 10^9:\\quad h = \\lceil 3.63 \\rceil = 4',
+      ],
+    },
+    {
+      type: 'intuition',
+      title: 'Clustered vs secondary: is the leaf the row, or a pointer to it?',
+      md: `One tree gets a privilege no other tree can have: its leaves ARE the table.
+
+- **Clustered index**: the table's rows are physically stored *as* the leaf level of one B+ tree — usually the primary key's. Walk the PK tree, land on the leaf, you are holding the full row. No second step.
+- Rows can only be physically sorted **one way** → exactly **one clustered index per table**. Everything else is secondary.
+- **Secondary (non-clustered) index**: its leaves hold only the indexed column(s) plus a **pointer to the row** — in InnoDB, that pointer is the primary key value.
+- So a secondary lookup is a **double hop**: walk the email tree to find the PK, then walk the clustered tree with that PK to fetch the row. Two trees, roughly twice the page reads.
+- The **fat-PK tax**: every secondary leaf carries a copy of the PK. A 36-char UUID key instead of an 8-byte integer bloats *every* secondary index — fewer entries per page, taller trees, slower double hops.`,
+    },
+    {
+      type: 'visual',
+      component: 'PointerBoxDiagram',
+      props: {
+        title: 'Clustered leaf = the row. Secondary leaf = a pointer.',
+        notice: 'Count the tree walks in each frame — that count is your query cost.',
+        leftLabel: 'query',
+        rightLabel: 'index pages',
+        frames: [
+          {
+            note: 'Clustered lookup: WHERE id = 42. One walk down the PK tree — and the leaf you land on IS the complete row. ~3 page hops, done.',
+            stack: [{ name: 'WHERE id = 42', value: '1 tree walk', to: 'cleaf' }],
+            heap: [
+              { id: 'croot', value: 'keys: 1 … 500k … 1M', label: 'clustered root (signposts only)' },
+              { id: 'cleaf', value: 'id 42 | rahul@x.com | 29', label: 'clustered leaf = the actual row' },
+            ],
+          },
+          {
+            note: 'Secondary lookup: WHERE email = ?. Walk the email tree — its leaf holds only (email, PK). To get the rest of the row, walk the clustered tree AGAIN with id 42. Double the hops.',
+            stack: [
+              { name: 'WHERE email = ?', value: 'walk email tree', to: 'sleaf' },
+              { name: 'then: PK 42', value: 'walk PK tree', to: 'cleaf' },
+            ],
+            heap: [
+              { id: 'sleaf', value: 'rahul@x.com → PK 42', label: 'secondary leaf = pointer, not row' },
+              { id: 'cleaf', value: 'id 42 | rahul@x.com | 29', label: 'clustered leaf = the row' },
+            ],
+          },
+          {
+            note: 'The fat-PK tax: every secondary leaf stores a copy of the PK. Swap the 8-byte id for a UUID and EVERY secondary index bloats — fewer entries per page, taller tree, slower double hop.',
+            stack: [{ name: 'PK = UUID (36 chars)', value: 'copied into every leaf', to: 'fat', danger: true }],
+            heap: [
+              { id: 'fat', value: 'rahul@x.com → 550e8400-e29b-41d4-…', label: 'bloated secondary leaf', freed: true },
+            ],
+          },
+        ],
+      },
+    },
+    {
+      type: 'note',
+      md: `Name-drop map for interviews: **InnoDB (MySQL)** clusters every table on its PK. **SQLite** tables are B+ trees keyed on \`rowid\` (an integer PK becomes an alias for it). **Postgres** has no clustered index at all — tables are heaps and every index is secondary, pointing at a row location. Same theory, different defaults.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Composite indexes and THE rule: leftmost prefix',
+      md: `An index on \`(dept, city, salary)\` is not three indexes. It is **one list, sorted by dept first, then city within dept, then salary within city** — exactly a phone book sorted by (last name, first name).
+
+- You can find every "Sharma" fast. Every "Sharma, R…" faster. But *everyone named Raj*? The book's order is useless — full scan.
+- **Leftmost-prefix rule**: the index can seek only on a contiguous prefix starting at the first column.
+- Served: \`WHERE dept=?\` · \`dept=? AND city=?\` · all three.
+- Half-served: \`dept=? AND salary=?\` — seeks on dept, then filters salary entry-by-entry (city is the missing middle).
+- Dead: \`city=?\` or \`salary=?\` alone — no leftmost column, no seek.
+- A **range cuts the chain**: \`dept=? AND city>? AND salary=?\` seeks on dept + the city range, but salary can no longer seek — inside a range of cities, salaries are not sorted together.
+- Ordering columns: put **equality-tested, frequently-used, high-selectivity** columns first; range columns last. (Selectivity = fraction of rows a value picks out — \`email\` is selective, \`gender\` is not.)`,
+    },
+    {
+      type: 'code',
+      lang: 'sql',
+      title: 'Leftmost prefix, verified — never trust, always EXPLAIN',
+      code: `-- One composite index = ONE list sorted by (dept, city, salary)
+CREATE TABLE emp (
+  id INTEGER PRIMARY KEY,
+  name TEXT,
+  dept TEXT,
+  city TEXT,
+  salary INTEGER
+);
+CREATE INDEX idx_dcs ON emp (dept, city, salary);
+
+-- SERVED: WHERE starts at the left edge of the index
+EXPLAIN QUERY PLAN SELECT name FROM emp WHERE dept = 'AI';
+--   SEARCH emp USING INDEX idx_dcs (dept=?)
+
+-- HALF-SERVED: seeks on dept; salary filtered entry-by-entry (city missing)
+EXPLAIN QUERY PLAN SELECT name FROM emp WHERE dept = 'AI' AND salary = 90;
+--   SEARCH emp USING INDEX idx_dcs (dept=?)
+
+-- DEAD: no leftmost column -> the sort order is useless
+EXPLAIN QUERY PLAN SELECT name FROM emp WHERE city = 'Pune';
+--   SCAN emp
+
+-- RANGE CUTS THE CHAIN: dept seek + city range; salary cannot seek
+EXPLAIN QUERY PLAN SELECT name FROM emp
+  WHERE dept = 'AI' AND city > 'M' AND salary = 90;
+--   SEARCH emp USING INDEX idx_dcs (dept=? AND city>?)`,
+      annotations: {
+        9: 'One tree, one sort order. It replaces an index on (dept) and on (dept, city) — but NOT one on (city) or (salary).',
+        17: 'The plan says dept=? only: salary appears nowhere in the seek. It still helps a little (filtered inside the index), but it is not a jump.',
+        21: 'SCAN = read everything. The words to fear in any query plan.',
+        26: 'After a range, later columns lose their sortedness. Rule of thumb: equality columns first, THE range column last.',
+      },
+    },
+    {
+      type: 'note',
+      md: `**Covering index, one note**: if the index itself contains every column the query needs — \`SELECT salary FROM emp WHERE dept=? AND city=?\` against \`idx_dcs\` — the table is never touched. No double hop, no row fetch: an **index-only scan**. SQLite's plan literally says \`USING COVERING INDEX\`. This is why \`SELECT *\` hurts: asking for every column disqualifies every covering index.`,
+    },
+    {
+      type: 'intuition',
+      title: 'When an index makes things WORSE',
+      md: `An index is not free speed. It is a bet, and the bet loses in four common ways:
+
+- **Write amplification**: every \`INSERT\` writes the row *plus one entry into every index*; an \`UPDATE\` of an indexed column is a delete+insert in that index tree. Ten indexes ≈ eleven writes per row. Write-heavy tables want few, deliberate indexes.
+- **Low selectivity**: index on \`gender\`. Matching ~50% of rows via the index means millions of random double hops — a sequential full scan reads fewer total pages. The optimizer knows this and will (rightly) ignore the index.
+- **Tiny tables**: 200 rows fit in a page or two. The scan is already 2 reads; a tree walk cannot beat it.
+- **The optimizer can skip it**: stale statistics, functions on the column (\`WHERE lower(email)=?\`), or type mismatches make an index invisible. The fix is never faith — it is reading the plan.
+- Corollary: never "index every column just in case". You pay the write tax on all of them and the optimizer uses one.`,
+    },
+    {
+      type: 'note',
+      md: `Time to feel it. The experiment below builds a 1M-row table, runs the same lookup with and without an index, and lets you read the plan flip from SCAN to SEARCH. [Open the SQL playground](/playground/sql), paste it block by block, and watch the timings — this is the single most convincing 5 minutes in this subject.`,
+    },
+    {
+      type: 'code',
+      lang: 'sql',
+      title: 'The 1M-row experiment: full scan vs 3 page hops',
+      code: `-- 1) Seed one million rows (a few seconds -- one-time cost)
+CREATE TABLE users (
+  id INTEGER PRIMARY KEY,
+  email TEXT,
+  age INTEGER
+);
+WITH RECURSIVE seq(n) AS (
+  SELECT 1 UNION ALL SELECT n + 1 FROM seq WHERE n < 1000000
+)
+INSERT INTO users (id, email, age)
+SELECT n, 'user' || n || '@mail.com', 18 + (n * 37) % 60 FROM seq;
+
+-- 2) BEFORE: no index on email
+EXPLAIN QUERY PLAN SELECT * FROM users WHERE email = 'user874211@mail.com';
+--   SCAN users
+SELECT * FROM users WHERE email = 'user874211@mail.com';
+--   reads all 1,000,000 rows: tens of milliseconds here, worse on real disks
+
+-- 3) AFTER: add the index, ask the exact same question
+CREATE INDEX idx_users_email ON users (email);
+EXPLAIN QUERY PLAN SELECT * FROM users WHERE email = 'user874211@mail.com';
+--   SEARCH users USING INDEX idx_users_email (email=?)
+SELECT * FROM users WHERE email = 'user874211@mail.com';
+--   ~3 page hops: microseconds. Same data, same query, ~1000x less work`,
+      annotations: {
+        8: 'Recursive CTE counting 1..1,000,000 — the standard SQLite trick for generating test rows.',
+        15: 'SCAN users = every page, every row, every time. Honest number: ~50–150 ms in the browser playground.',
+        20: 'CREATE INDEX itself costs a sort of all 1M emails — a one-time O(n log n) you pay so every future lookup is O(log n).',
+        24: 'Not "a bit faster" — a different complexity class. And it stays ~3 hops at 10M rows too; the scan would grow 10x.',
+      },
+    },
+  ],
+  quiz: [
+    {
+      question: 'A B+ tree beats a binary search tree for on-disk data mainly because…',
+      options: [
+        {
+          text: 'It is self-balancing',
+          explanation: 'Balanced BSTs (AVL, red-black) exist too — balance alone is not the win.',
+        },
+        {
+          text: 'Each node is a page holding hundreds of keys, so the tree is 3–4 levels deep instead of ~30',
+          explanation: 'Correct. I/O is paid per page, so pack each page with hundreds of keys: fan-out ~300 turns log₂ into log₃₀₀.',
+        },
+        {
+          text: 'It stores data pre-sorted so no comparisons are needed',
+          explanation: 'Comparisons still happen at every level — they are just cheap RAM work compared to page reads.',
+        },
+        {
+          text: 'It uses less total storage than a BST',
+          explanation: 'Storage is similar or higher (partially-filled pages). The win is fewer DISK READS, not fewer bytes.',
+        },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'In a B+ tree, unlike a B-tree…',
+      options: [
+        {
+          text: 'Row data lives only in the leaves, and the leaves are linked in a chain',
+          explanation: 'Correct. Internal nodes are pure signposts — which is exactly what buys high fan-out and cheap range scans.',
+        },
+        {
+          text: 'Every node stores both keys and row data',
+          explanation: 'Backwards — that is the B-tree. Putting data everywhere shrinks fan-out.',
+        },
+        {
+          text: 'The tree can become unbalanced under heavy inserts',
+          explanation: 'Both stay balanced by design — splits push keys up, never tilting the tree.',
+        },
+        {
+          text: 'Each node has at most two children',
+          explanation: 'That is a binary tree. B-family nodes have hundreds of children — the entire point.',
+        },
+      ],
+      correct: 0,
+    },
+    {
+      question: 'Fan-out ~300 per page. About how many page hops to find one row among 1 billion?',
+      options: [
+        {
+          text: '~30',
+          explanation: 'That is log₂(10⁹) — binary-tree thinking. B+ trees divide by ~300 per hop, not 2.',
+        },
+        {
+          text: '~4',
+          explanation: 'Correct. 300⁴ ≈ 8 billion, so 4 levels cover it — and the top levels are usually cached in the buffer pool.',
+        },
+        {
+          text: '~300',
+          explanation: '300 is the fan-out (children per node), not the height.',
+        },
+        {
+          text: '~1000',
+          explanation: 'Way off — that would be a nearly linear structure.',
+        },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'Why can a table have only ONE clustered index?',
+      options: [
+        {
+          text: 'Database licenses limit it',
+          explanation: 'No — it is physics, not pricing.',
+        },
+        {
+          text: 'More would slow down writes too much',
+          explanation: 'Writes do get slower with more indexes, but that is true of secondaries too — not the reason.',
+        },
+        {
+          text: 'The clustered leaf level IS the table, and rows can be physically stored in only one order',
+          explanation: 'Correct. Clustered = the rows themselves are the leaves. One physical order, one clustered index; everything else points.',
+        },
+        {
+          text: 'Only integer columns can be clustered',
+          explanation: 'Any orderable key can cluster (UUIDs do, painfully). Type is not the constraint.',
+        },
+      ],
+      correct: 2,
+    },
+    {
+      question: 'In InnoDB, a secondary index lookup on email finds WHAT at its leaf?',
+      options: [
+        {
+          text: 'The full row',
+          explanation: 'Only the clustered index holds full rows at its leaves.',
+        },
+        {
+          text: 'The row\'s primary key value — then a second walk down the clustered tree fetches the row',
+          explanation: 'Correct. That is the double hop, and why a fat PK (UUID) taxes every secondary index.',
+        },
+        {
+          text: 'A physical disk address that never changes',
+          explanation: 'InnoDB deliberately avoids raw addresses — rows move during page splits; the PK stays valid.',
+        },
+        {
+          text: 'A copy of every other index',
+          explanation: 'Indexes are independent trees; they do not embed each other.',
+        },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'Index on (a, b, c). Which WHERE clause CANNOT use it to seek?',
+      options: [
+        {
+          text: 'WHERE a = 1',
+          explanation: 'Leftmost column alone — the ideal prefix. Seeks fine.',
+        },
+        {
+          text: 'WHERE a = 1 AND b = 2',
+          explanation: 'A contiguous prefix (a, b) — seeks fine.',
+        },
+        {
+          text: 'WHERE b = 2 AND c = 3',
+          explanation: 'Correct — no leftmost column. The list is sorted by a first, so entries with b=2 are scattered everywhere. Full scan.',
+        },
+        {
+          text: 'WHERE a = 1 AND c = 3',
+          explanation: 'Half-served: seeks on a, filters c within those entries. Not perfect, but far better than nothing.',
+        },
+      ],
+      correct: 2,
+    },
+    {
+      question: 'You index the gender column (2 values, 50/50 split). The optimizer ignores it. Why is it right?',
+      options: [
+        {
+          text: 'Text columns cannot be indexed',
+          explanation: 'They can — email indexes are text and work beautifully.',
+        },
+        {
+          text: 'Fetching ~50% of rows via index means millions of random double hops — a sequential full scan reads fewer total pages',
+          explanation: 'Correct. Low selectivity kills indexes: the per-row pointer chase costs more than just reading everything in order.',
+        },
+        {
+          text: 'The index is corrupt',
+          explanation: 'Nothing is broken — the optimizer did the math and the scan won.',
+        },
+        {
+          text: 'GROUP BY is required to use an index',
+          explanation: 'No such rule — plain WHERE uses indexes constantly.',
+        },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'The plan says "USING COVERING INDEX". What happened?',
+      options: [
+        {
+          text: 'The index covers the whole table, so it replaced it',
+          explanation: 'The table still exists — it just was not needed for THIS query.',
+        },
+        {
+          text: 'Every column the query needs is inside the index itself, so the table is never touched',
+          explanation: 'Correct. Index-only scan: no double hop, no row fetch. Also why SELECT * disqualifies covering indexes.',
+        },
+        {
+          text: 'Two indexes were merged at runtime',
+          explanation: 'Some engines can AND-merge indexes, but that is a different plan line entirely.',
+        },
+        {
+          text: 'The query was answered from the buffer pool',
+          explanation: 'Caching happens at the page level regardless — the plan line is about which STRUCTURE was read.',
+        },
+      ],
+      correct: 1,
+    },
+  ],
+  interviewQuestions: [
+    {
+      question: 'Why did databases pick B+ trees over plain B-trees? Give the three-part answer.',
+      answer:
+        'One: fan-out — internal B+ nodes hold keys only (no row data), so a 16 KB page packs hundreds of keys; each hop divides the search by hundreds, keeping trees 3–4 levels deep. Two: range scans — all data is in leaves chained as a linked list, so BETWEEN/ORDER BY finds the first match then rides the chain sideways; a B-tree must climb back up for every next key. Three: uniform depth — every row is at leaf level, so every lookup costs the same number of page reads. Predictable and short beats occasionally-lucky.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Why not hash indexes for everything? They are O(1).',
+      answer:
+        'Hashes answer exactly one question: "equal to X?". They destroy order, so range queries (BETWEEN, >, <), prefix matches (LIKE \'abc%\'), and ORDER BY all fall back to full scans. B+ trees answer equality in ~3–4 page reads AND give ranges, ordering, and leftmost-prefix reuse from the same structure. Most engines default to B+ trees and offer hash indexes as a niche (e.g. Postgres hash indexes, in-memory tables). Tradeoff sentence: hash = slightly faster point lookups; tree = everything else.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Walk me through why finding one row in a billion takes about 4 page reads.',
+      answer:
+        'A page holds a few hundred key+pointer pairs — say fan-out f = 300. Height h must satisfy f^h ≥ N, so h = ⌈log₃₀₀(10⁹)⌉ = 4 (300⁴ ≈ 8×10⁹). Each level is one page read: root → internal → internal → leaf. In practice the root and second level are hot and pinned in the buffer pool, so real disk I/O is often 1–2 reads. The general claim to state: tree height grows logarithmically with a base of several hundred, so it is effectively constant (3–4) for any realistic table.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Clustered vs non-clustered index — explain the difference and why only one can be clustered.',
+      answer:
+        'Clustered: the table\'s rows ARE the leaf level of one B+ tree (InnoDB: the PK tree). Reaching the leaf = holding the row; no second step. Since rows can be physically stored in only one order, exactly one index gets this privilege. Non-clustered (secondary): a separate tree whose leaves hold the indexed columns plus a pointer to the row — in InnoDB, the PK value — so a lookup is a double hop: secondary tree, then clustered tree. Worth adding: Postgres has no clustered index (heap tables, all indexes secondary), and SQLite clusters on rowid — the concept is universal, the defaults differ.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Case: a teammate added an index to speed up a report, and the query got SLOWER. Walk through how that happens.',
+      answer:
+        'First read the plan before and after — never debug on faith. Mechanisms to check, in order: (1) Low selectivity — the indexed column matches a big fraction of rows, so the plan became millions of random double hops (secondary leaf → PK → clustered tree) instead of one sequential scan; random page reads per row lose to bulk sequential reads. (2) The optimizer picked the new index over a better old one — a common regression when the new index looks tempting for the WHERE but forces expensive row fetches the old covering index avoided. (3) Stale statistics after creation misestimate selectivity, producing a bad plan. Fixes: drop or rebuild the index with better column choice, make it covering for that query, run ANALYZE, or hint/rewrite. The interview point: an index changes the optimizer\'s CHOICES, and more choices are not always better ones.',
+      isCaseBased: true,
+    },
+    {
+      question: 'Case: after a release, INSERT throughput on the orders table dropped ~40%. Reads are fine. Investigate.',
+      answer:
+        'Reads-fine-writes-slow points straight at write amplification. Check what the release shipped: new indexes are the usual suspect — every INSERT must add an entry to EVERY index tree, each with its own page touches and possible splits; going from 2 indexes to 8 roughly quadruples the write work. Also check: an UPDATE-heavy migration touching indexed columns (delete+insert per index), a new UUID/random key causing page splits all over the tree instead of appending rightmost (sequential ids append; random keys splatter), or a new trigger. Verify by comparing index lists before/after and watching write latency after dropping one candidate in staging. Fix: keep only indexes that earn their keep — measured by the read queries they serve versus the write tax they charge.',
+      isCaseBased: true,
+    },
+    {
+      question: 'Your index is on (country, city). Why does WHERE city = \'Pune\' full-scan, and what are the fixes?',
+      answer:
+        'The index is one list sorted by country first — Pune rows are scattered inside every country block, so the sort order is useless for city alone: leftmost-prefix rule. Fixes, in order of preference: (1) if queries mostly filter by city, reorder to (city, country); (2) if both patterns matter, add a second index on (city) and accept the write cost; (3) if the query also has a country filter available upstream, add it to the WHERE. Non-fix to name: adding city to the SELECT or hoping the optimizer "figures it out" — order is physical, not negotiable.',
+      isCaseBased: false,
+    },
+    {
+      question: 'How do you decide column ORDER in a composite index?',
+      answer:
+        'Three rules. (1) Columns tested with equality go before columns tested with ranges — a range "cuts the chain": everything after it can no longer seek. (2) Among equality columns, put the ones used by the MOST queries first, so the index serves many query shapes via leftmost prefixes. (3) Prefer higher selectivity early — a first column that narrows to a handful of entries makes every later column cheap. And say the meta-rule: design indexes from the actual WHERE clauses in the workload, not from the schema — then verify each with EXPLAIN.',
+      isCaseBased: false,
+    },
+    {
+      question: 'What is a covering index and when would you deliberately build one?',
+      answer:
+        'An index containing every column a query needs — the engine answers from the index alone (index-only scan), never touching the table, killing the secondary-lookup double hop. Build one for a hot, narrow query: e.g. SELECT salary FROM emp WHERE dept=? AND city=? → index (dept, city, salary); the salary column is there purely to cover. Tradeoffs to name: a wider index means more write amplification and storage, and SELECT * can never be covered — one more reason production queries list their columns.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Why not just index every column of a table?',
+      answer:
+        'Four costs. Write amplification: every INSERT/UPDATE/DELETE maintains every index — n indexes ≈ n+1 writes per row change. Storage: each index is a full sorted copy of its columns plus the PK. Optimizer confusion: more near-equivalent choices, more chances of a bad plan, slower planning. Cache dilution: index pages compete with data pages for the buffer pool. Meanwhile a single query typically uses ONE index. Right approach: index what the workload\'s WHERE/JOIN/ORDER BY clauses actually need, verify with EXPLAIN, and delete unused indexes as aggressively as unused code.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Auto-increment integer vs UUID as primary key — what does the choice do to your indexes?',
+      answer:
+        'Two effects, both from the clustered tree. Insert locality: auto-increment keys always append at the rightmost leaf — pages fill and split predictably at one edge. Random UUIDs land anywhere, splitting pages all over the tree: more page splits, more fragmentation, colder cache. Secondary bloat: in InnoDB every secondary leaf carries a copy of the PK; 36-char UUIDs vs 8-byte ints can double index sizes across the board — fewer entries per page, taller trees. If global uniqueness is required, name the middle ground: time-ordered IDs (UUIDv7, ULID, Snowflake) that keep append-mostly locality.',
+      isCaseBased: false,
+    },
+    {
+      question: 'How do you PROVE a query uses an index instead of assuming it?',
+      answer:
+        'Read the plan. In SQLite: EXPLAIN QUERY PLAN <query> — "SEARCH t USING INDEX idx (col=?)" means an index seek; "SCAN t" means a full scan; "USING COVERING INDEX" means the table was never touched. MySQL: EXPLAIN shows key and rows examined; Postgres: EXPLAIN ANALYZE shows Index Scan vs Seq Scan with real timings. Also mention the silent index-killers to look for when the plan surprises you: functions wrapping the column (lower(email)=?), type mismatches (string column compared to a number), leading-wildcard LIKE, and stale statistics.',
+      isCaseBased: false,
+    },
+  ],
+  flashcards: [
+    {
+      front: 'B-tree vs B+ tree, one line',
+      back: 'B-tree: keys+data in every node. B+ tree: internal nodes = keys only (signposts); ALL data in leaves, leaves linked in a chain.',
+    },
+    {
+      front: 'Why B+ trees won for databases (3 reasons)',
+      back: 'High fan-out per page (hundreds of keys → short tree) · range scans ride the leaf chain · uniform depth = predictable cost.',
+    },
+    {
+      front: 'Height rule of thumb',
+      back: 'Fan-out ~300: 1M rows ≈ 3 page hops, 1B ≈ 4. Top levels live in the buffer pool, so disk reads are often 1–2.',
+    },
+    {
+      front: 'Clustered index',
+      back: 'The table\'s rows ARE the leaf level of one B+ tree (usually the PK\'s). One physical order → exactly one per table.',
+    },
+    {
+      front: 'Secondary index lookup cost',
+      back: 'Double hop: walk the secondary tree → find the PK at the leaf → walk the clustered tree with that PK to fetch the row.',
+    },
+    {
+      front: 'Leftmost-prefix rule',
+      back: 'Index (a,b,c) seeks only on a contiguous prefix from the left: a · a,b · a,b,c. b or c alone → no seek. A range on a column cuts off everything after it.',
+    },
+    {
+      front: 'Composite column ordering',
+      back: 'Equality columns first, range column last; among equality columns, most-used and most-selective first.',
+    },
+    {
+      front: 'Covering index',
+      back: 'Index contains every column the query needs → index-only scan, table never touched. SELECT * can never be covered.',
+    },
+    {
+      front: 'When an index HURTS',
+      back: 'Write amplification (every write maintains every index) · low selectivity (gender) · tiny tables · optimizer skips it (functions, type mismatch, stale stats).',
+    },
+    {
+      front: 'EXPLAIN QUERY PLAN: the two words',
+      back: 'SEARCH … USING INDEX = seek (good). SCAN = full table read (investigate). Always verify; never assume.',
+    },
+  ],
+  mindmapMarkdown: `- Indexing: B+ Trees, Clustered & Composite
+  - Why indexes
+    - Full scan = read every page
+    - Index = a few page hops
+  - B-tree vs B+ tree
+    - B-tree: data in every node
+    - B+: data only in linked leaves
+    - Fan-out per page wins
+    - Range scans ride the leaf chain
+  - Height math
+    - Fan-out ~300 → 1M rows in 3 hops
+    - 1B ≈ 4 hops; root stays cached
+  - Clustered vs secondary
+    - Clustered leaf = the row (one per table)
+    - Secondary leaf = key + PK pointer
+    - Double hop; fat PK bloats secondaries
+  - Composite (a, b, c)
+    - Leftmost-prefix rule
+    - Equality first, range last (range cuts the chain)
+    - Covering = index-only scan
+  - When indexes hurt
+    - Every write maintains every index
+    - Low selectivity → scan wins
+    - Tiny tables: already 2 pages
+  - Verify: EXPLAIN QUERY PLAN — SEARCH vs SCAN`,
+}
+
+export default m

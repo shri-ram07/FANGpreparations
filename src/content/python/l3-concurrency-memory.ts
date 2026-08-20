@@ -1,0 +1,272 @@
+import type { Module } from '../types'
+
+const m: Module = {
+  id: 'py-l3-concurrency-memory',
+  subjectId: 'python',
+  level: 3,
+  title: 'GIL, Concurrency & Memory',
+  whyItMatters:
+    '"Why is my multithreaded Python not faster?" is a guaranteed interview follow-up the moment you mention threads. The GIL, the threads-vs-processes-vs-asyncio decision, and how Python frees memory are three questions with crisp, memorizable answers — this module hands them to you.',
+  estMinutes: 55,
+  sections: [
+    {
+      type: 'intuition',
+      title: 'The GIL: one microphone, many singers',
+      md: `Python (CPython) has a **Global Interpreter Lock**: a single lock that a thread must hold to execute Python bytecode.
+
+- Picture a karaoke room with one microphone. Ten singers (threads) exist — but only the one holding the mic sings.
+- So two threads never execute Python code *simultaneously*, even on a 16-core CPU.
+- Why does it exist? It makes CPython's memory management (reference counting) simple and fast without fine-grained locks.
+- What it does NOT mean: threads are useless. A thread **releases the mic while waiting** — for a network reply, a file, a sleep.
+- One line for interviews: *the GIL serializes CPU work, not waiting.*`,
+    },
+    {
+      type: 'intuition',
+      title: 'Threads vs processes vs asyncio — the decision',
+      md: `Three tools, one question: **is your bottleneck waiting or computing?**
+
+- **I/O-bound** (network calls, disk, DBs): threads work — a waiting thread releases the GIL, others run. Cheap, shared memory.
+- **CPU-bound** (number crunching, parsing, image work): threads DON'T help — the mic problem. Use **multiprocessing**: separate interpreters, each with its own GIL → real parallelism. Cost: processes are heavy, and data moves between them by **pickling** (serialization) — not free.
+- **Massive I/O** (10k concurrent connections): **asyncio** — ONE thread, cooperative switching. \`await\` means "I'm waiting, someone else go". No GIL fight, no thread overhead. The deep dive lives in the Backend track.
+- The table to memorize: I/O-many → asyncio · I/O-some → threads · CPU → processes.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'The shape of each — same job, three tools',
+      code: `import threading, multiprocessing, asyncio
+
+def fetch(url):            # imagine a 1-second network call
+    ...                    # thread RELEASES the GIL while waiting
+
+def crunch(chunk):         # pure CPU: the GIL never lets go
+    return sum(x * x for x in chunk)
+
+# I/O-bound -> threads: 10 fetches overlap their waiting
+threads = [threading.Thread(target=fetch, args=(u,)) for u in urls]
+
+# CPU-bound -> processes: 4 cores actually compute in parallel
+with multiprocessing.Pool(4) as pool:
+    results = pool.map(crunch, chunks)   # chunks get PICKLED across
+
+# massive I/O -> asyncio: one thread, thousands of "waiters"
+async def main():
+    await asyncio.gather(*(afetch(u) for u in urls))`,
+      annotations: {
+        4: 'THE key fact: blocking I/O calls release the GIL. This is why threads help for I/O despite the lock.',
+        7: 'No I/O here — a CPU-bound thread holds the mic the whole time. Threads give ~zero speedup.',
+        14: 'Pickling cost is real: sending huge arrays to workers can eat the parallelism win. Interviewers probe this.',
+        18: 'await = "yield the single thread". Cooperative: a task that never awaits starves everyone.',
+      },
+    },
+    {
+      type: 'note',
+      md: 'A *process* is a whole separate program with its own memory and interpreter. A *thread* lives inside a process and shares its memory. *asyncio* is neither — one thread juggling many paused functions.',
+    },
+    {
+      type: 'intuition',
+      title: 'How Python frees memory: counting owners',
+      md: `Every object carries a counter: **how many references point at me?**
+
+- \`a = [1,2,3]\` → count 1. \`b = a\` → count 2. \`del b\` → count 1.
+- The moment the count hits **0**, the object is freed instantly. That's **reference counting** — the primary mechanism.
+- \`del x\` deletes the **name**, not the object. The object dies only when *no* name (or container) holds it.
+- One hole: **cycles**. If \`x.ref = y\` and \`y.ref = x\`, their counts never reach 0 even when unreachable.
+- The **gc module** exists exactly for that: a cycle collector that periodically hunts unreachable groups.`,
+    },
+    {
+      type: 'visual',
+      component: 'PythonPlayground',
+      props: {
+        caption: 'Reference counting, live (verified output)',
+        code: `import sys
+
+a = [1, 2, 3]
+print(sys.getrefcount(a))
+
+b = a
+print(sys.getrefcount(a))
+
+del b
+print(sys.getrefcount(a))
+
+import gc
+class Node:
+    def __init__(self):
+        self.ref = None
+
+x = Node(); y = Node()
+x.ref = y; y.ref = x
+del x, y
+print(gc.collect() >= 2)`,
+        precomputedOutput: '2\n3\n2\nTrue',
+      },
+    },
+    {
+      type: 'note',
+      md: "Why does `getrefcount` say 2 for a fresh object? Passing `a` into the function creates a temporary second reference. Always mentally subtract one. And `__slots__` in one line: declaring `__slots__ = ('x', 'y')` on a class kills the per-instance `__dict__`, cutting memory sharply for millions of small objects.",
+    },
+  ],
+  quiz: [
+    {
+      question: 'Your pure-computation loop runs on 8 threads but is no faster. Why?',
+      options: [
+        { text: 'Python threads are broken', explanation: 'They work fine — for I/O. The mechanism blocking you is specific.' },
+        {
+          text: 'The GIL lets only one thread execute Python bytecode at a time',
+          explanation: 'Correct. CPU-bound threads queue for the one microphone. Multiprocessing is the fix.',
+        },
+        { text: 'Not enough RAM', explanation: 'Memory pressure slows things differently — this is a lock, not a resource limit.' },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'Ten slow API calls to make. Best first tool?',
+      options: [
+        { text: 'multiprocessing', explanation: 'Works but heavy — processes and pickling for work that is 99% waiting is waste.' },
+        {
+          text: 'Threads (or asyncio) — the waiting releases the GIL',
+          explanation: 'Correct. I/O-bound work overlaps beautifully in threads; asyncio wins when the count gets large.',
+        },
+        { text: 'One thread, sequentially', explanation: 'That serializes 10 waits into 10× the latency for no reason.' },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'What does `del x` actually do?',
+      options: [
+        { text: 'Frees the object immediately', explanation: 'Only if x was the LAST reference. del itself just unbinds the name.' },
+        {
+          text: 'Removes the name x; the object dies only when its refcount hits 0',
+          explanation: 'Correct. Names are leashes; the object is freed when the last leash drops.',
+        },
+        { text: 'Marks the object for the garbage collector', explanation: 'The gc only handles cycles — normal frees happen instantly via refcounting.' },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'Why does Python need the gc module at all, given reference counting?',
+      options: [
+        {
+          text: 'Reference cycles never reach count 0 — the collector hunts unreachable cycles',
+          explanation: 'Correct. x.ref = y, y.ref = x keeps both counts at 1 forever without it.',
+        },
+        { text: 'Refcounting is too slow', explanation: 'Refcounting is fast — its weakness is cycles, not speed.' },
+        { text: 'For freeing stack memory', explanation: 'Stack frames die on return regardless — this is about heap objects.' },
+      ],
+      correct: 0,
+    },
+    {
+      question: 'multiprocessing.Pool.map sends each chunk to a worker by…',
+      options: [
+        { text: 'Shared memory, for free', explanation: 'Processes do NOT share memory by default — that is threads.' },
+        {
+          text: 'Pickling (serializing) the data across process boundaries',
+          explanation: 'Correct — and for huge data, pickling cost can eat the parallel win. Measure before assuming.',
+        },
+        { text: 'The GIL', explanation: 'Each process has its OWN GIL; the lock does not transport data.' },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'An asyncio task runs a long CPU computation without awaiting. Effect?',
+      options: [
+        {
+          text: 'Every other task starves — cooperative scheduling only switches at await points',
+          explanation: 'Correct. asyncio is single-threaded politeness; a task that never yields blocks the whole loop.',
+        },
+        { text: 'The event loop runs it in a new thread automatically', explanation: 'No auto-magic — you must offload explicitly (run_in_executor).' },
+        { text: 'Nothing — asyncio is parallel', explanation: 'asyncio is CONCURRENT (interleaved waiting), never parallel computation.' },
+      ],
+      correct: 0,
+    },
+  ],
+  interviewQuestions: [
+    {
+      question: 'Explain the GIL to a new grad in three sentences: what, why, consequence.',
+      answer:
+        'What: a single lock in CPython that a thread must hold to run Python bytecode, so only one thread executes Python at a time. Why: it makes reference-counting memory management simple and fast without per-object locks. Consequence: threads give you concurrency for I/O (the lock is released while waiting) but zero parallelism for CPU work — for that you use multiprocessing, which sidesteps the GIL with separate interpreters.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Case: a teammate parallelized your image-processing pipeline with ThreadPoolExecutor and reports it is exactly as slow as before. Walk through your diagnosis and fix.',
+      answer:
+        'Diagnosis: image processing is CPU-bound; every thread needs the GIL to run bytecode, so threads serialize — elapsed time unchanged (sometimes worse from context switching). Verify with a CPU profile showing one core pegged. Fix ladder, naming tradeoffs: (1) ProcessPoolExecutor — real parallelism, but pay pickling cost for images: send file PATHS not arrays; (2) push the hot loop into NumPy/OpenCV — C code releases the GIL internally, so even threads can work; (3) if it is one huge array, shared_memory avoids copies. The senior answer names the bottleneck class FIRST, then picks the tool.',
+      isCaseBased: true,
+    },
+    {
+      question: 'When would you pick asyncio over threads, and what new failure mode do you accept?',
+      answer:
+        'Pick asyncio when concurrency is large and I/O-bound — thousands of sockets/requests — where per-thread stack memory and context-switch overhead would drown you; one event loop juggles them all. Accepted failure mode: cooperative scheduling. Any accidentally-blocking call (a sync DB driver, a CPU spike, time.sleep instead of asyncio.sleep) freezes EVERY task, not just its own. Threads degrade gracefully under a blocking call; asyncio degrades globally. That is the tradeoff to say out loud.',
+      isCaseBased: false,
+    },
+    {
+      question: 'How does CPython know when to free an object? Full mechanism, including the edge case.',
+      answer:
+        'Primary: reference counting — every object tracks how many references point to it; assignment/argument-passing increments, del/scope-exit decrements, and at zero the object is freed immediately and deterministically. Edge case: reference cycles (x.ref=y, y.ref=x) never hit zero, so a generational cycle collector (the gc module) periodically finds groups unreachable from the outside and frees them. Bonus point: this immediate-free behavior is why the GIL exists — refcount updates must not race.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Case: a long-running service leaks memory slowly. Heap dumps show millions of small Point objects that should be dead. Give three hypotheses and tests.',
+      answer:
+        '(1) Something still references them — a cache/list/dict that only grows (the most common "leak"): test with gc.get_referrers on a sample, or track container sizes. (2) Reference cycles WITH __del__ complications or gc disabled: check gc.isenabled(), gc.garbage, force gc.collect() and see if usage drops. (3) They are freed but the allocator holds arenas (fragmentation) — usage plateaus rather than falls: compare Python-level counts (gc.get_objects) vs RSS. Mention the fix if it is genuinely millions of live small objects: __slots__ to cut per-instance dict overhead.',
+      isCaseBased: true,
+    },
+    {
+      question: 'Threads share memory; processes do not. Give one concrete bug the sharing causes and one cost the not-sharing causes.',
+      answer:
+        'Sharing bug: a race — two threads doing counter += 1 interleave read-modify-write and lose updates (the GIL does NOT make compound operations atomic; you still need a Lock). Not-sharing cost: data transfer — every argument and result crosses process boundaries by pickling, so shipping a 2 GB DataFrame to 8 workers can cost more than the computation itself. Tradeoff sentence: threads are cheap to feed but dangerous to mutate; processes are safe to mutate but expensive to feed.',
+      isCaseBased: false,
+    },
+    {
+      question: 'What does sys.getrefcount([1,2,3]) print, and why is it not 1?',
+      answer:
+        'Typically 2 (implementation detail; the idea matters more than the exact number): the temporary reference created by passing the object as an argument to getrefcount adds one on top of the reference that keeps the list alive during the call. The interview point being tested: you understand that references are counted per-binding, including argument passing — always mentally subtract the call itself.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Your API server needs to run a 3-second ML inference per request AND serve 500 concurrent clients. Sketch the architecture.',
+      answer:
+        'Split the concerns: asyncio (or a thread pool) handles the 500 mostly-waiting connections cheaply; the CPU-bound inference must NOT run on the event loop — offload to a ProcessPoolExecutor (loop.run_in_executor) or a dedicated inference worker pool behind a queue, sized to core count. Name the costs: process workers pay model-load memory per worker (mitigate: batch requests, or a single GPU worker with a queue). This exact split — async front, process/GPU back — is how real ML serving stacks work, and it bridges straight into the Backend and MLOps tracks.',
+      isCaseBased: true,
+    },
+    {
+      question: 'Does the GIL make Python thread-safe?',
+      answer:
+        'No — a precise trap. The GIL makes individual BYTECODES atomic, not your logic. counter += 1 is three bytecodes (load, add, store); a thread switch between them loses updates. Single bytecode ops on builtins (list.append) are effectively atomic, but any read-modify-write compound needs a threading.Lock. Say it as: the GIL protects the interpreter\'s internals, not your invariants.',
+      isCaseBased: false,
+    },
+  ],
+  flashcards: [
+    { front: 'The GIL in one sentence', back: 'One lock per CPython process: only the thread holding it executes Python bytecode — serializes CPU work, not waiting.' },
+    { front: 'Threads vs processes vs asyncio — the table', back: 'I/O-many → asyncio · I/O-some → threads · CPU-bound → multiprocessing.' },
+    { front: 'Why threads still help for I/O', back: 'Blocking I/O calls RELEASE the GIL — waiting overlaps even though computing cannot.' },
+    { front: 'Cost of multiprocessing', back: 'Heavy processes + data crosses by PICKLING — shipping big data can eat the parallel win.' },
+    { front: 'How objects get freed (primary)', back: 'Reference counting: freed the instant the count hits 0. Deterministic and immediate.' },
+    { front: 'Why the gc module exists', back: 'Reference CYCLES never reach count 0 — the cycle collector finds and frees unreachable groups.' },
+    { front: 'del x does…', back: 'Unbinds the NAME x. The object dies only when the last reference drops.' },
+    { front: 'Is counter += 1 thread-safe under the GIL?', back: 'NO — it is 3 bytecodes; switches between them lose updates. Use a Lock. GIL ≠ thread-safety.' },
+    { front: '__slots__', back: "Class declaration that removes per-instance __dict__ — big memory savings for millions of small objects." },
+    { front: "asyncio's failure mode", back: 'Cooperative: one task that blocks (sync call, CPU spike) freezes ALL tasks — it only switches at await.' },
+  ],
+  mindmapMarkdown: `- GIL, Concurrency & Memory
+  - The GIL
+    - One mic, many singers
+    - Serializes CPU, not waiting
+    - Exists for simple refcounting
+    - Bytecode-atomic ≠ thread-safe
+  - Choosing the tool
+    - I/O-many → asyncio
+    - I/O-some → threads
+    - CPU → multiprocessing
+    - Pickling cost of processes
+    - asyncio blocks globally on sync calls
+  - Memory model
+    - Refcount → free at 0, instantly
+    - del removes the NAME
+    - Cycles → gc module
+    - getrefcount counts the call itself
+    - __slots__ kills per-instance dict`,
+}
+
+export default m

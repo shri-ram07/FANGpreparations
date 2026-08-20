@@ -1,0 +1,576 @@
+import type { Module } from '../types'
+
+const m: Module = {
+  id: 'prep-l2-mock-protocol',
+  subjectId: 'prep',
+  level: 2,
+  title: 'The Final Two Months: Mocks, Timed Practice & Revision Cadence',
+  whyItMatters:
+    'Eight weeks out, more content is the trap. What is untested is whether you can produce what you know — out loud, on a clock, while someone watches. This module is the conversion protocol: timed problems, human mocks, a 45-minute design round, and the weekly blank-page recall test, run on the Review, Interview mode and Revision pages this site already has.',
+  estMinutes: 55,
+  sections: [
+    {
+      type: 'intuition',
+      title: 'The switch: from learning to performing',
+      md: `Your knowledge two months out is roughly the knowledge you will walk in with. What is still movable is your ability to retrieve it under a clock, in front of a stranger, in sentences.
+
+- Learning and performing are different skills. You trained the first for months. The second has its own reps.
+- The failure mode is comfortable: another lecture, another set of notes, another topic added. It feels productive because it never fails you.
+- Rehearsal feels worse on purpose. A timed problem you do not finish is information. A video you nodded along to is not.
+- Rule for the last two months: **no new subjects**. New material enters only when a mock or a drill exposes a specific hole.
+- Every session below is output-shaped — you speak, write, or code under a constraint, then look honestly at what came out.`,
+    },
+    {
+      type: 'note',
+      md: 'One exception to "no new topics": a capstone still in flight. Finish it, write its README, put real numbers in it, then stop building. A finished small project is a far better interview story than an ambitious half-built one — and capstone polish is a scheduled slot below, not an open-ended sink.',
+    },
+    {
+      type: 'intuition',
+      title: 'Timed DSA: two problems a day, on a real clock',
+      md: `Two a day is now the entire DSA budget. Volume is over. The point is reps under interview conditions.
+
+- **Timed** means a visible clock, started before you read the statement: 30 minutes for a medium, 40 for a hard.
+- **No peeking.** No editorial, no hints tab, no searching the problem title, no "just checking the constraints on Discuss".
+- Narrate out loud the whole time, alone at your desk: clarify the input, state the brute force with its cost, then the plan, then code. Silence in practice becomes silence in the room.
+- Say time and space complexity out loud, with a reason clause, before you run anything.
+- Hand-test one small case and one edge case before you hit run. A real interview has no judge — that habit is the only thing standing between you and a confident wrong answer.
+- One of the two problems is a re-solve of a starred problem, from memory. In the last two weeks, at least one; some days both.`,
+    },
+    {
+      type: 'intuition',
+      title: 'When the timer runs out',
+      md: `The clock exists to be obeyed. Obeying it is the skill being trained.
+
+- Stop. Mid-thought if necessary, even if you can feel the idea coming.
+- Read the solution *actively*: stop at the key idea, close the tab, finish the code alone.
+- Write the four-line pattern note — trigger phrase, invariant, complexity, gotcha — exactly as taught in **The Practice System — How to Actually Get Good**.
+- Star it and re-queue it: a from-memory re-solve in about 3 days, then again in about 2 weeks.
+- Never grant yourself "five more minutes". That habit is what fails you at minute 35 of a real round, when there is no extension and no one offers one.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Re-solving from memory is the actual exam',
+      md: `Re-reading an old solution is recognition. Reproducing it in a blank editor is recall. Interviews only test the second one.
+
+- Blank editor. No notes open, no old submission, no problem-page hints. Same 30-minute clock.
+- Getting stuck on a problem you solved three weeks ago is the normal outcome, and it is precisely why the re-solve exists.
+- "Oh yes, sliding window" is recognition. Writing the shrink loop as a **while**, with the off-by-one right, is recall.
+- A clean re-solve retires the star. A stalled one re-queues from the start of the ladder — plus a fresh gotcha line on the note.
+- If a starred problem fails twice, the problem is not memory. Go back to the pattern itself.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Mocks with a human, weekly',
+      md: `Solo timed practice trains solving. It cannot train being interviewed, because you cannot do the interviewer half to yourself.
+
+- You cannot interrupt yourself, hint to yourself, or ask yourself a follow-up. Those three things are most of what an interview actually is.
+- Pramp and similar peer platforms pair you with a stranger on a schedule. A study peer works too, and knows your weak spots.
+- Strangers are better for pressure; peers are better for feedback. Do some of each.
+- Weekly is the floor. In the final two weeks, two or three a week.
+- Book them in advance. A mock that needs willpower on the day will not happen.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Be a good interviewer — that is half the value',
+      md: `You will spend half of every peer mock in the other chair. That half is not a favour you are doing; it is the part that teaches you what stalling looks like from outside.
+
+- Prepare before the session: know the optimal solution, two follow-ups, and a hint ladder from vague to explicit.
+- Let silence sit for about 30 seconds before hinting. Rescuing early feels kind and trains nothing.
+- Track behaviours as they happen — time to first line of code, how long the quiet stretches ran, whether complexity was ever stated unprompted.
+- Give feedback in behaviours, not verdicts: "you went quiet for four minutes after the brute force" is usable; "you seemed nervous" is not.
+- One thing to keep, one thing to change. A list of eight is a list nobody acts on.`,
+    },
+    {
+      type: 'note',
+      md: `A mock you did not write up mostly did not happen. Five minutes, immediately after, while it is still sharp:
+
+- The problem, and where exactly you stalled and for how long.
+- What the interviewer had to hand you — every hint is a marked gap.
+- One communication habit to change next time (just one).
+- The pattern note for the problem, same four lines as always.
+- Every question you could not answer, flagged into your review queue — the site does this for you, see below.
+
+Record the session if the platform allows it and both of you agree. Watching yourself is uncomfortable and unusually effective; you will hear filler, rushing, and long silences you had no idea were there.`,
+    },
+    {
+      type: 'intuition',
+      title: 'The 45-minute design mock, twice a week',
+      md: `Two per week, 45 minutes on a timer, spoken out loud, on a whiteboard or a blank document. The budget below is the whole discipline — most failed design rounds are pacing failures, not knowledge failures.
+
+- **0–5 min** — requirements and scope. Two or three clarifying questions, then pick the 3 core features and the non-functional shape (read-heavy? latency? availability?).
+- **5–10 min** — estimation. QPS, storage, bandwidth. Round aggressively and say the assumption out loud.
+- **10–15 min** — API surface and data model. Two or three endpoints, one table sketch.
+- **15–25 min** — high-level design. Boxes and arrows, then trace one write and one read end to end.
+- **25–38 min** — deep dives. The largest block on purpose: this is where senior signal lives.
+- **38–43 min** — bottlenecks and failure modes. What breaks first, what happens when the cache dies.
+- **43–45 min** — wrap. Name the main tradeoff you took, and what you would do with another hour.`,
+    },
+    {
+      type: 'visual',
+      component: 'PointerBoxDiagram',
+      props: {
+        title: 'The 45-minute design mock, minute by minute',
+        notice: 'A URL shortener, run on the clock. Left = where the timer is and what you are saying; right = what is actually on the board. The last frame is the classic failure — red means the round is already lost.',
+        leftLabel: 'clock',
+        rightLabel: 'whiteboard',
+        frames: [
+          {
+            note: 'Minutes 0-5. Two or three real clarifying questions, then commit to a scope out loud: "I will design shorten and redirect, and treat analytics as out of scope unless you want it." Committing is the signal; listing ten features is not.',
+            stack: [
+              { name: '00:00-05:00', value: 'scope + requirements' },
+              { name: 'ask', value: '2-3 clarifying Qs' },
+            ],
+            heap: [
+              { id: 'fn', value: 'shorten, redirect', label: 'functional' },
+              { id: 'nfr', value: 'read-heavy, low latency, HA', label: 'non-functional' },
+            ],
+          },
+          {
+            note: 'Minutes 5-10. Numbers, said aloud with their assumptions. "Assume 100M new links a day — that is about 1.2k writes/sec, and at 100:1 reads that is roughly 120k reads/sec." Rounding is expected; silence is not.',
+            stack: [
+              { name: '05:00-10:00', value: 'estimation' },
+              { name: 'assume', value: '100M links/day' },
+            ],
+            heap: [
+              { id: 'qps', value: '~1.2k writes/s, ~120k reads/s', label: 'traffic' },
+              { id: 'store', value: '~500B/row, 5 years', label: 'storage' },
+            ],
+          },
+          {
+            note: 'Minutes 10-15. The API and the data model together, small. Two endpoints and one table sketch is enough — a schema designed field by field is a five-minute sink for zero extra signal.',
+            stack: [
+              { name: '10:00-15:00', value: 'API + data model' },
+              { name: 'keep it', value: 'small' },
+            ],
+            heap: [
+              { id: 'api', value: 'POST /urls, GET /{code}', label: 'api' },
+              { id: 'tbl', value: 'code PK, long_url, owner, created_at', label: 'schema' },
+            ],
+          },
+          {
+            note: 'Minutes 15-25. Boxes and arrows, then trace one write and one read end to end through them. Narrate the why: "cache in front of the DB because reads outnumber writes about 100 to 1." Then check in: "that is my high level — deeper on ID generation or on the read path?"',
+            stack: [
+              { name: '15:00-25:00', value: 'high-level design' },
+              { name: 'check in', value: 'hand over the steering' },
+            ],
+            heap: [
+              { id: 'write', value: 'LB → app → ID gen → DB', label: 'write path' },
+              { id: 'read', value: 'LB → cache → (miss) DB → 302', label: 'read path' },
+            ],
+          },
+          {
+            note: 'Minutes 25-38. The biggest block, and the one the round is actually graded on. Two components, taken properly deep, beat six components skimmed. Let the interviewer choose which two.',
+            stack: [
+              { name: '25:00-38:00', value: 'deep dives (x2)' },
+              { name: 'depth', value: 'two, not six' },
+            ],
+            heap: [
+              { id: 'gen', value: 'base62 over a range-allocated counter', label: 'ID generation' },
+              { id: 'cache', value: 'LRU, hot keys, stampede control', label: 'cache' },
+            ],
+          },
+          {
+            note: 'Minutes 38-43. Break your own design before the interviewer has to. Name what fails first and what the blast radius is. Volunteering a weakness reads as ownership; being shown one reads as a gap.',
+            stack: [
+              { name: '38:00-43:00', value: 'bottlenecks + failure' },
+              { name: 'move', value: 'break it yourself' },
+            ],
+            heap: [
+              { id: 'hot', value: 'one viral code = hot shard', label: 'bottleneck' },
+              { id: 'fail', value: 'cache down → full read load hits DB', label: 'failure mode' },
+            ],
+          },
+          {
+            note: 'Minutes 43-45. Two sentences: the main tradeoff you deliberately took, and what you would spend another hour on. This is the last thing they hear, and it is cheap to make good.',
+            stack: [
+              { name: '43:00-45:00', value: 'wrap' },
+              { name: 'say', value: 'tradeoff + next step' },
+            ],
+            heap: [
+              { id: 'trade', value: 'counter vs hash: coordination vs collisions', label: 'tradeoff taken' },
+              { id: 'next', value: 'analytics pipeline, custom aliases', label: 'with more time' },
+            ],
+          },
+          {
+            note: 'The classic failure. Twenty minutes of thorough, careful requirements — eight features enumerated, edge cases explored, nothing decided. The design that follows is rushed boxes, no numbers, and the deep dive never happens. The feedback will say "could not prioritise", and it will be fair.',
+            stack: [
+              { name: '00:00-20:00', value: 'still on requirements', danger: true },
+              { name: '20:00-45:00', value: 'rushed boxes, no depth', danger: true },
+            ],
+            heap: [
+              { id: 'board', value: '8 features listed, 0 numbers', label: 'whiteboard', danger: true },
+              { id: 'verdict', value: 'no deep dive reached', label: 'the signal', danger: true },
+            ],
+          },
+        ],
+      },
+    },
+    {
+      type: 'note',
+      md: `Two habits the timer alone will not teach you:
+
+- Narrate the *why*, not just the what. "Cache here" is a box. "Cache here because reads outnumber writes about 100 to 1" is a reason, and reasons are what get graded.
+- Check in at every boundary: "That is my high-level design — deeper on the ID generation or on the read path?" It hands the interviewer control and stops you deep-diving the one thing they did not care about.
+
+The four reliable time sinks: gold-plating requirements, drawing a pretty diagram, designing the schema field by field, and arguing with yourself about SQL versus NoSQL. Each deserves one sentence and a decision.
+
+For prompts, use the case-study modules — **Case Study: URL Shortener (and Pastebin)**, **Case Study: Twitter/Instagram Feed (Fanout on Write vs Read)**, **Case Study: WhatsApp-Style Chat** — but design them *cold*, on the clock, before you re-read the module. Drill the numbers separately with **Back-of-Envelope Estimation: QPS, Storage & Bandwidth** until the arithmetic stops costing you minutes you do not have.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Theory drilling: the random 20',
+      md: `Your ML, DL, GenAI and systems theory is spread across dozens of modules. **Interview mode** (/interview) collapses it into one drill.
+
+- It draws a random 20 interview questions from every module you have marked complete. Press **Draw 20**, and **Redraw 20** for a fresh set.
+- The subject filter chips — **All subjects**, then one per subject you have completed — narrow the pool for a themed round. For the real drill, leave it on All subjects.
+- Case-based questions carry the amber badge. Those are the ones to answer standing up, out loud, in full sentences, as if the room were real.
+- Answer completely *before* you reveal. An answer you "would have said" is not evidence of anything.
+- Tick **I couldn't answer this — keep it in my review queue** on every miss. That checkbox is the only way an interview question becomes a review card, and honesty there is the entire value.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Why a random draw beats reading in order',
+      md: `Opening a module and reading its questions top to bottom feels like studying. It quietly cheats.
+
+- Reading in order hands you the subject for free. You already know it is about transformers, so retrieval is easy — and easy retrieval feels like mastery.
+- That free hint is called a context cue, and the real interview does not give you one. The question arrives with no subject header attached.
+- A random draw across subjects forces the missing first step: work out what is being asked before you can begin to answer it.
+- The uncomfortable outcome is the useful one — questions you were certain you knew, missed, because you had to find them without a signpost.
+- Twenty questions answered aloud runs about half an hour. Two or three draws a week.`,
+    },
+    {
+      type: 'intuition',
+      title: 'The review queue: 1, 3, 7, 21, 60',
+      md: `**Review** (/review) is the spaced-repetition queue. Completing a module drops its flashcards in, due tomorrow; the interview questions you flagged join the same queue.
+
+- Grade **Good** and the card climbs one rung of the ladder: 1 day → 3 → 7 → 21 → 60, then it stays at 60.
+- Grade **Again — see it tomorrow** and the card steps back one rung and returns tomorrow. Not to zero, and never hidden.
+- The reason is simple: a 21-day card you just failed is a card you do not know. Hiding it for another week would be the punishment. Seeing it tomorrow is the fix.
+- Answer out loud before flipping. The flip is the check; it is not the studying.
+- Keyboard: space flips, 1 is Again, 2 is Good. Fast enough that there is no excuse.
+- Interview cards that survive to step 3 offer **Got it — retire this card**. Use it. A healthy queue shrinks as you improve.`,
+    },
+    {
+      type: 'note',
+      md: 'Do the due cards every single day, including the days it is four cards. The ladder assumes daily contact: skip three days and the intervals bunch into a sixty-card Monday, which you will not do, which is how people quietly abandon the system a fortnight before their loop. Four cards takes two minutes. That is the whole point of the design.',
+    },
+    {
+      type: 'intuition',
+      title: 'The weekly recall test: how to run it',
+      md: `This is the plan\'s own invention and the highest-leverage twenty minutes of your week. Once a week, one mind map, from nothing.
+
+- Open **Revision mode** (/revision). It browses the one-screen mind maps of everything you have completed — no prose, just structure.
+- Do not browse first. Start the recall mode: it draws from the older half of what you have completed — old material is the material at risk — then gives you a blank page and asks you to reconstruct that map from memory.
+- Write the root, then the branches, then the leaves — in whatever order they surface. Messy is fine.
+- Then reveal. The real map appears beside your attempt, and you compare it node by node yourself.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Why generating beats re-reading',
+      md: `Recognition and recall are different operations, and only one of them is what an interview asks for.
+
+- Reading a mind map fires recognition. Everything looks familiar, and familiarity is a poor proxy for retrievability.
+- Producing the map from a blank page is the same operation the interview demands: retrieve with no cue in front of you.
+- That generating an answer — and even *failing* to generate it — strengthens later retrieval more than re-studying the same material is a well-established principle in learning research. You do not need a number to act on it.
+- The failure is the feature. The nodes you cannot produce are exactly the ones your re-reading was hiding from you.
+- Cost check: twenty minutes of blank-page reconstruction tells you more about your retention than two hours of re-reading everything.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Score it honestly, then act on it',
+      md: `The score is not the deliverable. The gaps are.
+
+- Count what you **missed**, not what you got. "11 of 15" is a comfortable framing; "4 nodes gone" is the one that produces an action.
+- Missing a branch counts double. A forgotten leaf is a fact; a forgotten branch is a whole structure you no longer hold.
+- The gaps become this week\'s review targets — the specific sections behind those nodes. Re-derive them, then let the queue carry them.
+- Re-reading the entire module because you missed four nodes is the re-reading trap walking back in wearing a disguise.
+- Re-test the same map two or three weeks later. If a node vanishes twice, that is not a memory problem — you never understood it. Go and learn it properly.`,
+    },
+    {
+      type: 'visual',
+      component: 'PointerBoxDiagram',
+      props: {
+        title: 'Re-reading versus blank-page recall',
+        notice: 'The same material, two treatments. Left = what you do; right = what your memory actually holds afterwards. Red marks the illusion.',
+        leftLabel: 'what you do',
+        rightLabel: 'what memory holds',
+        frames: [
+          {
+            note: 'Sunday: you re-read the mind map for CAP and consistency. Every node looks obvious. You close the tab feeling covered. Nothing was retrieved — it was all sitting right there on the screen.',
+            stack: [{ name: 'action', value: 're-read the mind map' }],
+            heap: [
+              { id: 'feel', value: '"I know all of this"', label: 'the feeling', danger: true },
+              { id: 'real', value: 'recognition, cue-supported', label: 'what happened' },
+            ],
+          },
+          {
+            note: 'Thursday, in the room: "Walk me through PACELC." No map on screen, no branch headings, no cue. The retrieval path you never practised is the one you now need.',
+            stack: [{ name: 'interviewer', value: '"Walk me through PACELC."' }],
+            heap: [
+              { id: 'blank', value: 'no cue on screen', label: 'the room' },
+              { id: 'out', value: 'half a sentence, then stall', label: 'output', danger: true },
+            ],
+          },
+          {
+            note: 'The other treatment. Blank page, map closed, reconstruct from memory. It is slow and it is uncomfortable and you get 11 of 15 nodes — which is the useful part, because now you know which 4.',
+            stack: [{ name: 'action', value: 'reconstruct from memory' }],
+            heap: [
+              { id: 'got', value: '11 nodes written unaided', label: 'recalled' },
+              { id: 'miss', value: '4 nodes never surfaced', label: 'the gap' },
+            ],
+          },
+          {
+            note: 'Now compare. The real map goes beside your attempt. The 4 missing nodes are this week\'s targets — those sections, re-derived, then handed to the review queue. The 11 you produced need nothing at all. That is the whole economy of the test.',
+            stack: [{ name: 'action', value: 'reveal and compare' }],
+            heap: [
+              { id: 'targets', value: '4 gaps → this week\'s review', label: 'act on these' },
+              { id: 'rest', value: '11 nodes → leave them alone', label: 'do not re-read' },
+            ],
+          },
+        ],
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'A week in the final two months',
+      md: `A template, not a law. Keep the ratios: something timed every day, something spoken every week, one recall test, one queue pass daily.
+
+- **Monday** — 2 timed DSA (1 new, 1 starred re-solve) · review queue · 45-minute design mock.
+- **Tuesday** — 2 timed DSA · review queue · Interview mode: one Draw 20, out loud, misses flagged.
+- **Wednesday** — 2 timed DSA · review queue · behavioural: two STAR stories out loud, each timed to 2 minutes.
+- **Thursday** — 2 timed DSA · review queue · 45-minute design mock (a different case-study family from Monday).
+- **Friday** — 2 timed DSA · review queue · peer or Pramp mock, then the five-minute write-up before you close the laptop.
+- **Saturday** — the weekly recall test · capstone polish (README, real numbers, demo link) · one Draw 20 filtered to your weakest subject.
+- **Sunday** — light. Review queue, the ten-minute audit below, and one genuinely free evening.`,
+    },
+    {
+      type: 'note',
+      md: `The Sunday audit — five questions, ten minutes, written down:
+
+1. Which problems did the clock beat this week? Are their pattern notes written and starred?
+2. In the design mocks, which stage ate the budget? Drill that stage alone next week.
+3. Which interview-mode questions did I flag, and are they actually in the queue?
+4. Which recall-test nodes came back blank, and what did I do about them?
+5. Open the dashboard: did the streak hold, and which subject's progress bar moved least? The bar that has not moved in three weeks is the one you are avoiding — schedule it, do not resolve to do it.
+
+Adapt the shape freely — someone working full time might run one design mock a week and move the peer mock to Sunday. What must not move: the daily timed pair and the daily queue. Those two are the load-bearing walls; everything else is furniture.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Interview day, briefly',
+      md: `Nothing clever here. The mechanics are boring and people still lose rounds to them.
+
+- Sleep beats one more revision pass. The night before is for logistics, not learning.
+- Set up early: charged laptop, the most stable internet you have, camera framed, the editor you actually practise in, water, and paper for diagrams.
+- Ask clarifying questions before you write code. Two or three real ones — input size, duplicates, what to return on empty — then restate the problem in your own words and get a yes.
+- When you blank: say what you are thinking, out loud. Then state the brute force with its complexity. Then ask for a hint. Asking is a normal, expected move; silence is the only genuinely fatal one.
+- Leave two minutes to trace your code by hand on a small case, and state the complexity before you are asked.
+- One bad round is not the loop. Debriefs weigh the rounds together, and a strong recovery later in the day is a real and common thing. Finish the day properly.`,
+    },
+    {
+      type: 'note',
+      md: 'The honest close: none of this guarantees an offer. Loops are noisy — the same candidate passes one and fails another the same month. Rejections frequently turn on headcount, a mismatched question, an interviewer having a bad day, or a bar that shifted, and you will usually never learn which. That is not a comforting thought and it is a true one. What you control is arriving prepared and being able to think out loud when the answer is not immediate. Do the two months honestly, then let the noise be noise.',
+    },
+  ],
+  quiz: [
+    {
+      question: 'It is week six of eight. A mock exposes a topic you have never studied. What does the "no new subjects" rule say?',
+      options: [
+        { text: 'Ignore it — the rule is absolute', explanation: 'Too rigid. The rule bans open-ended new subjects, not repairing a specific hole a drill just found.' },
+        { text: 'Pause the mock schedule and spend three days learning the subject properly', explanation: 'That is the consumption trap returning in disguise. A mock-sized hole gets a mock-sized patch, not a syllabus.' },
+        { text: 'Learn exactly the piece the mock exposed, then get straight back on the clock', explanation: 'Correct. New material enters only through an exposed hole, and it enters at the size of the hole.' },
+        { text: 'Add the whole subject to the review queue', explanation: 'The queue holds material you have learned. Cards for content you never studied are noise that crowds out real reviews.' },
+      ],
+      correct: 2,
+    },
+    {
+      question: 'Your 30-minute timer just expired on a new medium — and you can feel the idea arriving. What do you do?',
+      options: [
+        { text: 'Stop, read the solution actively, write the pattern note, star it and re-queue it', explanation: 'Correct. The clock is obeyed, the extraction still happens, and the problem returns in 3 days as a from-memory re-solve.' },
+        { text: 'Take five more minutes — you were clearly close', explanation: 'This trains extension. There is no extension at minute 35 of a real round, and nobody will offer you one.' },
+        { text: 'Restart the timer tomorrow without looking at anything', explanation: 'You spend another 30 minutes on the same gap and still extract nothing. The solution read is what converts the loss into a pattern.' },
+        { text: 'Mark it too hard and move on to the next problem', explanation: 'No note, no pattern, no star — 30 minutes spent and nothing retained.' },
+      ],
+      correct: 0,
+    },
+    {
+      question: 'What is the strongest reason a mock with a human beats a hard timed solo problem?',
+      options: [
+        { text: 'Humans pick harder problems', explanation: 'Difficulty is independent of who reads the problem out. You can set yourself equally hard problems.' },
+        { text: 'It makes the hours count as real practice', explanation: 'Time accounting is not the point. The solo problem is also real practice — of a different skill.' },
+        { text: 'Peer platforms use actual company questions', explanation: 'Sometimes the questions resemble real ones, but that is unreliable and is not where the value comes from.' },
+        { text: 'You cannot interrupt yourself, hint to yourself, or ask yourself a follow-up', explanation: 'Correct. Those three interactions are most of what an interview is, and they are exactly the part solo practice structurally cannot simulate.' },
+      ],
+      correct: 3,
+    },
+    {
+      question: 'Twenty minutes into a 45-minute design mock you are still refining requirements. What has already gone wrong?',
+      options: [
+        { text: 'Nothing — thorough requirements are a seniority signal', explanation: 'Thoroughness has a budget. Twenty minutes of scoping guarantees the deep dive never happens, which is the opposite of a seniority signal.' },
+        { text: 'You have burned the estimation, API and high-level budgets, so the deep dives will not happen — and the deep dives carry the signal', explanation: 'Correct. The 25-38 minute block is the largest on purpose. Losing it to scoping is the classic failure of this round.' },
+        { text: 'You should have skipped requirements entirely', explanation: 'Overcorrection. The 5-minute scope is what makes every later decision defensible; the failure is spending twenty, not spending five.' },
+        { text: 'The timer should be stretched to 60 minutes', explanation: 'The real round is 45. Practising at 60 trains pacing you will not have on the day.' },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'You fail a card sitting on the 21-day rung and press "Again — see it tomorrow". What does the queue do?',
+      options: [
+        { text: 'Deletes the card as unlearnable', explanation: 'Nothing is auto-deleted. Retiring is manual, and is only offered for interview cards that have climbed to step 3 or beyond.' },
+        { text: 'Keeps it at 21 days so the schedule stays stable', explanation: 'That would hide a card you demonstrably do not know for three more weeks — the exact failure the design avoids.' },
+        { text: 'Steps it back one rung and shows it again tomorrow', explanation: 'Correct. One rung back, due tomorrow. Not a punishment interval, not a reset — the fastest honest re-test.' },
+        { text: 'Resets it all the way to step 0', explanation: 'Close, but no. It steps back a single rung; your earned position is mostly preserved. Either way it returns tomorrow.' },
+      ],
+      correct: 2,
+    },
+    {
+      question: 'Why does Interview mode draw 20 at random across all completed subjects rather than letting you read a module\'s questions in order?',
+      options: [
+        { text: 'It makes each session shorter', explanation: 'Length is 20 questions either way. Session length is not the variable being controlled.' },
+        { text: 'It guarantees even coverage of the question bank', explanation: 'A random draw guarantees no such thing. Coverage comes from repeated draws, and coverage is not the reason anyway.' },
+        { text: 'Random order matches how companies schedule their rounds', explanation: 'Loops are usually themed per round, not randomised. The reason is about cues, not scheduling.' },
+        { text: 'Reading in order hands you the subject as a free cue, which makes retrieval easy and mastery feel closer than it is', explanation: 'Correct. The real question arrives with no subject header. The random draw forces you to identify what is being asked before you can answer it.' },
+      ],
+      correct: 3,
+    },
+    {
+      question: 'You reconstruct a mind map from memory and produce 11 of its 15 nodes. What is the right next action?',
+      options: [
+        { text: 'Re-read the whole module to be safe', explanation: 'The re-reading trap in a disguise. Eleven nodes are demonstrably fine and need nothing spent on them.' },
+        { text: 'Go to the four missing nodes, re-derive them, and let the review queue carry them', explanation: 'Correct. The gaps are the deliverable, and the fix is targeted at the sections behind those specific nodes.' },
+        { text: 'Record the 73% score and move on to the next map', explanation: 'The score is not the product. A number with no action attached is just a mood.' },
+        { text: 'Choose a different map next week and never retest this one', explanation: 'Retest it in two or three weeks. A node that vanishes twice is a comprehension gap, not a memory one — and you only find that by retesting.' },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'You blank completely in a coding round. Which response gives the interviewer the most to work with?',
+      options: [
+        { text: 'Say what you are thinking, state the brute force with its complexity, then ask for a hint', explanation: 'Correct. All three are gradeable. Asking for a hint is a normal move; being unreadable is not.' },
+        { text: 'Stay quiet and think until something arrives', explanation: 'Silence is the one unrecoverable state. An interviewer cannot grade, or help, what they cannot hear.' },
+        { text: 'Start typing something so the screen is not empty', explanation: 'Code with no stated plan reads as guessing, and it burns the minutes you needed for the actual solution.' },
+        { text: 'Say you have not seen this type of problem before', explanation: 'It closes the door. Watching you work at an unfamiliar problem is frequently the entire point of the question.' },
+      ],
+      correct: 0,
+    },
+  ],
+  interviewQuestions: [
+    {
+      question: 'Case: your last three 45-minute design mocks all ran out of time before any deep dive. You have four weeks left. What do you change?',
+      answer:
+        'I would treat it as a pacing bug and fix it mechanically. First, diagnose from the write-ups: which stage ate the budget? It is almost always requirements or a hand-drawn schema. Second, put hard checkpoints on the clock — at minute 10 the estimation must be done, at minute 25 the high-level design must be finished and I must have asked "deeper on X or Y?". If a checkpoint passes, I move on mid-sentence, exactly like the DSA timer. Third, drill the slow stage in isolation, off the mock: ten estimation warm-ups at three minutes each, or ten scope-and-commit reps where I read a prompt and produce three features plus the non-functional shape in under five minutes. Fourth, deliberately practise committing rather than enumerating: "I will design shorten and redirect and treat analytics as out of scope unless you want it" — the commitment is what earns the time back. Design rounds are lost to pacing far more often than to missing knowledge, and pacing is trainable in a week.',
+      isCaseBased: true,
+    },
+    {
+      question: 'Case: in a peer mock, your partner solved the problem in 15 minutes and then had nothing useful to say in feedback. Did you waste the session?',
+      answer:
+        'Only if I let it end there. Two recoveries. In the moment: I ask them for follow-ups instead of stopping — "make the input a stream", "now it does not fit in memory", "now optimise for space" — which is the part of the interview that actually discriminates and costs them nothing to run. Afterwards: I replace the open question with behavioural ones they can answer, because "how did I do?" gets a shrug from anyone. "How long was my longest silence? Did I state complexity before you asked? At what minute did I start coding? Which of my sentences did not make sense to you?" Those are observations, not judgements, and even an inexperienced partner has them. And the half where I interview them is not wasted at all — preparing a hint ladder and watching someone else stall teaches me what stalling looks like from the outside, which is a view I can never get from my own chair.',
+      isCaseBased: true,
+    },
+    {
+      question: 'Case: it is Sunday, you skipped four days, and 63 review cards are due at once. What do you do?',
+      answer:
+        'Do them, honestly, and fix the cause. Practically: work the queue in the order it gives me, answer out loud before flipping as always, and grade truthfully — the temptation with a large backlog is to mass-press Good to make the number go down, which converts the queue into decoration. Grading Again is cheap here: the card steps back one rung and returns tomorrow, so nothing is lost but a day. Expect the queue to stay lumpy for about a week as the bunched intervals redistribute; that is the system recovering, not the system broken. The real fix is the cause: the ladder assumes daily contact, and a normal day is four to fifteen cards, which is two to eight minutes. I would move the queue to a fixed anchor — immediately after the second timed DSA problem — so it stops depending on remembering.',
+      isCaseBased: true,
+    },
+    {
+      question: 'Case: the same mind-map node comes back blank in your weekly recall test two weeks running. What does that tell you, and what do you do?',
+      answer:
+        'It tells me this is not a memory failure. One blank node is decay and spaced repetition fixes decay. The same node blank twice, after it has been targeted once, means there is nothing underneath to retrieve — I recognised the phrase when I read it and never actually understood the idea. So I stop treating it as a review item and treat it as unlearned material: go back to the module section, re-derive it from first principles, explain it out loud to an imaginary interviewer, and only then let it re-enter the queue as a card. This is also one of the few legitimate reasons to break the "no new subjects" rule in the final two months — the hole is specific and it was found by a drill, which is exactly the condition the rule allows for. The general principle: the review queue fixes forgetting; it cannot fix never-knowing, and honest scoring is what distinguishes the two.',
+      isCaseBased: true,
+    },
+    {
+      question: 'Walk me through how you practise DSA in the last two months.',
+      answer:
+        'Two timed problems a day and nothing else on the DSA budget. Both on a visible clock started before I read the statement — 30 minutes for a medium, 40 for a hard — with no editorial, no hints tab, and narration out loud the whole way: clarify, brute force with its cost, plan, code, then complexity stated aloud before I run anything. One of the two is a from-memory re-solve of a starred problem in a blank editor, which is the only honest test of retention; in the last fortnight, often both are. When the timer expires I stop mid-thought, read the solution actively — stop at the key idea, close it, finish alone — write the four-line pattern note, star it, and re-queue it for about 3 days and then 2 weeks. The deliberate tradeoff is fewer problems for far more rehearsal: at this stage another hundred solved problems adds much less than a hundred reps of performing under a clock.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Give me the minute budget for a 45-minute system design round.',
+      answer:
+        'Roughly: 0-5 requirements and scope, 5-10 estimation, 10-15 API and data model, 15-25 high-level design, 25-38 deep dives, 38-43 bottlenecks and failure modes, 43-45 wrap. The shape matters more than the exact minutes — the deep-dive block is the largest on purpose, because that is where senior signal actually lives, and everything before it exists to earn the right to spend it. Two checkpoints keep it honest: numbers done by minute 10, and by minute 25 the high level is drawn and I have asked "deeper on the ID generation or the read path?". The wrap is two cheap sentences that are the last thing they hear — the main tradeoff I took, and what I would do with another hour. The failure this budget exists to prevent is twenty careful minutes on requirements followed by a rushed sketch and no deep dive at all.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Why insist on a timer? Untimed practice lets you think properly.',
+      answer:
+        'Because the interview is timed, and the skills the clock trains are separate from the skills untimed work trains. A timer teaches triage — when to abandon an approach, when a decision is worth one sentence rather than five minutes — and it teaches producing a working answer under a constraint instead of a perfect answer eventually. It also generates honest data: an untimed session always ends in success, so it tells you nothing, while a timer produces a clean pass or fail per problem and a list of exactly where you were slow. The tradeoff is real — timed practice does suppress deep exploration — which is why timers belong in the final two months and not in the learning phase. Earlier, understanding is the goal and a clock gets in its way. At this stage, understanding is largely built and delivery is the bottleneck.',
+      isCaseBased: false,
+    },
+    {
+      question: 'With a dozen subjects behind you, how do you decide what to revise on a given day?',
+      answer:
+        'I do not decide; I removed the decision. Three mechanisms choose for me. The review queue picks the daily material — whatever the 1/3/7/21/60 ladder makes due, plus interview questions I flagged as missed. The weekly recall test picks the weekly target — I reconstruct one old mind map on a blank page and the nodes that come back blank are that week\'s focus. The mocks pick the emergency items — anything an interviewer had to hint at goes straight into the queue. What I explicitly do not use is my own sense of what feels shaky, because that sense is driven by recency and by discomfort, and it systematically ignores the material that has quietly decayed to nothing while feeling familiar. Offloading the choice also removes a daily negotiation, which is worth something on its own eight weeks out.',
+      isCaseBased: false,
+    },
+    {
+      question: 'What are you doing in the first five minutes of a coding interview?',
+      answer:
+        'Not coding. Two or three genuine clarifying questions first — input size and constraints, duplicates or nulls, what to return on empty or invalid input, whether the input is sorted — and the constraint answer sets my complexity budget before I write anything. Then I restate the problem in my own words and wait for a yes; that catches the misunderstanding that would otherwise cost twenty minutes. Then one or two examples, including a degenerate one. Then the brute force in a single spoken sentence with its complexity, followed by "let me do better" and the actual plan, again with its complexity. Only then do I type. The five minutes look slow and they are the highest-return minutes in the round: they demonstrate the thing being measured, which is how I approach an underspecified problem, not how fast I can type a known solution.',
+      isCaseBased: false,
+    },
+    {
+      question: 'You go completely blank in a round. What do you actually do?',
+      answer:
+        'Narrate, downgrade, ask. Narrate: say the true thing out loud — "I do not see the trick yet, so let me work from what the constraints tell me" — because an interviewer can grade thinking and can help someone thinking, but can do neither with silence. Downgrade: state the brute force with its complexity and offer to code it, since working slow code plus a described optimisation passes far more often than an empty screen. Solve a smaller or simpler version, or a concrete example by hand, which frequently surfaces the general pattern. Then ask: "could I have a hint on the data structure?" is a normal, expected move that costs a little and rescues the round. What loses is going quiet for four minutes, or typing something to look busy with no stated plan. Silence is the only genuinely fatal move.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Two weeks out — how do you know your preparation is actually working?',
+      answer:
+        'By tracking outputs, not hours. Four signals I can read directly. DSA: what fraction of timed problems I finish inside the clock, and whether starred re-solves come out clean from a blank editor rather than stalling. Design: whether the mock reaches the deep-dive block at all, and whether the interviewer had to steer me. Theory: my hit rate on a random Draw 20 in Interview mode, which is honest precisely because there is no subject cue, and whether the flagged-miss count per draw is falling. Retention: how many nodes come back blank in the weekly recall test, and whether the same nodes keep reappearing. Hours studied, problems solved and modules completed are all inputs, and every one of them can rise while performance stays flat. Only the four above move when the preparation is working.',
+      isCaseBased: false,
+    },
+    {
+      question: 'What goes into a mock-interview write-up, and why bother?',
+      answer:
+        'Five minutes, immediately after, before the details soften: the problem and where I stalled and for how long; every hint the interviewer had to give, since each hint marks a gap precisely; one communication habit to change next time, and only one, because a list of eight gets acted on zero times; the four-line pattern note for the problem; and each question I could not answer, flagged into the review queue so it comes back on the ladder. I bother because the mock itself is only the data collection — without extraction it is an hour of adrenaline and a vague feeling that it went badly. The written record is also the only way to see patterns across mocks, which is where the real diagnosis lives: three write-ups saying "went quiet after the brute force" is a fixable habit, and no single session would have told me that.',
+      isCaseBased: false,
+    },
+  ],
+  flashcards: [
+    { front: 'What changes in the final two months', back: 'Stop learning topics, start rehearsing performance. No new subjects — new material enters only through a hole a mock or drill exposed. Every session is output-shaped: spoken, written, or coded under a constraint.' },
+    { front: 'Daily DSA in the final phase', back: '2 timed problems/day — 1 new, 1 starred re-solve from memory. Visible clock (30 min medium, 40 hard) started before reading. No peeking, narrate out loud, complexity stated before running.' },
+    { front: 'Timer expired — the protocol', back: 'Stop mid-thought. Read the solution actively (stop at the key idea, close it, finish alone). Write the four-line pattern note. Star it. Re-queue for ~3 days, then ~2 weeks. Never grant yourself five more minutes.' },
+    { front: 'Why a human mock beats solo practice', back: 'You cannot interrupt yourself, hint to yourself, or ask yourself a follow-up — and those three are most of what an interview is. Pramp or peers, weekly minimum; strangers for pressure, peers for feedback.' },
+    { front: 'The 45-minute design budget', back: '0-5 requirements · 5-10 estimation · 10-15 API + data model · 15-25 high-level design · 25-38 deep dives · 38-43 bottlenecks and failure modes · 43-45 wrap (tradeoff + next step).' },
+    { front: 'The classic design-round failure', back: 'Twenty careful minutes on requirements, then rushed boxes and no deep dive. The 25-38 block carries the signal; scoping is 5 minutes and a commitment, not an enumeration.' },
+    { front: 'Interview mode (/interview)', back: 'Draws a random 20 questions across all completed modules. Subject filter chips narrow the pool; amber badge = case-based. Answer out loud before revealing, then tick "I couldn\'t answer this" to turn a miss into a review card.' },
+    { front: 'Why random beats reading in order', back: 'Reading a module\'s questions in order hands you the subject as a free context cue, so retrieval is easy and feels like mastery. The real question arrives with no header attached.' },
+    { front: 'The review ladder (/review)', back: 'Good climbs one rung: 1 → 3 → 7 → 21 → 60 days. "Again — see it tomorrow" steps back one rung and returns tomorrow, never hidden. Space flips, 1 = Again, 2 = Good. Do due cards daily even at four cards.' },
+    { front: 'The weekly recall test', back: 'In Revision mode (/revision): it draws a mind map from the older half of what you have completed, you reconstruct it on a blank page from memory, then reveal the real one beside it. Count what you MISSED. Gaps = this week\'s targets, not a reason to re-read the module.' },
+  ],
+  mindmapMarkdown: `- The Final Two Months: Mocks, Timed Practice & Revision Cadence
+  - Learning → performing
+    - No new subjects; patch exposed holes only
+  - Timed DSA — 2/day
+    - 30-40 min clock, out loud, no peeking
+    - Timer up → solution, pattern note, star
+    - Starred re-solve from a blank editor
+  - Human mocks — weekly
+    - Pramp or peers; be the interviewer too
+    - Five-minute write-up or it did not happen
+  - 45-min design mock, x2/week
+    - 5 req · 5 est · 5 API+data · 10 HLD
+    - 13 deep dives · 5 bottlenecks · 2 wrap
+    - Trap: 20 min on requirements
+  - Interview mode (/interview)
+    - Random 20 across completed modules
+    - Flag misses → review cards
+  - Review queue (/review)
+    - Ladder: 1 → 3 → 7 → 21 → 60
+    - Again = one rung back, due tomorrow
+  - Weekly recall test (/revision)
+    - Old mind map, blank page, from memory
+    - Reveal, compare, count what you missed
+    - Gaps = this week's targets
+  - Weekly template
+    - Daily timed pair + queue, no exceptions
+    - Sat: recall test + capstone polish
+    - Sun: ten-minute audit
+  - Interview day
+    - Clarify, think aloud, ask for a hint
+    - One bad round is not the loop`,
+}
+
+export default m

@@ -1,0 +1,691 @@
+import type { Module } from '../types'
+
+const m: Module = {
+  id: 'mlops-l1-cloud-basics',
+  subjectId: 'mlops',
+  level: 1,
+  title: 'Cloud on the Free Tier: Compute, Storage & IAM',
+  whyItMatters:
+    'Every tool in the rest of this track — a Docker registry, a CI runner, MLflow\'s artifact store, a Kubernetes cluster — is renting exactly three things: a machine, a bucket, and a permission. Learn those three properly once and the rest is configuration. Get the third one wrong and you either cannot deploy, or you leak a key and make the news.',
+  estMinutes: 45,
+  sections: [
+    {
+      type: 'intuition',
+      title: 'You are renting someone else\'s computer',
+      md: `A hotel room, not a house. You do not own the plumbing. You pay per night, you leave when you are done, and if you forget to check out you keep paying.
+
+- The cloud is a rental counter. Everything on it is metered: per hour, per GB stored, per GB moved, per million requests.
+- The skill is not "knowing AWS". Every provider rents the same three things: **compute** (a machine that runs), **storage** (a place that remembers), and **permission** (who is allowed to touch either).
+- The whole job is picking WHICH rental and knowing what it costs per hour. An engineer who cannot name the unit price cannot design the system.
+- The cloud never says no. It will happily rent you a $32/hour GPU box and let it run for a month while you are on holiday.
+- AWS and GCP names differ, the ideas do not: EC2 = Compute Engine, S3 = Cloud Storage, IAM = IAM. Learn one, translate the other in an afternoon.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Compute: a VM is a slice of a real machine',
+      md: `A **virtual machine** (an EC2 *instance* on AWS, a Compute Engine instance on GCP) is a slice of a physical server carved out by a hypervisor. You get a Linux box with an IP.
+
+- A **vCPU is one hardware thread, not one core.** x86 cores run two threads, so a 4-vCPU instance is usually 2 physical cores. "8 vCPU" is not 8 laptop cores.
+- **Instance families** are just ratios of vCPU : RAM : accelerator. Pick the ratio your bottleneck needs.
+- **General purpose** (\`m\`, \`t\` / \`e2\`, \`n2\`) — balanced, ~4 GB per vCPU. The default when you do not know.
+- **Compute optimized** (\`c\` / \`c2\`) — ~2 GB per vCPU. Feature engineering, encoding, simulation, anything CPU-pinned.
+- **Memory optimized** (\`r\`, \`x\` / \`m2\`) — 8–32 GB per vCPU. A pandas join that OOMs, an in-memory store, a big embedding table.
+- **Accelerated** (\`p\`, \`g\` / \`a2\`, \`g2\`) — GPUs. Training and heavy inference, and the most expensive mistake to leave running.
+- Read the name as family + generation + variant + size: \`m7i.large\` is general purpose, 7th generation, Intel, large. \`g5.xlarge\` is a GPU box with one A10G.
+- Rule: **size from a measurement, not from ambition.** Watch CPU, RAM and GPU utilisation for one real run, then pick the family that was actually starved.`,
+    },
+    {
+      type: 'note',
+      md: 'The free-tier reality, honestly. AWS gives 750 hours/month of `t2.micro` or `t3.micro` for 12 months; GCP has an always-free `e2-micro` in a few US regions. That is **1 vCPU and 1 GB of RAM**. Enough to: keep an always-on Linux playground, practise SSH and systemd, run Docker, host a small FastAPI service. Not enough to: train anything real, run two model containers, or even `pip install torch` without an out-of-memory kill. And these are **burstable** instances — they run on CPU credits. Sustained 100% CPU drains the credits, after which `t2` throttles you to a fraction of a core and `t3` defaults to *Unlimited* mode and quietly bills the surplus. The free tier caps instance-hours, not the burst surcharge.',
+    },
+    {
+      type: 'intuition',
+      title: 'On-demand vs reserved vs spot — the pricing question they actually ask',
+      md: `Same hardware, three ways to pay for it. Interviewers ask this because the wrong answer costs a company real money.
+
+- **On-demand** — full price, billed per second, no commitment, available now. The safe default.
+- **Reserved instances / Savings Plans** — commit to 1 or 3 years, get roughly 30–70% off. You pay for every hour of that year whether you use it or not.
+- **Spot** (GCP: Preemptible / Spot VMs) — the provider selling unsold capacity at **60–90% off**, on the condition that it can take the machine back with a **two-minute warning**.
+- The tradeoff, stated the way an interviewer wants to hear it: **spot is perfect for checkpointed training and fatal for a serving endpoint.**
+- Training on spot: checkpoint to object storage every N steps, catch the interruption notice, resume on a fresh box. Losing four minutes of work to save 70% of the bill is an easy trade.
+- Serving on spot: a two-minute eviction is a user-visible outage. The honest production pattern is a **mixed fleet** — an on-demand baseline that carries the SLA, spot capacity on top for burst.
+- Steady 24/7 load that you will still be running next year is the reserved case. Spiky, interruptible, batch work is the spot case. Everything unknown starts on-demand.`,
+    },
+    {
+      type: 'code',
+      lang: 'bash',
+      title: 'Rent a machine — and read the price tag first',
+      code: `# 1. The spec sheet. vCPU and RAM for three candidate types, in one call.
+aws ec2 describe-instance-types \\
+  --instance-types t3.micro m7i.large g5.xlarge \\
+  --query 'InstanceTypes[].[InstanceType,VCpuInfo.DefaultVCpus,MemoryInfo.SizeInMiB]' \\
+  --output table
+
+# 2. Launch one free-tier box. Notice: no access key anywhere in this command.
+aws ec2 run-instances \\
+  --image-id ami-0abcdef1234567890 \\
+  --instance-type t3.micro \\
+  --key-name my-laptop \\
+  --security-group-ids sg-0a1b2c3d4e5f \\
+  --iam-instance-profile Name=trainer-role \\
+  --tag-specifications 'ResourceType=instance,Tags=[{Key=owner,Value=raunak},{Key=project,Value=study},{Key=ttl,Value=8h}]'
+
+# 3. The same machine on GCP.
+gcloud compute instances create trainer-1 \\
+  --machine-type=e2-micro \\
+  --zone=us-central1-a \\
+  --service-account=trainer@my-project.iam.gserviceaccount.com \\
+  --scopes=https://www.googleapis.com/auth/cloud-platform
+
+# 4. Spot: identical hardware, 60-90% off, reclaimable with 2 minutes' notice.
+aws ec2 run-instances \\
+  --image-id ami-0abcdef1234567890 \\
+  --instance-type g5.xlarge \\
+  --instance-market-options 'MarketType=spot' \\
+  --iam-instance-profile Name=trainer-role
+
+# 5. The two commands that actually save money.
+aws ec2 stop-instances --instance-ids i-0123456789abcdef0
+aws ec2 describe-volumes --filters Name=status,Values=available --output table`,
+      annotations: {
+        2: 'The spec sheet, not the price list. Run it before every launch so "large" stops being a vibe and becomes vCPU and MiB.',
+        9: 'The AMI is the disk image the box boots from — OS plus whatever was baked in. Region-specific: an AMI id from us-east-1 does not exist in ap-south-1.',
+        11: 'An SSH key pair, for logging in as a human. It grants ZERO API permissions — people confuse this with credentials constantly.',
+        13: 'The line that matters most. An instance profile attaches a ROLE to the machine, so the SDK inside gets short-lived credentials automatically. No key on disk, ever.',
+        14: 'Tag at launch or never. An untagged resource is an unattributable line on the bill that nobody dares delete six months later.',
+        20: 'GCP calls the same idea a service account attached to the instance. The scopes line is a second, coarser filter on top of the IAM policy.',
+        27: 'One flag turns this into a spot request. Add an interruption handler and checkpointing, or you will lose a 6-hour run at hour 5.',
+        31: 'Stop, not terminate: the box shuts down and the compute charge stops, but the disk and the instance survive. Terminate destroys it.',
+        32: 'status=available means "attached to nothing". These orphan volumes bill by the GB forever and are the number one mystery line on a student bill.',
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'Serverless: renting no machine at all',
+      md: `You do not rent a hotel room, you pay per shower. Lambda, Cloud Functions and Cloud Run run your code only when a request arrives, charge per 100 ms, and cost exactly zero while idle.
+
+- Perfect for glue: a webhook, a nightly job, a preprocessing step, an API that calls a model living somewhere else.
+- Two limits make it awkward for ML itself. First, **package size**: a Lambda zip is capped at 50 MB uploaded / 250 MB unzipped for code plus layers. A CPU-only torch wheel already blows past that; a CUDA one is gigabytes.
+- Second, **cold start**: no traffic means no running instance, so the next request pays container boot plus your model load. For an ML container that is 5–30 seconds, and it lands on a real user.
+- **Cloud Run is the friendlier option**: it runs your *container image* (up to ~10 GB), so torch fits, it gives you a real HTTP server with concurrency, and \`--min-instances=1\` buys the cold start away for the price of one always-warm instance.
+- Lambda supports container images too (10 GB), which fixes size but not cold start.
+- Honest summary: serverless is excellent for the parts of an ML system that are not the model, and a compromise for the model itself.`,
+    },
+    {
+      type: 'code',
+      lang: 'bash',
+      title: 'Serverless with a container, which is the version that works',
+      code: `# Cloud Run: hand it an image, get back an HTTPS URL. No VM to patch.
+gcloud run deploy sentiment-api \\
+  --image=asia-south1-docker.pkg.dev/my-project/apps/sentiment:v3 \\
+  --region=asia-south1 \\
+  --cpu=1 --memory=2Gi \\
+  --min-instances=0 \\
+  --concurrency=8 \\
+  --allow-unauthenticated
+
+# Why plain Lambda is painful here: measure your dependency tree once.
+du -sh .venv/lib/python3.11/site-packages/torch
+# Lambda zip: 50 MB uploaded, 250 MB unzipped (code + layers).
+# Lambda container image: 10 GB.  Cloud Run container image: ~10 GB.`,
+      annotations: {
+        2: 'It deploys an IMAGE, not a zip of source. That single difference is why a torch service fits here and not in a Lambda zip.',
+        6: 'min-instances=0 means you pay nothing while idle and every cold request pays the model load. Set it to 1 the day real users appear.',
+        7: 'Concurrency is requests per container. For a CPU-bound model this should be small — 8 concurrent inferences on 1 vCPU just makes everyone slow.',
+        8: 'Public endpoint. Drop this flag and callers must present a Google identity token, which is the correct default for an internal service.',
+        11: 'Run it and look at the number, do not guess. A CPU-only torch install is already hundreds of MB; with the CUDA wheels it is gigabytes.',
+      },
+    },
+    {
+      type: 'note',
+      md: 'Managed ML platforms — **SageMaker** and **Vertex AI** — in one honest paragraph. They wrap training jobs, hyperparameter search, a model registry, endpoints and monitoring into managed services, and they genuinely remove weeks of plumbing for a team that has none. The price: a real premium over the same hardware bought as plain instances (a SageMaker notebook or endpoint costs noticeably more than the equivalent EC2), and heavy **lock-in** — the training entrypoint, the registry, the endpoint contract and the monitoring config are all provider-shaped, so leaving means rewriting. For learning, they are the wrong first stop: build the pipeline yourself out of a VM, a bucket, a container and a CI job, understand what each managed feature is replacing, and *then* decide whether to pay for it.',
+    },
+    {
+      type: 'intuition',
+      title: 'Object storage: the default home for data, models and logs',
+      md: `A cloakroom, not a wardrobe. You hand over a bag and get a ticket. You cannot reach in and change one sock — you take the whole bag out, change it, and hand it back.
+
+- A **bucket** is a namespace with a **globally unique** name (across every account on earth). An **object** is bytes plus metadata. A **key** is the object's full name.
+- \`s3://bkt/models/sentiment/v3/model.pt\` looks like a path. It is one flat key string. The slashes are a display convention that tools render as folders.
+- So it is **not a filesystem**: no cheap rename (copy every byte, then delete), no partial append (rewrite the whole object), no seek-and-write, and "list a folder" is a prefix scan billed per thousand requests.
+- What it is superb at: effectively infinite capacity, roughly eleven nines of durability, many readers at once, and single-digit cents per GB-month. That is why datasets, model artifacts, logs and backups all live here.
+- **Storage classes** trade retrieval speed for price: Standard → Infrequent Access → Glacier tiers. **Lifecycle rules** move objects between them and delete them on a schedule, with no code.
+- Turn on **versioning**. An overwritten model artifact becomes recoverable, and it is the cheapest insurance in this module.`,
+    },
+    {
+      type: 'code',
+      lang: 'bash',
+      title: 'The five object-storage commands you will use forever',
+      code: `# Bucket names are global across every AWS account on earth. Add a suffix.
+aws s3 mb s3://faang-prep-artifacts-8412 --region ap-south-1
+
+# Upload one model artifact. That long "path" is a single flat key.
+aws s3 cp model.pt s3://faang-prep-artifacts-8412/models/sentiment/v3/model.pt
+
+# Upload a dataset. sync copies only what changed; cp --recursive copies all of it.
+aws s3 sync ./data s3://faang-prep-artifacts-8412/datasets/reviews/ \\
+  --exclude '*.tmp' --storage-class STANDARD_IA
+
+# List with sizes and a total.
+aws s3 ls s3://faang-prep-artifacts-8412/models/ --recursive --human-readable --summarize
+
+# "Rename" a prefix: read every object, write it back, delete the original.
+aws s3 mv s3://faang-prep-artifacts-8412/models/ s3://faang-prep-artifacts-8412/archive/ --recursive
+
+# Temporary read access WITHOUT handing anyone a credential.
+aws s3 presign s3://faang-prep-artifacts-8412/models/sentiment/v3/model.pt --expires-in 3600
+
+# GCP, same shape.
+gcloud storage cp model.pt gs://faang-prep-artifacts-8412/models/sentiment/v3/model.pt
+gcloud storage ls -l 'gs://faang-prep-artifacts-8412/models/**'`,
+      annotations: {
+        2: 'mb = make bucket. The name is a global DNS-style namespace, so "models" or "data" was taken in 2007. Region matters: it decides latency and egress.',
+        5: 'Version in the key, always. models/sentiment/v3/model.pt is traceable; models/model_final_FINAL.pt is how teams lose track of which weights are in production.',
+        8: 'sync is the one to use in a pipeline: it is restartable and skips unchanged files. cp --recursive re-uploads everything every time.',
+        12: 'The trailing slash is a prefix filter, not a directory. This is a LIST request over keys and it is billed per 1000 requests.',
+        15: 'There is no server-side rename. This copies every byte and then deletes — on 200 GB you pay full write cost twice over. Design keys you will not want to change.',
+        18: 'A pre-signed URL: a time-limited signed link that anyone can GET. This is how you share a model or a dataset without creating an IAM user for the recipient.',
+        21: 'gcloud storage replaced gsutil. Same verbs, and gs:// keys work exactly like s3:// keys.',
+      },
+    },
+    {
+      type: 'code',
+      lang: 'bash',
+      title: 'A lifecycle rule: stop paying for logs nobody will read',
+      code: `cat > lifecycle.json <<'JSON'
+{
+  "Rules": [
+    {
+      "ID": "logs-get-cheaper-then-vanish",
+      "Filter": { "Prefix": "logs/" },
+      "Status": "Enabled",
+      "Transitions": [
+        { "Days": 30, "StorageClass": "STANDARD_IA" },
+        { "Days": 90, "StorageClass": "GLACIER_IR" }
+      ],
+      "Expiration": { "Days": 365 }
+    }
+  ]
+}
+JSON
+
+aws s3api put-bucket-lifecycle-configuration \\
+  --bucket faang-prep-artifacts-8412 \\
+  --lifecycle-configuration file://lifecycle.json`,
+      annotations: {
+        6: 'The rule applies to a key PREFIX. One bucket can hold hot datasets and cold logs under different prefixes with different rules.',
+        9: 'After 30 days move to Infrequent Access: cheaper per GB-month, but you now pay a per-GB retrieval fee. Correct for data you rarely read.',
+        10: 'Glacier Instant Retrieval: cheaper again, still millisecond reads. The deep archive tiers are cheaper still but take hours to restore.',
+        12: 'Expiration is the part people skip, and it is the part that actually caps the bill. Storage without a delete policy grows forever.',
+        18: 'Note s3api, not s3. The s3 command is the friendly file-ish wrapper; s3api exposes the real API for bucket configuration.',
+      },
+    },
+    {
+      type: 'note',
+      md: 'The **egress trap**, which is the single most surprising line on a cloud bill. Storing is cheap; getting data *out* is what costs. Rough shape: S3 Standard is about $0.023 per GB-month to store, and about $0.09 per GB to send to the internet. So downloading a 1 TB dataset **once** costs roughly four times what storing it for a whole month costs. Uploads in are free, and traffic to services **in the same region** is free or near-free. Charged: out to the internet, out to another region, and often between availability zones. The design rule that falls out of this: **move compute to the data, not data to the compute** — train in the region your bucket lives in. The classic bill is a notebook in one region reading a dataset in another, once per epoch. (Cloudflare R2 and a few others charge zero egress, which is a genuine reason people serve model weights from there.)',
+    },
+    {
+      type: 'intuition',
+      title: 'Block vs object vs managed database — the decision list',
+      md: `Three storage products, one question each. Answer the question and the product is chosen.
+
+- **Block storage** (EBS / Persistent Disk) is a virtual hard drive attached to **one** machine. Real filesystem semantics: random writes, seek, fsync. Your OS root volume, a database's data directory, a training box's scratch disk.
+- The catch: you pay for **provisioned** GB whether you use them or not, and the volume keeps billing when the instance is stopped, and survives termination unless you say otherwise.
+- **Object storage** (S3 / GCS) is for whole files that many machines read. No filesystem semantics, no size ceiling, pay only for what you store.
+- **Managed database** (RDS / Cloud SQL / DynamoDB) is for records you query, index, join and update transactionally, with backups and failover you did not write.
+- Decide with one question: *one machine writing at random offsets* → block. *Many readers pulling whole files* → object. *Queries, indexes, transactions* → database.
+- ML translation: raw data and model artifacts in **object** storage, the training box's scratch and cache on **block**, experiment metadata / feature tables / the model registry in a **database**.
+- Two answers that lose points: "put the dataset in Postgres", and "mount S3 as a filesystem and train straight off it" — s3fs works until the random reads over HTTP make your GPU wait. Copy to local disk first, or use a format built for it.`,
+    },
+    {
+      type: 'intuition',
+      title: 'IAM: identity is who you are, policy is which doors open',
+      md: `A hotel again. Your **identity** is the guest. The **policy** is which doors the keycard opens. A **role** is a keycard you borrow for one shift and hand back — and that difference is the whole security lesson.
+
+- **Identities**: a *user* (a human, with a password and possibly long-lived keys), a *role* (assumable by a machine, a service, or another account), a *group* (users bundled for convenience).
+- **Policy**: a JSON document answering "which **actions**, on which **resources**, allow or deny". Attached to identities, and sometimes to the resource itself (a bucket policy).
+- Evaluation in one line: **default deny; an explicit Allow is required; any explicit Deny wins over everything.**
+- **Least privilege**: start from nothing and add exactly the action the job failed on. Never \`"Action": "s3:*"\`, never \`"Resource": "*"\`, and read the error — it names the missing action for you.
+- **Roles beat keys, always.** A role hands out credentials that expire in about an hour and rotate themselves. A key is a permanent secret you must store, ship, guard and remember to delete.
+- So the question "how does my code on the server get credentials?" has exactly one correct answer: **an instance profile (AWS) or a service account (GCP) attached to the machine. The SDK finds them by itself. You write no credential code.**
+- The credential chain, in order: explicit arguments in code → environment variables → \`~/.aws/credentials\` → container credentials → the instance metadata service (the role). First hit wins, which is why a stale env var silently overrides your shiny new role.`,
+    },
+    {
+      type: 'code',
+      lang: 'bash',
+      title: 'Least privilege, written down — and where credentials come from',
+      code: `# One bucket, one prefix, two verbs. Nothing else.
+cat > artifacts-rw.json <<'JSON'
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    { "Sid": "ObjectsUnderModels",
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:PutObject"],
+      "Resource": "arn:aws:s3:::faang-prep-artifacts-8412/models/*" },
+    { "Sid": "ListJustThisBucket",
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::faang-prep-artifacts-8412" }
+  ]
+}
+JSON
+aws iam create-policy --policy-name artifacts-rw --policy-document file://artifacts-rw.json
+
+# Attach it to a ROLE. No user, no key, nothing to leak.
+aws iam attach-role-policy --role-name trainer-role \\
+  --policy-arn arn:aws:iam::111122223333:policy/artifacts-rw
+
+# Who am I right now? First command on any AccessDenied.
+aws sts get-caller-identity
+
+# Where did these credentials come from? Read the Type column.
+aws configure list
+
+# The role's actual credentials, from the instance metadata service (IMDSv2).
+TOKEN=$(curl -sX PUT http://169.254.169.254/latest/api/token \\
+  -H 'X-aws-ec2-metadata-token-ttl-seconds: 300')
+curl -s -H "X-aws-ec2-metadata-token: $TOKEN" \\
+  http://169.254.169.254/latest/meta-data/iam/security-credentials/trainer-role`,
+      annotations: {
+        8: 'Actions are verbs on the service API. GetObject and PutObject only — no DeleteObject, so a buggy script cannot wipe your artifacts.',
+        9: 'Object-level ARN, so it ends in /models/*. This policy cannot touch datasets/ or logs/ in the same bucket.',
+        13: 'ListBucket is a BUCKET-level action, so its ARN has no /* and no key part. Getting these two ARN shapes wrong is the most common IAM bug in existence.',
+        20: 'Attached to a role, not a user. Roles are assumed and expire; users carry long-lived keys that live on somebody\'s laptop.',
+        24: 'Prints the account, the ARN and whether you are a user or an assumed role. Ninety percent of "permission denied" is being a different identity than you assumed.',
+        27: 'The Type column tells you which link of the credential chain answered: env, shared-credentials-file, or iam-role. This is how you catch a stale env var shadowing the instance role.',
+        30: 'IMDSv2 requires a PUT to get a short-lived token first. That handshake exists because IMDSv1 could be reached through a server-side request forgery bug.',
+        33: 'The response contains an AccessKeyId starting ASIA (temporary) plus a session Token and an Expiration about an hour out. AKIA-prefixed keys are the permanent kind you should not have.',
+      },
+    },
+    {
+      type: 'visual',
+      component: 'PointerBoxDiagram',
+      props: {
+        title: 'How code gets credentials — the chain, the leak, and the fix',
+        notice: 'Five frames. The first three are the correct path: the code never names a secret. The fourth is what actually happens to people. The fifth is the fix.',
+        leftLabel: 'your code',
+        rightLabel: 'credential chain',
+        frames: [
+          {
+            note: 'The code just asks for a client. It never writes a key, an ID or a path to a secret file. The SDK now walks the credential chain: explicit args, then environment, then the credentials file, then container creds, then the instance metadata service.',
+            stack: [{ name: 's3 = boto3.client("s3")', to: 'chain' }],
+            heap: [
+              { id: 'chain', value: 'credential chain', label: 'step 1 of 4' },
+              { id: 'env', value: 'AWS_ACCESS_KEY_ID env var', label: 'checking' },
+            ],
+          },
+          {
+            note: 'Nothing in the environment. Nothing in ~/.aws/credentials either — on a properly built server that file does not exist. The chain falls through to the metadata service at 169.254.169.254, a link-local address only reachable from inside this instance.',
+            stack: [{ name: 'chain lookup', to: 'imds' }],
+            heap: [
+              { id: 'env', value: 'environment variables', label: 'miss' },
+              { id: 'file', value: '~/.aws/credentials', label: 'miss (no such file)' },
+              { id: 'imds', value: 'metadata: 169.254.169.254', label: 'next' },
+            ],
+          },
+          {
+            note: 'The instance profile answers. Short-lived credentials, valid about an hour, refreshed by the SDK before they expire, never written to disk. What they can do is exactly what the attached policy allows — one bucket, one prefix, two verbs.',
+            stack: [{ name: 's3.put_object(...)', to: 'creds' }],
+            heap: [
+              { id: 'imds', value: 'instance profile: trainer-role', label: 'hit' },
+              { id: 'creds', value: 'ASIA... + secret + session token', label: 'expires in ~1 h' },
+              { id: 'pol', value: 's3:PutObject on artifacts/models/*', label: 'least privilege' },
+            ],
+          },
+          {
+            note: 'The other way people do it. A long-lived AKIA key pasted into config.py, committed, pushed to a public repo. Scanner bots read the GitHub event firehose; the gap between push and abuse is measured in minutes, not days.',
+            stack: [{ name: 'AWS_SECRET_ACCESS_KEY = "wJal..."', to: 'key', danger: true }],
+            heap: [
+              { id: 'key', value: 'AKIA... hardcoded in config.py', label: 'pushed to a public repo', danger: true },
+              { id: 'bot', value: 'credential scanner bot', label: 'finds it in minutes', danger: true },
+              { id: 'bill', value: 'GPU fleet mining crypto', label: 'five-figure bill', danger: true },
+            ],
+          },
+          {
+            note: 'The fix is not a better hiding place, it is having no secret at all. Delete the key (deactivate, then delete — rotation alone leaves the old one usable), assume everything it could reach is compromised, and replace it with a role. In CI, use OIDC: GitHub Actions trades a signed identity token for a short-lived role, so there is no secret in the repo to leak.',
+            stack: [{ name: 's3 = boto3.client("s3")', to: 'creds2' }],
+            heap: [
+              { id: 'key', value: 'AKIA... old key', label: 'DELETED, not just rotated', freed: true },
+              { id: 'creds2', value: 'role-supplied, ~1 h lifetime', label: 'nothing to leak' },
+              { id: 'oidc', value: 'CI: GitHub OIDC -> assume role', label: 'no secret in the repo' },
+            ],
+          },
+        ],
+      },
+    },
+    {
+      type: 'note',
+      md: 'The incident playbook, because you will see this one. **A committed access key is the most common real-world cloud security incident**, and the response order matters. (1) **Deactivate and delete the key immediately** — not "rotate it tomorrow". (2) **Assume compromise**: read CloudTrail for everything that key did, and look specifically for new IAM users, new access keys, and running instances in regions you have never used. (3) Rebuild or restore anything it had write access to. (4) Only then clean up the repository — and understand that force-pushing the commit away is *not* a fix, because it was public and it is already scraped. Why "just rotate" is insufficient: rotation stops future use, it does not un-copy the data or un-launch the miners. The permanent answer is to have no long-lived key anywhere: **instance roles on servers, OIDC federation in CI, short-lived credentials for humans**. Cheap guards worth ten minutes: `gitleaks` in a pre-commit hook, GitHub push protection turned on, and MFA on the root account with zero access keys attached to it.',
+    },
+    {
+      type: 'intuition',
+      title: 'Networking: just enough to stop being unreachable',
+      md: `A **VPC** is your own private network inside the provider, with its own private IP range like \`10.0.0.0/16\`. Every instance you launch sits in a subnet of it.
+
+- A **public subnet** has a route to an internet gateway. A **private subnet** does not — machines in it can reach out (through NAT) but nothing on the internet can reach in.
+- The standard layout: load balancer in the public subnet, application and training boxes and databases in private subnets. A database with a public IP is a finding, not a design.
+- A **security group** is a **stateful firewall** attached to the instance: you allow inbound ports, and the replies go back out automatically. You never write an outbound rule for a response — that is what "stateful" buys you.
+- Defaults: **all inbound denied, all outbound allowed.** So a fresh box can pull from the internet, and nothing can reach it until you say so.
+- Cross-reference the Linux module's "my service is unreachable" ladder, now with a cloud rung added: is the process running (\`ss -lntp\`) → is it bound to \`0.0.0.0\` and not \`127.0.0.1\` → does the host firewall allow it → **does the security group allow it** → is the instance in a public subnet with a public IP. In the cloud, the security group is the rung people forget.
+- Tell the two failures apart and you skip half the ladder: **connection refused** means you reached the machine and nothing was listening. **Timeout** means a firewall or security group silently dropped the packet.`,
+    },
+    {
+      type: 'code',
+      lang: 'bash',
+      title: 'Security groups: the rule you need, and the rule you should not write',
+      code: `# The lazy rule everyone writes once. Port 8000 open to the entire internet.
+aws ec2 authorize-security-group-ingress \\
+  --group-id sg-0a1b2c3d4e5f \\
+  --protocol tcp --port 8000 --cidr 0.0.0.0/0
+
+# The rule you should actually write for SSH: only your own address.
+aws ec2 authorize-security-group-ingress \\
+  --group-id sg-0a1b2c3d4e5f \\
+  --protocol tcp --port 22 --cidr 203.0.113.42/32
+
+# What does this group allow today?
+aws ec2 describe-security-groups --group-ids sg-0a1b2c3d4e5f \\
+  --query 'SecurityGroups[].IpPermissions' --output table`,
+      annotations: {
+        4: '0.0.0.0/0 is "the whole internet". Fine for an intentional public HTTPS endpoint, never fine for SSH, a database port, or a debug UI.',
+        9: 'A /32 CIDR is exactly one address. Curl ifconfig.me to get yours. Your home IP changes, which is annoying and still cheaper than being scanned.',
+        13: 'Run this before debugging anything network-shaped. A timeout with no matching rule here is the answer, and it takes four seconds to check.',
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'Cost control is an engineering skill, not an accounting one',
+      md: `Nobody gets fired for a slow query. People do get fired for a $40,000 bill. Treat cost as a non-functional requirement you design for.
+
+- **Tag at launch**: owner, project, environment. Untagged resources are unattributable, and unattributable resources never get deleted because nobody knows whose they are.
+- **Set a budget and an alert on day one.** A $10 monthly budget with an email at 80% takes five minutes and is the only thing between you and a surprise.
+- **Estimate before you launch**, out loud, on one line: hours × $/hour + GB × $/GB-month + egress GB × $/GB. A \`g5.xlarge\` at roughly $1/hour is about $730/month if you forget it exists.
+- The four classic blow-ups: a **forgotten GPU instance** left running over a weekend; **egress**, usually a cross-region read inside a training loop; a **runaway autoscaler** with no max replica count; and the quiet one — **unattached volumes, old snapshots, idle load balancers and unassociated elastic IPs** that survived the instance you deleted.
+- Stopping an instance stops the *compute* charge only. The disk keeps billing. Terminating removes the instance and can still leave the volume behind.
+- Make it a habit, not a heroic effort: an \`auto-stop\` tag plus a scheduled shutdown job, and one weekly look at cost grouped by tag. Two minutes a week beats one bad month.`,
+    },
+    {
+      type: 'code',
+      lang: 'bash',
+      title: 'The budget, the breakdown, and the "why is my bill huge" checklist',
+      code: `# Day one, before anything else.
+aws budgets create-budget --account-id 111122223333 \\
+  --budget '{"BudgetName":"student-monthly","BudgetLimit":{"Amount":"10","Unit":"USD"},"TimeUnit":"MONTHLY","BudgetType":"COST"}' \\
+  --notifications-with-subscribers '[{"Notification":{"NotificationType":"ACTUAL","ComparisonOperator":"GREATER_THAN","ThresholdType":"PERCENTAGE","Threshold":80},"Subscribers":[{"SubscriptionType":"EMAIL","Address":"me@example.com"}]}]'
+
+# What did I spend, split by the tags I set at launch?
+aws ce get-cost-and-usage \\
+  --time-period Start=2026-08-01,End=2026-09-01 \\
+  --granularity MONTHLY --metrics UnblendedCost \\
+  --group-by Type=TAG,Key=project
+
+# The checklist, in the order that finds the culprit fastest.
+aws ec2 describe-instances --filters Name=instance-state-name,Values=running \\
+  --query 'Reservations[].Instances[].[InstanceId,InstanceType,LaunchTime]' --output table
+aws ec2 describe-volumes --filters Name=status,Values=available --output table
+aws ec2 describe-addresses --query 'Addresses[].[PublicIp,InstanceId]' --output table
+
+# GCP: the same two habits.
+gcloud billing budgets list --billing-account=0X0X0X-0X0X0X-0X0X0X
+gcloud compute instances list --filter='status=RUNNING'`,
+      annotations: {
+        2: 'A budget is an alarm, not a cap — it emails you, it does not stop the spend. Treat the email as a page, and pair it with a hard shutdown job if you are learning.',
+        4: 'ACTUAL at 80% catches it after the fact; add a second notification with FORECASTED to hear about it while there is still time to act.',
+        10: 'Group by TAG only works for tags you activated as cost allocation tags in the billing console. This is why tagging at launch is step one, not step three.',
+        13: 'Question one, always: what is running right now that I forgot? LaunchTime tells you how long it has been burning money.',
+        15: 'Question two: orphan volumes. status=available means attached to nothing, still billed per provisioned GB, month after month.',
+        16: 'Question three: an elastic IP with an empty InstanceId is unattached, and unattached public IPv4 addresses are billed by the hour.',
+      },
+    },
+    {
+      type: 'note',
+      md: 'What to actually use on a student budget, concretely. **One free-tier VM** (`t3.micro` or `e2-micro`) as an always-on Linux playground for SSH, Docker, systemd and a small FastAPI service. **One object storage bucket** for datasets, model artifacts and your DVC remote — at your data sizes this is cents per month. **A container registry**: GitHub Container Registry (`ghcr.io`) is free for public images and needs no extra auth from GitHub Actions. **GPU: Colab or Kaggle Notebooks** — free T4s, and Kaggle gives roughly 30 GPU-hours a week; do not rent a GPU instance to learn. **Demo hosting**: Hugging Face Spaces for a Gradio or Streamlit demo of your model, Render or Fly.io for a FastAPI container with a real URL. **CI**: GitHub Actions, free on public repos. What to skip entirely for now: SageMaker and Vertex, managed Kubernetes control planes (learn k8s on `kind` locally), and anything with "Enterprise" in the name. Every concept in this subject is learnable for under a dollar a month.',
+    },
+  ],
+  quiz: [
+    {
+      question: 'You need 40 GPU-hours to train a model. The script checkpoints to object storage every 500 steps. Cheapest sane choice?',
+      options: [
+        {
+          text: 'On-demand — it is simplest and always available',
+          explanation: 'It works, but you are paying full price for interruption insurance you already bought with checkpointing.',
+        },
+        {
+          text: 'A 1-year reserved instance for the GPU type',
+          explanation: 'You would commit to 8760 hours to use 40. Reservations pay off for steady always-on capacity, never for a one-off run.',
+        },
+        {
+          text: 'Spot instances, with an interruption handler that resumes from the last checkpoint',
+          explanation: 'Correct. Checkpointing turns a two-minute eviction into a few lost minutes, and spot is 60-90% cheaper. This is the textbook spot workload.',
+        },
+      ],
+      correct: 2,
+    },
+    {
+      question: 'What does renaming a 200 GB object in S3 actually cost?',
+      options: [
+        {
+          text: 'A full copy plus a delete — you pay to write all 200 GB again',
+          explanation: 'Correct. The key IS the object\'s identity; there is no server-side rename, so mv means copy every byte then delete the original.',
+        },
+        { text: 'Nothing — it is a metadata update', explanation: 'That is how a filesystem works. S3 keys are not directory entries you can edit in place.' },
+        { text: 'One LIST request', explanation: 'Listing is a separate (also billed) operation, but the rename itself moves the bytes.' },
+      ],
+      correct: 0,
+    },
+    {
+      question: 'Your training script on an EC2 instance needs to write to S3. Best way to give it credentials?',
+      options: [
+        {
+          text: 'Create an IAM user and put its access key in an environment variable on the box',
+          explanation: 'A long-lived secret sitting on a machine: it must be rotated by hand, and it leaks with every snapshot, AMI and backup of that box.',
+        },
+        {
+          text: 'Attach an instance profile (a role); the SDK picks up short-lived credentials from the metadata service',
+          explanation: 'Correct. Nothing on disk, credentials expire in about an hour and rotate themselves, and access is revoked by editing one policy.',
+        },
+        {
+          text: 'Bake the key into the Docker image so the code works anywhere',
+          explanation: 'The worst option. The key now travels in an image layer, into the registry, and to everyone who can pull it.',
+        },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'Same 500 GB dataset, three plans. Which one is the expensive one?',
+      options: [
+        { text: 'Store it in S3 Standard for a month', explanation: 'At roughly $0.023 per GB-month that is about $12. Storage is the cheap part.' },
+        {
+          text: 'Read it 20 times from an EC2 instance in the SAME region',
+          explanation: 'In-region traffic to S3 is not charged as internet egress. This is exactly the design you want: compute next to the data.',
+        },
+        {
+          text: 'Download it to your laptop once, then again next week',
+          explanation: 'Correct. Internet egress at roughly $0.09 per GB makes each download about $45 — more than several months of storing it.',
+        },
+      ],
+      correct: 2,
+    },
+    {
+      question: 'Your free-tier t3.micro sits at 100% CPU for an hour during a build. What happens?',
+      options: [
+        { text: 'Nothing — micro instances have unlimited CPU', explanation: 'Burstable instances run on CPU credits earned while idle. Sustained full load drains them.' },
+        {
+          text: 'CPU credits drain, and because t3 defaults to Unlimited mode you get billed for the surplus (a t2 would throttle instead)',
+          explanation: 'Correct. The free tier caps instance-hours, not the burst surcharge — this is the most common "but it was free" surprise.',
+        },
+        { text: 'The instance is terminated for exceeding free-tier limits', explanation: 'Providers throttle or charge; they do not kill your instance for being busy.' },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'An AWS access key of yours was pushed to a public GitHub repo twenty minutes ago. First action?',
+      options: [
+        {
+          text: 'Deactivate and delete the key immediately, then audit CloudTrail for what it already did',
+          explanation: 'Correct. Deleting stops future use; the audit tells you what happened in those twenty minutes — new users, new keys, instances in odd regions.',
+        },
+        {
+          text: 'Force-push to remove the commit from history',
+          explanation: 'The key was public and is already scraped by bots watching the event firehose. Rewriting history hides the evidence, not the exposure.',
+        },
+        {
+          text: 'Change the key\'s policy to read-only so it can do less damage',
+          explanation: 'Still a live credential in a stranger\'s hands, and read access is enough to exfiltrate every dataset and model you own.',
+        },
+      ],
+      correct: 0,
+    },
+    {
+      question: 'You SSH into the instance fine and curl localhost:8000 works, but your browser times out on the public IP. Most likely cause?',
+      options: [
+        { text: 'The application crashed', explanation: 'You just curled it successfully from the box a second ago.' },
+        {
+          text: 'The app is bound to 127.0.0.1 instead of 0.0.0.0',
+          explanation: 'A real bug with a similar smell, but it produces connection REFUSED from outside — the packet reaches the host and gets a reset. You are seeing a timeout.',
+        },
+        {
+          text: 'The security group has no inbound rule for port 8000',
+          explanation: 'Correct. A dropped packet gives a timeout, and SSH works because port 22 is already allowed. Refused vs timeout is the tell that splits the ladder in half.',
+        },
+      ],
+      correct: 2,
+    },
+    {
+      question: 'You terminated the GPU instance last week, but daily charges keep appearing. Most likely explanation?',
+      options: [
+        { text: 'Terminated instances keep billing for 30 days', explanation: 'They do not. Compute billing stops when the instance terminates.' },
+        {
+          text: 'Leftovers: unattached EBS volumes, old snapshots, an unassociated elastic IP or an idle load balancer',
+          explanation: 'Correct. Storage and reserved network resources bill independently of the instance and happily outlive it.',
+        },
+        { text: 'The S3 bucket suddenly became more expensive', explanation: 'Storage cost changes with the data you put in it, and would not appear as a new daily charge in the week you deleted a GPU box.' },
+      ],
+      correct: 1,
+    },
+  ],
+  interviewQuestions: [
+    {
+      question: 'Explain on-demand, reserved and spot pricing, and tell me which workloads go where.',
+      answer:
+        'On-demand is full price billed per second with no commitment — the default, and the right choice for anything whose shape you do not know yet. Reserved instances and Savings Plans trade a 1 or 3 year commitment for roughly 30-70% off, and you pay for every hour of that term whether or not you use it, so they only make sense for steady baseline capacity you are confident will still exist next year. Spot is the provider selling unsold capacity at 60-90% off with the right to reclaim the machine on about two minutes notice. The mapping: interruptible batch work goes on spot — training that checkpoints, ETL, hyperparameter sweeps, CI runners — because losing a few minutes of work to save 70% is trivially worth it. A serving endpoint does not, because a two-minute eviction is a user-visible outage. The mature pattern for serving is a mixed fleet: enough on-demand or reserved capacity to carry the SLA, plus spot on top for burst, with the autoscaler configured so spot loss degrades capacity rather than killing the service.',
+      isCaseBased: false,
+    },
+    {
+      question: 'My code runs on a cloud VM and needs to call the object store. How does it get credentials?',
+      answer:
+        'It gets them from a role attached to the machine — an instance profile on AWS, a service account on GCP — and the code contains no credential logic at all. The SDK walks a credential chain in a fixed order: explicit arguments in code, then environment variables, then the shared credentials file, then container credentials, then the instance metadata service at 169.254.169.254. On a properly built server the first four all miss and the metadata service answers with credentials that live about an hour and are refreshed automatically before they expire. Three things that matter about this. First, nothing is written to disk, so a snapshot or a stolen AMI leaks nothing. Second, revocation is a policy edit, not a hunt for every machine holding a copy. Third, the chain order is the answer to a very common bug: a stale AWS_ACCESS_KEY_ID in the environment silently shadows the instance role, and aws configure list shows you which link answered. For CI, the equivalent is OIDC federation: GitHub Actions presents a signed identity token and assumes a role, so there is no secret stored in the repository at all.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Case: your team gets a $4,200 AWS bill for a month where you expected about $150. Run the postmortem.',
+      answer:
+        'Investigation first, in the order that finds it fastest. Open Cost Explorer, group by service, and look at the daily graph — the shape tells you whether it is a step change on one day (something was launched and left) or a steady ramp (something is growing). Then group by usage type and by tag. In practice it is almost always one of four things. A forgotten GPU instance: describe-instances filtered to running, sort by LaunchTime; a g5.xlarge left over a weekend is around $150, over a month around $730, and a multi-GPU box is several thousand. Egress: a training loop reading a dataset from a bucket in another region, paying about $0.09 per GB per epoch. A runaway autoscaler with no max replicas reacting to a bad metric. And the quiet one — unattached EBS volumes, forgotten snapshots, idle load balancers and unassociated elastic IPs left behind by instances you did think you deleted. Remediation is immediate: stop or terminate what is running, delete the orphans, and move the data so compute and storage are in the same region. Prevention is the part they are really grading: budgets with both actual and forecasted alerts from day one, mandatory tags enforced by policy so every line is attributable, a scheduled shutdown for anything tagged non-production, a hard max on every autoscaling group, and cost estimated in the design review before launch rather than discovered on the invoice. I would also add a service control policy blocking the largest instance families in the sandbox account, because the cheapest guardrail is the one that makes the mistake impossible.',
+      isCaseBased: true,
+    },
+    {
+      question: 'Object storage, block storage, or a managed database — how do you decide?',
+      answer:
+        'One question each. Does one machine need to write at random offsets with real filesystem semantics — seek, partial writes, fsync? That is block storage: EBS or a persistent disk, an OS root volume, a database data directory, a training box scratch disk. Do many machines need to read whole files, at any scale, cheaply? That is object storage: S3 or GCS for datasets, model artifacts, logs and backups. Do you need to query, index, join and update records transactionally with backups and failover? That is a managed database. The cost shapes differ and matter: block storage bills for provisioned GB whether you use them or not and keeps billing when the instance is stopped or gone; object storage bills only for what you store, plus request and egress charges; a managed database bills for an always-on instance. For an ML system the split is clean: raw data and model artifacts in object storage, scratch and cache on block, experiment metadata and feature tables and the registry in a database. The two answers that lose points are putting a large dataset in Postgres, and mounting the object store as a filesystem to train straight off it — s3fs works until the random reads over HTTP starve the GPU.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Case: a junior engineer pushed an AWS access key to a public repository forty minutes ago. What do you do, in order?',
+      answer:
+        'Contain before you clean. First, deactivate and then delete that key in IAM — not rotate later, delete now; a live key in public is being used by bots within minutes of the push. Second, assume compromise and find out what happened: read CloudTrail for every call made with that access key id, and look specifically for the standard attacker moves — new IAM users or roles, new access keys attached to existing identities, instances launched in regions you never use, security groups opened to 0.0.0.0/0, and bulk GetObject calls against your buckets. Third, remediate what it reached: terminate anything it launched, delete identities it created, restore or rebuild anything it had write access to, and if data was read, treat it as a disclosure with whatever notification that implies. Fourth, and only fourth, clean the repository, while being clear that removing the commit is not the fix — the content was public and is already harvested. Then the systemic part, which is what the interview is really about: there should not have been a long-lived key to leak. Servers use instance roles, CI uses OIDC federation to assume a role with no stored secret, humans use short-lived credentials via SSO, and the root account has MFA and zero access keys. Add gitleaks in a pre-commit hook and GitHub push protection so the next attempt is blocked before it becomes an incident.',
+      isCaseBased: true,
+    },
+    {
+      question: 'Why is object storage "not a filesystem", and what breaks when a team treats it like one?',
+      answer:
+        'The key is a flat string, not a path, and an object is immutable bytes plus metadata. There are no directories, no inodes, no partial writes and no seek. Four concrete consequences. Renaming is a full copy plus a delete, so moving a 200 GB prefix means paying to write 200 GB again — you design keys you will not want to change, and you put the version in the key from the start. Appending is impossible; you rewrite the whole object, which is why append-heavy log writing goes to a file locally and gets uploaded in chunks or via multipart upload. Listing a "folder" is a prefix scan billed per thousand requests, so a training loop that lists a million-key prefix every epoch has a real cost and a real latency. And random small reads are HTTP requests with tens of milliseconds of latency each, so training directly off the bucket starves the GPU — you copy to local disk first, or use a columnar or sharded format like Parquet or WebDataset designed for sequential large reads. The honest framing: object storage is the cheapest, most durable place to keep whole files, and everything that feels like a filesystem operation is being emulated by the client at a cost.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Would you serve a model on Lambda or Cloud Run? Defend it.',
+      answer:
+        'Not on plain Lambda with a zip, for two hard reasons. Package size: a Lambda deployment package is capped at 50 MB uploaded and 250 MB unzipped for code plus layers, and a CPU-only torch install already exceeds that before you add the model. Cold start: with no traffic there is no warm instance, so the next request pays container boot plus model load, which for an ML image is seconds, and it lands on a real user rather than on you. Cloud Run is the friendlier answer because it runs a container image up to about 10 GB, so the dependency tree fits, and it gives you a real HTTP server with configurable concurrency; setting min-instances to 1 removes the cold start for the price of one always-warm instance, which is often much cheaper than a dedicated VM. Lambda with container images fixes the size problem but not the cold start, and provisioned concurrency fixes the cold start by paying for warmth, at which point you should compare it honestly against just running a container. The clean rule I would state: serverless is excellent for everything around the model — webhooks, preprocessing, scheduled jobs, the thin API layer — and a compromise for the model itself unless the traffic is genuinely spiky and the latency budget is generous. Anything needing a GPU is out of scope for both.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Design least-privilege access for a nightly training job that reads a dataset and writes a model artifact.',
+      answer:
+        'Start from nothing and add only what the job actually failed on. The job gets its own role, assumed by the compute that runs it, with no IAM user and no long-lived key anywhere. The policy has two statements. One allows s3:GetObject on arn:aws:s3:::my-bucket/datasets/* — read only, and note there is no DeleteObject, so a bug cannot destroy the training data. The other allows s3:PutObject on arn:aws:s3:::my-bucket/models/*, plus s3:ListBucket on the bucket ARN itself, with a prefix condition if listing needs narrowing. The ARN shapes are the part people get wrong: bucket-level actions like ListBucket take the bucket ARN with no key part, object-level actions take the ARN with a key pattern. Beyond the policy: bucket versioning on so an overwritten artifact is recoverable, server-side encryption with a KMS key whose policy also has to grant this role, and a separate role for the serving side that can read models/* and nothing else — the trainer writes, the server reads, neither can do the other job. I would confirm it works by running the job and reading the denials out of the error messages, which name the exact missing action, rather than starting from s3:* and trying to subtract later.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Case: you launched an instance, the app is running, but nobody can reach it. Triage it.',
+      answer:
+        'I go down a ladder and use the failure mode to skip rungs. First, what is the symptom: connection refused means a packet reached the host and nothing was listening, so the problem is the process or its bind address; timeout means something dropped the packet silently, so the problem is a firewall, a route, or the wrong address entirely. For refused: ss -lntp on the box to confirm the process is up and, crucially, that it is bound to 0.0.0.0 and not 127.0.0.1 — a service listening only on loopback is unreachable from anywhere but itself and is the single most common cause. For timeout, in order: does the security group have an inbound rule for that port and my source CIDR; is there a host firewall like ufw or firewalld also blocking; is the instance in a public subnet with a route to an internet gateway; does it actually have a public IP; if there is a network ACL, is it allowing the return traffic, because unlike security groups NACLs are stateless and need an explicit outbound rule; and if a load balancer is in front, is its target health check passing and does the target security group allow traffic from the load balancer group. I would confirm each step rather than guess: curl from the box, then curl from another box in the same VPC to separate "inside the network" from "from the internet", which isolates the security group from the routing in one test.',
+      isCaseBased: true,
+    },
+    {
+      question: 'When would you use SageMaker or Vertex AI instead of building on plain VMs, containers and object storage?',
+      answer:
+        'When the team does not have the platform engineering capacity and the managed features map closely to what you need: managed training jobs with spot handling, a hosted registry, endpoints with autoscaling and built-in monitoring, and pipelines wired together. That genuinely removes weeks of plumbing and gives you an audit story for free. The costs are real and you should say them. Price: the same hardware bought through the managed service carries a premium over the raw instance, and it shows up on every training hour and every endpoint hour, so at scale the delta pays several engineers. Lock-in: the training entrypoint, the registry, the endpoint contract and the monitoring configuration are all provider-shaped, so leaving means a rewrite rather than a redeploy. Flexibility: the moment you need something the platform did not anticipate you are fighting it. My default is to build the pipeline out of portable pieces — a container, object storage, a CI job, MLflow — because those run anywhere and teach you what each managed feature is replacing, then adopt the managed pieces selectively where the operational burden is genuinely high, such as multi-tenant endpoint autoscaling. For learning, managed platforms are the wrong first stop entirely: they hide the exact mechanisms an interview asks you to explain.',
+      isCaseBased: false,
+    },
+    {
+      question: 'How do you estimate the cost of an ML system before you launch anything?',
+      answer:
+        'Three lines, written down before the button is pressed. Compute: hours times dollars per hour, per instance type, times the number of instances — and I use the wall-clock number, not the optimistic one, so a nightly 3-hour training job on a $1/hour GPU is about $90 a month, not $3. Storage: gigabytes times dollars per GB-month, per storage class, plus a growth rate, because a dataset that grows 100 GB a month is a different decision from a static one. Movement: egress gigabytes times dollars per GB, which is the line everyone forgets, and where I check that compute and data are in the same region because cross-region reads inside a training loop multiply that number by the epoch count. Then I add the always-on tail that has no obvious owner: load balancers, NAT gateways, managed database instances, provisioned volumes, and any endpoint with min-instances above zero. Finally I sanity-check the shape by asking what happens at ten times the traffic, because a per-request price that is fine today can be the dominant cost at scale, and by asking which of these charges continue when the system is idle — that number is the floor, and if the floor is uncomfortable the architecture is wrong regardless of what the peak looks like.',
+      isCaseBased: false,
+    },
+  ],
+  flashcards: [
+    { front: 'What is a vCPU?', back: 'One hardware thread, not one core. Two threads per x86 core, so a 4-vCPU instance is usually 2 physical cores.' },
+    { front: 'Spot instances — the one-line tradeoff', back: '60-90% cheaper, reclaimable with a 2-minute warning. Perfect for checkpointed training, fatal for a serving endpoint (unless mixed with an on-demand baseline).' },
+    { front: 'Instance families', back: 'Ratios of vCPU : RAM : accelerator. General (m/t), compute optimized (c), memory optimized (r/x), GPU (p/g). Pick from a measured bottleneck.' },
+    { front: 'Why object storage is not a filesystem', back: 'The key is a flat string. No cheap rename (copy + delete), no partial append, no seek, and listing a prefix is a billed request.' },
+    { front: 'The egress trap', back: 'Storing is ~$0.023/GB-month; sending to the internet is ~$0.09/GB. Uploads and same-region traffic are free. Move compute to the data.' },
+    { front: 'Block vs object vs database', back: 'One machine writing at random offsets -> block (EBS). Many readers, whole files -> object (S3). Queries, indexes, transactions -> managed DB.' },
+    { front: 'IAM: identity vs policy', back: 'Identity = who (user, role, group). Policy = JSON saying which actions on which resources. Default deny, explicit Allow required, any explicit Deny wins.' },
+    { front: 'How does code on a VM get credentials?', back: 'An instance profile (AWS) / service account (GCP) attached to the machine. The SDK reads short-lived creds from the metadata service. No key on disk.' },
+    { front: 'Credential chain order', back: 'Explicit args -> env vars -> ~/.aws/credentials -> container creds -> instance metadata (role). First hit wins, which is why a stale env var shadows your role.' },
+    { front: 'Leaked access key — the response', back: 'Deactivate and DELETE it now, assume compromise and audit CloudTrail, rebuild what it could write, then fix the repo. Permanent fix: roles + OIDC, so there is no key to leak.' },
+  ],
+  mindmapMarkdown: `- Cloud on the Free Tier
+  - The framing
+    - Renting someone else's computer: compute + storage + permission
+    - Everything is metered: /hour, /GB, /request
+  - Compute
+    - VM = slice of a server; vCPU = a thread, not a core
+    - Families: general, compute, memory, GPU
+    - On-demand (default) vs reserved (1-3 yr, 30-70% off, pay regardless)
+    - Spot: 60-90% off, 2-minute eviction
+    - Spot = checkpointed training, never a serving endpoint
+    - Free tier: t3.micro / e2-micro, 1 vCPU 1 GB, burst credits
+  - Serverless
+    - Lambda: 250 MB unzipped (torch does not fit) + 5-30 s cold start
+    - Cloud Run: container up to ~10 GB, min-instances kills cold start
+    - SageMaker / Vertex: convenient, expensive, lock-in
+  - Object storage
+    - Bucket + key; the key is flat, not a path
+    - No rename, no append, no seek
+    - Storage classes, lifecycle rules, versioning
+    - Egress is the real cost; move compute to the data
+  - Storage choice
+    - Block (EBS): one machine, random writes
+    - Object (S3): many readers, whole files
+    - Managed DB: queries, indexes, transactions
+  - IAM
+    - Identity (user, role) vs policy (allow/deny)
+    - Least privilege: start empty, add what failed
+    - Roles beat static keys; instance profile / service account
+    - Credential chain: args, env, file, container, metadata
+    - Leaked key: delete, audit CloudTrail, assume compromise; OIDC in CI
+  - Networking
+    - VPC, public vs private subnet
+    - Security group = stateful firewall, inbound denied by default
+    - Refused = nothing listening; timeout = firewall dropped it
+  - Cost control
+    - Tag at launch (owner, project, env); budget + alert on day one
+    - Estimate BEFORE launching
+    - Blow-ups: forgotten GPU, egress, runaway autoscaler, orphan volumes
+  - Student budget
+    - Free-tier VM + one bucket + ghcr.io
+    - Colab / Kaggle for GPU; HF Spaces, Render, Fly.io for demos`,
+}
+
+export default m

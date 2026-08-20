@@ -1,0 +1,578 @@
+import type { Module } from '../types'
+
+const m: Module = {
+  id: 'cpp-l2-virtual-functions',
+  subjectId: 'cpp',
+  level: 2,
+  title: 'Inheritance, Virtual Functions & vtables',
+  whyItMatters:
+    '"How do virtual functions actually work?" is the most reliable C++ interview question in existence — and the virtual-destructor trap and the diamond problem are its two favorite follow-ups. All three live in this module. Understand the vtable once and every OOP question becomes a diagram you can draw from memory.',
+  estMinutes: 55,
+  sections: [
+    {
+      type: 'intuition',
+      title: 'Inheritance: one family tree instead of copies',
+      md: `You need Circle and Rect. Both have an area, both get drawn, both go in the same list. Copy-pasting a Shape class twice means every bug exists twice, forever.
+
+- **Inheritance**: \`class Circle : public Shape\` — Circle gets everything Shape has, then adds its own.
+- Test with **is-a**: a Circle *is a* Shape → inheritance fits. A Circle *has a* radius → member, not base.
+- Memory picture: every Circle object contains a complete Shape part at its front, with Circle's own members after it.
+- That layout is why a \`Shape*\` can point at a Circle: the Shape part is right there at the start.
+- **Derived class** = the child (Circle). **Base class** = the parent (Shape). C++ people say base/derived, not parent/child.`,
+    },
+    {
+      type: 'note',
+      md: `The \`public\` in \`class Circle : public Shape\` is the **inheritance mode**. **public**: outsiders may treat a Circle as a Shape — this is the norm; effectively always what you want. **protected**/**private**: the Shape-ness becomes a hidden implementation detail — no outside code can use a base pointer to it, so no polymorphism. Rare; if you reach for private inheritance, composition (a Shape member) is usually cleaner. One trap: \`class\` defaults to *private* inheritance, \`struct\` to public — so always write \`public\` explicitly.`,
+    },
+    {
+      type: 'intuition',
+      title: 'The whole point: a base pointer to a derived object',
+      md: `Inheritance is not about saving keystrokes. It exists so code can talk to the *base type* and work with every derived type — including ones written years later.
+
+- \`Shape* s = &circle\` — legal, no cast needed (the **upcast** is implicit).
+- Now one \`std::vector<Shape*>\` holds circles, rects, triangles — one loop processes all of them.
+- The loop calls \`s->area()\` and never asks "which shape are you?" — no if-else chains on type.
+- New shape tomorrow → zero changes to the loop. This is polymorphism's business case.
+- One problem: it does not work yet. Watch it fail below.`,
+    },
+    {
+      type: 'code',
+      lang: 'cpp',
+      title: 'Without virtual: the base pointer calls the WRONG function',
+      code: `#include <iostream>
+
+class Shape {
+public:
+  double area() const { return 0.0; }   // no virtual — on purpose
+};
+
+class Circle : public Shape {
+public:
+  explicit Circle(double r) : r_(r) {}
+  double area() const { return 3.14159 * r_ * r_; }
+private:
+  double r_;
+};
+
+int main() {
+  Circle c(2.0);
+  Shape* s = &c;
+  std::cout << s->area() << '\\n';   // prints 0. Not 12.56. Zero.
+}`,
+      annotations: {
+        5: 'Non-virtual. The compiler will pick this function by the TYPE OF THE POINTER, not the object.',
+        8: 'public inheritance: every Circle is-a Shape. Circle has both area() functions now — its own HIDES the base one.',
+        18: 'The upcast. s has static type Shape*, but the object it points at is a full Circle.',
+        19: 'Static dispatch: at compile time the compiler sees "Shape*", picks Shape::area, done. The Circle-ness is ignored.',
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'Static vs dynamic dispatch — what virtual changes',
+      md: `**Dispatch** = deciding which function body actually runs for a call.
+
+- **Static dispatch** (the default): decided at *compile time*, from the **static type** — the declared type of the expression (\`Shape*\`). Free, inlinable, and wrong for polymorphism.
+- **Dynamic dispatch**: decided at *runtime*, from the **dynamic type** — what the object actually is (Circle). One keyword buys it: \`virtual\`.
+- Mark \`area()\` as \`virtual double area() const\` in Shape, and \`s->area()\` starts asking the *object* which function to run.
+- Fine print: dynamic dispatch only happens through a **pointer or reference**. Copy a derived object into a base variable by value and the derived part is gone (slicing — below).
+- How does the object "know" its own function? That is the vtable — next.`,
+    },
+    {
+      type: 'hinglish',
+      md: `Har polymorphic object apne andar ek chhupa hua pointer leke ghoomta hai — **vptr**. Ye vptr uski *asli* class ke **vtable** ki taraf ishara karta hai: ek menu card jisme likha hai ki har virtual function ka asli address kya hai. Ab \`Shape* s\` se \`s->area()\` bolo to compiler naam se function nahi uthata — pehle object ke paas jaata hai, uska vptr padhta hai, menu kholta hai, \`area\` waali line dekhta hai, aur wahi dish serve karta hai. Circle ka menu bolega \`Circle::area\`, Rect ka menu bolega \`Rect::area\`. Call site bilkul same, menu alag — yehi runtime polymorphism hai. Extra kharcha bas do pointer hops ka.`,
+    },
+    {
+      type: 'visual',
+      component: 'PointerBoxDiagram',
+      props: {
+        title: 'One call site, two menus',
+        notice: 'Step through: same pointer, same line of code — the vptr inside the object decides which function runs.',
+        leftLabel: 'pointers',
+        rightLabel: 'objects & vtables',
+        frames: [
+          {
+            note: 'Animal* a points at a Dog. The compiler secretly added one hidden pointer inside the object: the vptr.',
+            stack: [{ name: 'Animal* a', to: 'dog' }],
+            heap: [{ id: 'dog', value: 'Dog{vptr}', label: 'vptr inside' }],
+          },
+          {
+            note: "a->speak(): follow a to the object, read its vptr, land on Dog's vtable, call the address in the speak slot.",
+            stack: [
+              { name: 'Animal* a', to: 'dog' },
+              { name: 'dog.vptr', to: 'dvt' },
+            ],
+            heap: [
+              { id: 'dog', value: 'Dog{vptr}', label: 'the object' },
+              { id: 'dvt', value: 'speak → Dog::speak', label: 'Dog vtable' },
+            ],
+          },
+          {
+            note: 'Same call site, but a now points at a Cat. Nothing changed in the code — the vptr leads to a different menu.',
+            stack: [
+              { name: 'Animal* a', to: 'cat' },
+              { name: 'cat.vptr', to: 'cvt' },
+            ],
+            heap: [
+              { id: 'cat', value: 'Cat{vptr}', label: 'the object' },
+              { id: 'cvt', value: 'speak → Cat::speak', label: 'Cat vtable' },
+            ],
+          },
+        ],
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'vtable mechanics, precisely',
+      md: `The interview version, in five facts:
+
+- **One vtable per class** (that has virtual functions): a static array of function pointers, one slot per virtual function, built at compile time.
+- **One vptr per object**: a hidden pointer, set by the constructor to point at the object's class's vtable. It is why a polymorphic object is one pointer bigger (\`sizeof\` grows by 8 on a 64-bit machine).
+- A virtual call \`s->area()\` compiles to: read \`s\`'s vptr → index into the vtable at area's fixed slot → call that address.
+- A derived class copies the base's vtable layout and *overwrites the slots it overrides* — that is all overriding is, mechanically.
+- Honest cost: two dependent memory loads before the call and usually no inlining — real, measurable, and almost never your bottleneck; measure before you fear it.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Pure virtual, abstract classes, override, final',
+      md: `Shape::area() returning 0.0 is a lie — there is no default area. Say so in the type system:
+
+- \`virtual double area() const = 0\` — **pure virtual**: no body, every concrete derived class MUST provide one.
+- A class with any pure virtual function is an **abstract class**: you cannot create a plain Shape anymore, only point at derived ones. Shape becomes a pure interface.
+- \`override\` on the derived function = "I intend to override a base virtual — compiler, verify it." Write \`double area()\` (missing \`const\`) without it and you silently create a brand-NEW function; the vtable slot keeps the base version and your code "mysteriously" ignores the override. With \`override\`, that typo is a compile error.
+- \`final\` = "no one overrides past this" — on a function or a whole class. Intent for humans, and it lets the compiler devirtualize calls (skip the vtable) when it can prove the type.
+- Rule: every overriding function gets \`override\`. It costs nothing and kills a whole bug family.`,
+    },
+    {
+      type: 'code',
+      lang: 'cpp',
+      title: 'The polymorphic shapes system — the running practical, done right',
+      code: `#include <iostream>
+#include <memory>
+#include <vector>
+
+class Shape {
+public:
+  virtual double area() const = 0;   // pure virtual: Shape is now abstract
+  virtual ~Shape() = default;        // virtual destructor: a rule, not a style choice
+};
+
+class Circle : public Shape {
+public:
+  explicit Circle(double r) : r_(r) {}
+  double area() const override { return 3.14159265 * r_ * r_; }
+private:
+  double r_;
+};
+
+class Rect final : public Shape {
+public:
+  Rect(double w, double h) : w_(w), h_(h) {}
+  double area() const override { return w_ * h_; }
+private:
+  double w_, h_;
+};
+
+int main() {
+  std::vector<std::unique_ptr<Shape>> shapes;
+  shapes.push_back(std::make_unique<Circle>(2.0));
+  shapes.push_back(std::make_unique<Rect>(3.0, 4.0));
+  for (const auto& s : shapes)
+    std::cout << s->area() << '\\n';   // 12.5664 then 12
+}`,
+      annotations: {
+        7: '= 0 makes it pure. No body needed, no fake 0.0 default. new Shape() is now a compile error.',
+        8: 'Deleting through unique_ptr<Shape> is deleting through a base pointer — without this line, that is UB (next section).',
+        14: 'override makes the compiler verify the signature matches the base virtual exactly.',
+        19: 'final on the class: nobody derives from Rect. Documents intent and enables devirtualization.',
+        28: 'Pointers, not vector<Shape>: Shape is abstract, and by-value storage would slice anyway.',
+        32: 'THE dynamic-dispatch line: one call site, each object routes through its own vtable.',
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'Virtual destructors — THE interview classic',
+      md: `Delete a derived object through a base pointer and only the base destructor is *considered* — unless the destructor is virtual, the derived destructor never runs.
+
+- The standard's word for it: **undefined behavior**. In practice: derived members are never destroyed — leaked buffers, unclosed files, un-unlocked mutexes.
+- Why: \`delete p\` with a non-virtual destructor is static dispatch, same as the area()-prints-0 bug — the pointer's type picks \`~Base\`.
+- Making the destructor \`virtual\` routes destruction through the vtable: \`~Derived\` runs first, then \`~Base\`, in order.
+- **The rule**: a class meant to be used polymorphically (has any virtual function) gets \`virtual ~Base() = default\`.
+- Tradeoff, honestly: a virtual destructor on a class with no other virtuals adds the vtable/vptr — so classes NOT meant as bases just don't have one (that is why \`std::string\` is not safe to inherit from and delete polymorphically).`,
+    },
+    {
+      type: 'code',
+      lang: 'cpp',
+      title: 'The bug, in twelve lines',
+      code: `class Base {
+public:
+  ~Base() {}                     // not virtual — the bug
+};
+
+class Derived : public Base {
+public:
+  Derived() : buf_(new int[1000]) {}
+  ~Derived() { delete[] buf_; }
+private:
+  int* buf_;
+};
+
+int main() {
+  Base* p = new Derived();
+  delete p;                      // undefined behavior
+}`,
+      annotations: {
+        3: 'One missing keyword. Fix: virtual ~Base() = default;',
+        9: 'This destructor is the only thing that frees buf_ — and it is about to be skipped.',
+        16: 'Static dispatch picks ~Base only. In practice ~Derived never runs: 4000 bytes leak per delete. The standard just says UB — anything may happen.',
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'Object slicing: by-value assignment chops the object',
+      md: `Assign or pass a derived object into a base variable BY VALUE and only the base part is copied. The derived data — and the derived identity — are sliced off.
+
+- \`Animal a = dog\` copy-constructs an Animal *from the Animal part of dog*. Dog's extra members: gone. The new object's vptr: Animal's.
+- So \`a.speak()\` runs Animal's version — no bug in dispatch; the object genuinely IS just an Animal now.
+- Where it bites: \`void f(Animal a)\` parameters, \`std::vector<Animal>\` holding "dogs", returning by value.
+- Fix: polymorphism travels only through \`Animal*\`, \`Animal&\`, or smart pointers. Containers of base values are a design error — store \`unique_ptr<Animal>\`.
+- Making the base abstract kills slicing at compile time — one more reason interfaces should be abstract.`,
+    },
+    {
+      type: 'code',
+      lang: 'cpp',
+      title: 'Slicing, live',
+      code: `#include <iostream>
+#include <string>
+
+class Animal {
+public:
+  virtual std::string speak() const { return "..."; }
+  virtual ~Animal() = default;
+};
+
+class Dog : public Animal {
+public:
+  std::string speak() const override { return "woof"; }
+private:
+  std::string name_ = "rex";     // data the base does not have
+};
+
+void byValue(Animal a) { std::cout << a.speak() << '\\n'; }
+void byRef(const Animal& a) { std::cout << a.speak() << '\\n'; }
+
+int main() {
+  Dog d;
+  byValue(d);   // prints "..."
+  byRef(d);     // prints "woof"
+}`,
+      annotations: {
+        14: 'This member is what physically cannot fit in an Animal-sized box — it gets chopped in the copy.',
+        17: 'The parameter is a real Animal object, copy-built from just the Animal part of d. Its vptr is Animal\'s.',
+        22: 'Sliced: virtual dispatch works fine, but the object it asks is a plain Animal.',
+        23: 'A reference is just an alias for the original Dog — the vptr inside still says Dog. Virtual works as intended.',
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'The diamond problem — and when to walk away',
+      md: `Multiple inheritance is legal in C++: \`class Copier : public Scanner, public Printer\`. The trouble starts when the parents share a grandparent.
+
+- The diamond, in words: Device on top. Scanner inherits Device. Printer inherits Device. Copier inherits Scanner AND Printer.
+- Result: a Copier contains **two complete Device subobjects** — two serial numbers, two power states. \`copier.serial_\` is a compile error: ambiguous — which Device?
+- The fix: **virtual inheritance** — \`class Scanner : virtual public Device\` (and Printer too). Now the diamond shares ONE Device subobject.
+- The price: extra indirection to reach the shared base, and the *most-derived* class (Copier) becomes responsible for constructing Device — constructors get weird across the whole tree.
+- The senior move: diamonds of **data** are a design smell — usually redesign. Keep multiple inheritance for abstract interfaces (pure virtual, no data members) where the diamond is harmless, and use composition for shared state. Virtual inheritance is the tool you reach for when you cannot change the hierarchy.`,
+    },
+    {
+      type: 'note',
+      md: `Pre-interview re-read: (1) dispatch is static by default — \`virtual\` moves the decision to runtime, through pointer/reference only. (2) vtable per class, vptr per object; overriding = overwriting a slot. (3) Base class with virtuals → \`virtual ~Base() = default\`, or deleting through a base pointer is UB. (4) Always \`override\` — it turns a silent signature typo into a compile error. (5) By-value base = slicing. (6) Diamond → two base subobjects → \`virtual\` inheritance shares one, or better: redesign.`,
+    },
+  ],
+  quiz: [
+    {
+      question: 'Shape::area() is NOT virtual. Circle overrides it. `Shape* s = &circle; s->area();` — which function runs, and why?',
+      options: [
+        {
+          text: 'Shape::area — the compiler picked it at compile time from the static type Shape*',
+          explanation: 'Correct. Non-virtual = static dispatch: the declared type of the pointer decides, the actual object is never consulted.',
+        },
+        {
+          text: 'Circle::area — the object is a Circle',
+          explanation: 'The object being a Circle only matters with dynamic dispatch — which requires virtual. Without it the pointer type wins.',
+        },
+        {
+          text: 'Compile error — ambiguous call',
+          explanation: 'Nothing ambiguous: through a Shape*, name lookup finds Shape::area and stops. It compiles and quietly does the wrong thing.',
+        },
+      ],
+      correct: 0,
+    },
+    {
+      question: 'Mechanically, what does adding `virtual` to a member function change about a call through a base pointer?',
+      options: [
+        {
+          text: 'The compiler generates a switch over all derived types',
+          explanation: 'No type list exists — new derived classes can appear in other translation units. That is exactly why a table lookup is used instead.',
+        },
+        {
+          text: 'The call reads the object\'s vptr, indexes the class vtable at a fixed slot, and calls that address',
+          explanation: 'Correct. Two loads and an indirect call, decided by the object\'s actual class at runtime. That is all "dynamic dispatch" means.',
+        },
+        {
+          text: 'The function is copied into every object',
+          explanation: 'Functions are never stored in objects — only ONE hidden pointer (the vptr) is. Code lives once, in the vtable-referenced functions.',
+        },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'vptr and vtable — how many of each exist for 1000 Circle objects (Circle has virtual functions)?',
+      options: [
+        {
+          text: '1000 vtables, 1 vptr',
+          explanation: 'Backwards. The table is class-level (shared); the hidden pointer is what each object carries.',
+        },
+        {
+          text: '1 vtable (per class), 1000 vptrs (one inside each object)',
+          explanation: 'Correct. The vtable is a static per-class array of function pointers; every object carries one vptr aimed at its class\'s table.',
+        },
+        {
+          text: '1000 of each',
+          explanation: 'Half right: 1000 vptrs, yes. But all of them point at the same single Circle vtable.',
+        },
+      ],
+      correct: 1,
+    },
+    {
+      question: '`Base* p = new Derived(); delete p;` — Base\'s destructor is NOT virtual. What does the standard say happens?',
+      options: [
+        {
+          text: 'Undefined behavior — in practice ~Derived never runs and its resources leak',
+          explanation: 'Correct. Non-virtual destructor + delete through base pointer = UB. The typical symptom is a leak, but the standard permits anything.',
+        },
+        {
+          text: 'Both destructors run, just in the wrong order',
+          explanation: 'No — static dispatch selects ~Base only. ~Derived is not run "late", it is not run at all (and formally it is UB, not a defined order).',
+        },
+        {
+          text: 'A compile error — the compiler catches this',
+          explanation: 'It compiles cleanly. That silence is exactly what makes this THE classic. (Some compilers can warn with -Wdelete-non-virtual-dtor, but it is not an error.)',
+        },
+      ],
+      correct: 0,
+    },
+    {
+      question: 'Dog overrides speak(). `Animal a = myDog; a.speak();` — what runs?',
+      options: [
+        {
+          text: 'Dog::speak — speak is virtual, so dispatch is dynamic',
+          explanation: 'Virtual dispatch needs a pointer or reference. This is a by-value copy — the Dog identity did not survive the assignment.',
+        },
+        {
+          text: 'Undefined behavior',
+          explanation: 'Nothing undefined — it is well-defined and disappointing. A legitimate Animal was copy-constructed from the Animal part of the Dog.',
+        },
+        {
+          text: 'Animal::speak — the object was sliced; a is a genuine Animal with Animal\'s vptr',
+          explanation: 'Correct. By-value assignment copies only the base subobject. There is no dispatch bug: the new object simply IS an Animal.',
+        },
+      ],
+      correct: 2,
+    },
+    {
+      question: 'You write `double area()` in Circle but the base virtual is `double area() const`. What does adding `override` to your function change?',
+      options: [
+        {
+          text: 'It turns a silent bug into a compile error — without override, the mismatched signature creates a NEW function that overrides nothing',
+          explanation: 'Correct. Missing const means a different signature: the base slot keeps Shape::area and your version is just an unrelated overload. override makes the compiler check your claim.',
+        },
+        {
+          text: 'It makes the function virtual',
+          explanation: 'A function matching a base virtual is virtual automatically, with or without override. override only VERIFIES the match.',
+        },
+        {
+          text: 'It changes the vtable layout to fit both versions',
+          explanation: 'override generates zero code and changes zero layout — it is purely a compile-time assertion.',
+        },
+      ],
+      correct: 0,
+    },
+    {
+      question: 'The diamond: Scanner and Printer both inherit Device (plain public inheritance); Copier inherits both. How many Device subobjects does a Copier contain?',
+      options: [
+        {
+          text: 'One — the compiler merges duplicate bases',
+          explanation: 'Not without help. Merging is exactly what VIRTUAL inheritance opts into; plain inheritance duplicates.',
+        },
+        {
+          text: 'Two — one via Scanner, one via Printer; accessing copier.serial_ is ambiguous',
+          explanation: 'Correct. Each inheritance path carries its own full Device. Virtual inheritance (`: virtual public Device` in both middles) shares a single one.',
+        },
+        {
+          text: 'Zero — diamonds do not compile',
+          explanation: 'The diamond compiles fine. Only the AMBIGUOUS ACCESS to duplicated members errors — the structure itself is legal.',
+        },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'Shape declares `virtual double area() const = 0;`. What is now true?',
+      options: [
+        {
+          text: 'Shape is abstract: `Shape s;` and `new Shape()` are compile errors, and concrete derived classes must implement area()',
+          explanation: 'Correct. One pure virtual makes the class abstract — usable only as a pointer/reference target, i.e. a pure interface.',
+        },
+        {
+          text: 'Derived classes may skip area() and inherit the = 0 default',
+          explanation: '= 0 is not a default — it is the absence of one. A derived class that does not implement area() is itself abstract.',
+        },
+        {
+          text: 'Shape can still be instantiated, but calling area() throws',
+          explanation: 'C++ blocks this at compile time, not runtime. You can never have a plain Shape object to call anything on.',
+        },
+      ],
+      correct: 0,
+    },
+  ],
+  interviewQuestions: [
+    {
+      question: 'Whiteboard question: walk me through exactly what happens when `s->area()` executes, where area() is virtual and s is a Shape* pointing at a Circle.',
+      answer:
+        'Story first: the object carries a hidden pointer (vptr), planted by its constructor, aiming at its class\'s vtable — a per-class array of function pointers where each virtual function owns a fixed slot. The call compiles to: load s → load the vptr from the object → index the vtable at area\'s slot → indirect call. Because the vptr was set by Circle\'s constructor, the slot holds Circle::area. Then the punchlines that score: the slot INDEX is fixed at compile time (only the table differs per class), overriding just overwrites a slot in the derived class\'s copy of the table, and this is why dispatch needs a pointer/reference — a sliced copy has the base\'s vptr. Close with cost: two dependent loads plus a lost inlining opportunity.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Case: your service leaks ~4KB per request. Valgrind says buffers allocated in ConcreteHandler\'s constructor are never freed. All handlers are destroyed via `delete handler;` where handler is a `HandlerBase*`. Diagnose.',
+      answer:
+        'THE classic: HandlerBase\'s destructor is almost certainly not virtual. `delete` through a base pointer with a non-virtual destructor is undefined behavior — in practice, static dispatch runs only ~HandlerBase, so ~ConcreteHandler (which frees the buffers) never executes. Confirm: check the base class, and compile with -Wdelete-non-virtual-dtor. Fix: `virtual ~HandlerBase() = default;` — one line. Prevention: any class with virtual functions gets a virtual destructor, period; and prefer `unique_ptr<HandlerBase>` so deletes are not scattered by hand. Tradeoff worth naming: a virtual destructor on a class with no other virtuals adds the vptr (bigger objects) — which is why value-type classes not designed as bases deliberately omit it.',
+      isCaseBased: true,
+    },
+    {
+      question: 'Explain the diamond problem. How does virtual inheritance fix it, and when would you rather redesign?',
+      answer:
+        'Diamond in words: Device on top; Scanner and Printer each inherit Device; Copier inherits both. With plain inheritance, Copier holds TWO Device subobjects — duplicated state (two serial numbers) and ambiguity: copier.serial_ won\'t compile. Fix: both middle classes inherit `virtual public Device`, making all paths share ONE Device subobject. Costs: access to the virtual base goes through extra indirection, and the MOST-DERIVED class must initialize Device — every constructor in the tree gets more complicated. The senior answer: a diamond of stateful classes is usually a design smell. Keep multiple inheritance for abstract interfaces (pure virtual, no data — where the diamond is harmless, exactly Java/C#\'s model) and share state via composition. Reach for virtual inheritance when you cannot change the hierarchy — it is the fire escape, not the front door.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Case: profiling shows a hot loop calling shape->area() two hundred million times per frame; the virtual dispatch itself shows up in the profile. Options?',
+      answer:
+        'First honesty check: the indirect call is rarely the real cost — it is the lost INLINING (area() is 3 instructions that could vanish into the loop). Options, cheapest first: (1) mark concrete classes `final` — the compiler can devirtualize calls where it proves the type; (2) sort the container by type — the branch predictor then nails the indirect calls, and per-type batching enables vectorization; (3) replace the polymorphic container with `std::variant` + `std::visit` — closed set of types, no vptr, everything inlinable; tradeoff: adding a type touches the variant, losing open extension; (4) CRTP/templates for compile-time polymorphism — fastest, but code bloat and less flexible interfaces. Name the tradeoff explicitly: virtual buys open-ended extension at runtime; when the type set is closed and hot, pay for that flexibility only if you use it.',
+      isCaseBased: true,
+    },
+    {
+      question: 'Case: a teammate stores shapes in `std::vector<Shape>` (by value). Circles were added, but every area comes back as the base default. What happened and what is the fix?',
+      answer:
+        'Object slicing. `vector<Shape>` stores Shape-sized boxes; pushing a Circle copy-constructs a Shape from the Circle\'s Shape subobject — Circle\'s members are chopped off and the stored object\'s vptr is Shape\'s. Dispatch isn\'t broken; the stored objects genuinely ARE plain Shapes. Fix: store indirection — `std::vector<std::unique_ptr<Shape>>` (owning) or `vector<Shape*>`/`reference_wrapper` (non-owning). Two hardening moves: make Shape abstract (pure virtual area) so `vector<Shape>` won\'t even compile, and remember the same slicing hides in `void f(Shape s)` parameters and by-value returns. Tradeoff to mention: the pointer indirection costs a heap allocation per shape and worse cache locality — the price of runtime polymorphism in containers.',
+      isCaseBased: true,
+    },
+    {
+      question: 'Static vs dynamic dispatch — define both, and tell me when a compiler is allowed to turn a virtual call back into a static one.',
+      answer:
+        'Static dispatch: the callee is chosen at compile time from the static (declared) type — non-virtual calls; free, inlinable. Dynamic dispatch: chosen at runtime from the dynamic type via vptr/vtable — virtual calls through pointers or references. Devirtualization happens when the compiler can PROVE the dynamic type: calling on a local object directly (`Circle c; c.area()` — no pointer involved), through a pointer whose pointee type is `final` (or the function is final), or after inlining makes the concrete type visible (e.g. right after `make_unique<Circle>`). Also worth saying: a virtual call inside a constructor/destructor dispatches statically to the class being constructed — the derived part does not exist yet, so the vptr still points at the current class\'s vtable.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Why should every overriding function say `override`? And what does `final` buy beyond documentation?',
+      answer:
+        'Because overriding is matched by exact signature, and without `override` a near-miss fails SILENTLY: write `area()` missing the base\'s `const` and you have created an unrelated function — the vtable slot still holds the base version, and calls through base pointers ignore your "override" with no diagnostic. `override` turns that into a compile error; it generates zero code, so it is free correctness. `final` (on a function or class) does two jobs: hard-stops further overriding — protecting invariants your class depends on — and gives the optimizer a proof it can use to devirtualize and inline calls. Tradeoff: `final` removes extension points, so it is a design commitment — apply it to leaf classes you control, not speculatively to library types others may need to extend.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Pure virtual function vs a virtual function with a default body — how do you choose when designing a base class?',
+      answer:
+        'Pure virtual (= 0) says "I cannot supply a sensible default — every concrete derived class must decide." It makes the base abstract, which is a feature: no accidental base instances, no slicing into base values, honest interfaces (Shape::area returning 0.0 is a lie). Virtual-with-body says "here is a sensible default, override only to customize" — right when most deriveds genuinely share behavior (e.g. a default log format). Two refinements interviewers like: a pure virtual can still HAVE a body (deriveds must override but may call `Base::f()` for shared logic), and a pure virtual DESTRUCTOR (with a body — it always runs in the chain) is the idiom to force abstractness when no other function fits. Bias for interfaces: pure virtual + virtual destructor + no data members keeps the base clean and multiple-inheritance-safe.',
+      isCaseBased: false,
+    },
+    {
+      question: 'What does a virtual function call actually cost? Give the honest engineering answer.',
+      answer:
+        'Direct costs: one vptr per object (8 bytes on 64-bit), one vtable per class (static memory, shared), and per call: two dependent loads (object→vptr→slot) plus an indirect call. On a modern CPU with a warm branch-target predictor that is a few cycles — usually noise. The REAL cost is secondary: the compiler generally cannot inline through an indirect call, which blocks constant propagation and vectorization across the call; and megamorphic call sites (many types, random order) defeat the predictor. So the honest summary: per-call overhead is small; lost optimization on tiny, hot functions is what occasionally hurts; and the design win (open extension, no type switches) is worth it everywhere except proven-hot inner loops — where final/variant/CRTP exist. Never say "virtual is slow" unqualified — say what it costs and when that matters.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Why does calling a virtual function inside a base-class constructor not reach the derived override?',
+      answer:
+        'Because during Base\'s constructor, the object IS a Base — the derived part does not exist yet, and its members are uninitialized. C++ therefore sets the vptr in stages: entering Base::Base, the vptr points at Base\'s vtable; only when Derived\'s constructor body begins does it flip to Derived\'s. So a virtual call in the base constructor dispatches to the BASE version — and a PURE virtual call there is UB (typically "pure virtual function called" + abort). Same story in destructors, in reverse: the derived part is already dead. This is deliberate safety: dispatching to a Derived override that reads Derived members before they exist would be worse. Workarounds: pass information up as constructor arguments, or use a two-phase init/factory function that calls the virtual AFTER construction completes — tradeoff: two-phase init means an object exists briefly in a not-fully-ready state.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Devil\'s advocate: if virtual functions are so useful, why isn\'t every member function virtual (like Java)?',
+      answer:
+        'C++\'s zero-overhead principle: you don\'t pay for what you don\'t use. Making everything virtual would (1) add a vptr to EVERY object — `sizeof(std::string)` growing by 8 matters when you have a billion of them, and POD layout compatibility with C would break; (2) block inlining pervasively — much of the STL\'s speed is tiny functions inlining to nothing; (3) invite fragile-base-class problems — every function becomes an extension point someone WILL override, so every implementation detail becomes API. Java accepts these costs (and its JIT devirtualizes at runtime — an option a C++ AOT compiler mostly lacks). The C++ design stance: virtual is a deliberate, per-function declaration that "this is a customization point" — dispatch is part of the interface contract, not a default. Design guideline that follows: make interfaces (bases) polymorphic and value types final-ish and vtable-free.',
+      isCaseBased: false,
+    },
+  ],
+  flashcards: [
+    {
+      front: 'What does `virtual` change about a call through a base pointer?',
+      back: 'Dispatch moves from compile time (static type of the pointer) to runtime (dynamic type of the object), via vptr → vtable → slot → call.',
+    },
+    {
+      front: 'vtable vs vptr — who has what?',
+      back: 'vtable: ONE per class — static array of function pointers, one slot per virtual. vptr: ONE per object — hidden pointer set by the constructor to its class\'s vtable.',
+    },
+    {
+      front: 'The virtual destructor rule',
+      back: 'Base class with any virtual function → `virtual ~Base() = default`. Deleting a derived object through a base pointer without it is UB (derived destructor never runs → leaks).',
+    },
+    {
+      front: 'Object slicing',
+      back: 'Copying a derived object into a base BY VALUE keeps only the base subobject — derived members chopped, vptr becomes the base\'s. Polymorphism needs pointers or references.',
+    },
+    {
+      front: 'What does `override` actually do?',
+      back: 'Compile-time assertion that the function matches a base virtual\'s signature exactly. Catches the silent new-function-instead-of-override typo. Zero runtime cost.',
+    },
+    {
+      front: 'What does `final` buy?',
+      back: 'Blocks further overriding (function) or deriving (class) — protects invariants and lets the compiler devirtualize + inline calls it can prove.',
+    },
+    {
+      front: 'Pure virtual + abstract class',
+      back: '`virtual double area() const = 0` — no body, deriveds must implement. Any pure virtual makes the class abstract: cannot instantiate, only point/refer to it.',
+    },
+    {
+      front: 'The diamond problem + fix',
+      back: 'D inherits B and C, both inherit A → D holds TWO A subobjects, member access ambiguous. Fix: B and C use `virtual public A` → one shared A. Better: interfaces without data, or composition.',
+    },
+    {
+      front: 'Honest cost of a virtual call',
+      back: 'Two dependent loads + indirect call (small) and usually no inlining (the real cost on tiny hot functions). +8 bytes per object for the vptr.',
+    },
+    {
+      front: 'Virtual call inside a constructor dispatches to…',
+      back: 'The class currently being constructed — the vptr points at ITS vtable; the derived part does not exist yet. Pure virtual there = UB. Same in destructors, reversed.',
+    },
+  ],
+  mindmapMarkdown: `- Inheritance, Virtual Functions & vtables
+  - Inheritance
+    - is-a test
+    - base subobject at front of derived
+    - public = the norm (protected/private: rare)
+  - Base pointer → derived object
+    - implicit upcast
+    - one loop, many types
+  - Dispatch
+    - static: compile time, pointer's type
+    - dynamic: runtime, object's type — virtual
+    - pointer/reference only
+  - vtable mechanics
+    - vtable: per class, slot per virtual
+    - vptr: per object, set by constructor
+    - call = load vptr → slot → call
+    - cost: 2 loads + no inlining
+  - Abstract classes
+    - pure virtual = 0
+    - override: verify signature
+    - final: stop overrides, devirtualize
+  - The classics
+    - virtual destructor or delete-through-base = UB
+    - slicing: by-value chops derived part
+    - constructor virtual call → base version
+  - Diamond
+    - two base subobjects, ambiguity
+    - virtual inheritance shares one
+    - prefer redesign: interfaces + composition`,
+}
+
+export default m

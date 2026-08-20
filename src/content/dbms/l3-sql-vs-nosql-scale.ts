@@ -1,0 +1,374 @@
+import type { Module } from '../types'
+
+const m: Module = {
+  id: 'dbms-l3-sql-vs-nosql-scale',
+  subjectId: 'dbms',
+  level: 3,
+  title: 'SQL vs NoSQL & Scaling the Data Layer',
+  whyItMatters:
+    'Every system design interview reaches the same fork: "your Postgres box is at 100% — now what?" A buzzword answer ("just use Mongo") fails the round. This module gives you the four NoSQL families with one honest use case each, replication and sharding as the two scaling levers, and the decision script interviewers actually reward. It is the bridge from DBMS into System Design.',
+  estMinutes: 50,
+  sections: [
+    {
+      type: 'intuition',
+      title: 'One Postgres box, until it is not',
+      md: `A family kitchen feeds four people beautifully. A restaurant serving four thousand covers a night does not need better pans — it needs a different kitchen layout.
+
+- Relational databases are the family kitchen: one machine, strong guarantees, ask anything.
+- Two pressures eventually break that: **volume** (writes or data too big for one machine) and **shape** (access patterns that never look like relational queries).
+- NoSQL is not "newer and better". Every NoSQL store is a **tradeoff**: it gives up relational features to buy speed or scale for one specific shape of work.
+- This module is the bridge into System Design. The deep ends — CAP theorem, consistency models, consensus — live there; here we build the vocabulary and the decision framework.`,
+    },
+    {
+      type: 'intuition',
+      title: 'The four NoSQL families — one honest use case each',
+      md: `- **Document** (MongoDB): stores JSON-like documents. Wins for a **product catalog** where a laptop has 40 fields and a t-shirt has 6 — nested data, and the shape drifts over time without migrations.
+- **Key-value** (Redis, DynamoDB): get/put by key, nothing else. The fastest, dumbest store. Wins for **sessions, shopping carts, caching** — you always know the exact key, and TTL expiry is built in.
+- **Column-family / wide-column** (Cassandra): rows grouped by a partition key, sorted within it, built to absorb writes. Wins for **write-heavy time-series** — sensor readings, event logs — where one device's data becomes one wide row appended forever.
+- **Graph** (Neo4j): nodes and edges as first-class citizens. Wins for **friend-of-friend traversals** — "people you may know" is k self-joins in SQL but a native walk here.
+- Notice the pattern: each family is a specialist. None of them is a general-purpose replacement.`,
+    },
+    {
+      type: 'intuition',
+      title: 'When relational still wins (which is most of the time)',
+      md: `The boring default is usually right. Relational databases keep four things NoSQL makes you give up or rebuild by hand:
+
+- **Joins**: combine any tables on demand. In most NoSQL stores you pre-join by duplicating data — and now updates must chase every copy.
+- **Transactions**: multi-row, multi-table ACID. "Debit account A, credit account B, both or neither" is one BEGIN…COMMIT, not an application-level saga.
+- **Ad-hoc queries**: you can answer questions nobody predicted. "Which customers bought X but never Y?" needs no schema redesign.
+- **Constraints**: foreign keys, UNIQUE, CHECK — the database defends the data even from buggy application code.
+- Interview framing: NoSQL removes these to scale one known workload. If you still need them, removing them is a bug, not an architecture.`,
+    },
+    {
+      type: 'intuition',
+      title: 'The real driver: do you know your queries upfront?',
+      md: `The SQL-vs-NoSQL decision is not really about scale. It is about **when you know your access patterns**.
+
+- NoSQL modeling starts from the queries: DynamoDB's official method is "list every access pattern first, then design the table to serve exactly those". The data is shaped FOR the query.
+- Relational modeling starts from the data: normalize it, and any query can come later. The data is shaped for **flexibility**.
+- Few, fixed, known-in-advance patterns at brutal scale → NoSQL shines ("get cart by session_id", a billion times a day).
+- Exploratory, changing, analyst-driven querying → relational wins, almost regardless of scale.
+- Most products cannot list their access patterns on day one. That is the strongest argument for starting relational.`,
+    },
+    {
+      type: 'note',
+      md: `**Schema-on-write vs schema-on-read.** Relational is schema-on-write: the shape is enforced at INSERT — bad data is rejected at the door, and every row you ever read is guaranteed to match the schema. Document stores are schema-on-read: the database stores whatever you send, and the shape is checked (or not) when someone reads it. The schema did not disappear — it **moved into your application code**, multiplied by every historical version of the document still sitting in the store. "Schemaless" really means "the schema is now your problem".`,
+    },
+    {
+      type: 'intuition',
+      title: 'Replication: same data, more machines',
+      md: `One teacher writes the master answer key; photocopies go out to every classroom. Students read from any copy — but corrections go through the teacher.
+
+- **Leader-follower replication**: all writes go to one node (the leader). Followers subscribe to its change stream and apply the same writes in order.
+- Reads can be served by ANY follower → **read scaling**. Ten replicas ≈ ten times the read throughput.
+- Writes do NOT scale this way: every node still applies every write. Replication is a read-scaling and availability tool.
+- Followers run slightly behind — **replication lag**: milliseconds normally, seconds under load.
+- Lag creates a famous bug: you write, then read your own data back and it is missing. Step through it below.`,
+    },
+    {
+      type: 'visual',
+      component: 'PointerBoxDiagram',
+      props: {
+        title: 'Replication lag: the read-your-own-write surprise',
+        notice: 'One leader, one async follower. Watch where each request lands — and what the follower knows at that moment.',
+        leftLabel: 'requests',
+        rightLabel: 'replicas',
+        frames: [
+          {
+            note: 'You post comment #42. Writes only ever go to the leader. It commits, acks you immediately (async replication), and queues the change for the follower — whose copy still ends at #41.',
+            stack: [{ name: 'POST comment #42', to: 'leader' }],
+            heap: [
+              { id: 'leader', value: 'comments …40, 41, 42', label: 'leader — has your write' },
+              { id: 'follower', value: 'comments …40, 41', label: 'follower — has not heard yet' },
+            ],
+          },
+          {
+            note: 'You refresh 200 ms later. The load balancer routes your READ to the follower — it is just a read, any replica will do. The follower answers honestly from what it has: your comment is missing. Nothing is broken. You outran the replication stream.',
+            stack: [{ name: 'GET my comments', to: 'follower', danger: true }],
+            heap: [
+              { id: 'leader', value: 'comments …40, 41, 42', label: 'leader (not consulted)' },
+              { id: 'follower', value: 'comments …40, 41', label: 'STALE — #42 still in transit' },
+            ],
+          },
+          {
+            note: 'The change stream lands and the follower catches up. Refresh again: #42 is there. The fix is read-your-own-writes: route a user\'s reads to the leader for a short window after their own write, or pin their session to one up-to-date replica.',
+            stack: [{ name: 'GET my comments', to: 'follower' }],
+            heap: [
+              { id: 'leader', value: 'comments …40, 41, 42', label: 'leader' },
+              { id: 'follower', value: 'comments …40, 41, 42', label: 'follower — caught up' },
+            ],
+          },
+        ],
+      },
+    },
+    {
+      type: 'note',
+      md: `**Sync vs async — pick your poison.** *Synchronous* replication: the leader waits for a follower to confirm before acking the client. No committed write can be lost on failover — but every write pays a network round trip, and a slow or dead follower can stall all writes. *Asynchronous*: the leader acks immediately and ships the change later. Fast — but if the leader dies, its last few un-shipped commits die with it. **Failover** = promoting a follower to be the new leader when the old one crashes; with async replication the promoted follower may be missing those final writes. Who decides to promote, and how two nodes avoid both believing they are leader (split brain) — that is System Design territory.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Sharding: when one machine cannot hold the writes',
+      md: `A library outgrows its building. Solution: split the collection — A–M in building 1, N–Z in building 2. Every visitor must now first ask: **which building?**
+
+- **Sharding** = splitting the DATA horizontally across machines. Each shard holds a subset of rows; together they hold everything.
+- Contrast with replication, which puts a FULL copy on every node. Replication scales reads; sharding scales reads, writes, and storage.
+- The **shard key** is the column that decides where a row lives (user_id, device_id…). Every query is routed by it.
+- This is the tool you reach for when the write volume or the dataset itself no longer fits one machine — after replicas and caching are exhausted.
+- The powers come with a bill, and the bill is the next two sections.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Choosing the shard key — where designs die',
+      md: `A good shard key has three properties: **high cardinality** (many distinct values), **even spread** (no value dominates), and it **appears in nearly every query** (so requests route to one shard).
+
+- Shard by \`country\`: ~200 values, wildly uneven. The India shard melts while the Iceland shard idles. A **hotspot** — one shard doing most of the work, so the cluster scales like one machine.
+- Shard by timestamp with range routing: every INSERT is "now", so ALL writes hammer the newest shard. Monotonic keys are hotspot machines.
+- The celebrity problem: \`user_id\` spreads evenly — until one account has 100M followers and its shard melts anyway. Even spread of keys is not even spread of load.
+- Query without the shard key ("find order by email" when sharded by user_id) → ask EVERY shard and merge: **scatter-gather**. Fine occasionally, fatal as a hot path.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Hash vs range sharding — and the cross-shard bill',
+      md: `- **Hash sharding**: route by \`hash(key)\`. Spreads load evenly, kills hotspots from skewed key values — but neighboring keys scatter across the cluster, so **range scans touch every shard**.
+- **Range sharding**: shard 1 holds ids 1–1M, shard 2 holds 1M–2M… Range scans ("all of March") hit one or two shards — but monotonic keys (auto-increment ids, timestamps) turn the last shard into a write hotspot.
+- Real systems compose them: Cassandra hashes the partition key across nodes, then range-sorts rows *within* a partition — even spread outside, cheap scans inside.
+- **Cross-shard joins mostly do not exist.** Joining rows that live on different machines means shipping data over the network per query. The workarounds ARE the design: denormalize (duplicate the joined data into the row), or co-locate rows that join together under the same shard key.
+- Say the price out loud in interviews: sharding trades away cheap joins, multi-row transactions, and simple operations. You buy write scale with complexity.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Why mod-N routing hurts the day you grow',
+      code: `def shard_of(user_id, n_shards):
+    return user_id % n_shards      # mod-N routing: simple, even… and a trap
+
+# the cluster grows: 4 shards -> 5 shards
+# user_id    % 4    % 5
+#   217       1      2     MOVED
+#   350       2      0     MOVED
+#   483       3      3     stays
+#   512       0      2     MOVED
+#   649       1      4     MOVED
+# ~80% of ALL keys now live on the "wrong" shard -> mass migration, live traffic`,
+      annotations: {
+        2: 'Every router runs this on every query. Change n_shards and the answer changes for almost every key at once — the routing function itself is the problem.',
+        8: 'A key stays put only when id % 4 == id % 5 — exactly 1 key in 5. Growing the cluster by one node relocates 80% of the data.',
+        11: 'Consistent hashing (next visual) is the fix: adding a shard moves only the ~1/N of keys in the arc it takes over. Everything else stays home.',
+      },
+    },
+    { type: 'visual', component: 'ConsistentHashRing', props: {} },
+    {
+      type: 'note',
+      md: `What the ring buys you: servers and keys hash onto the same circle, and each key belongs to the **next server clockwise**. Add a server → it takes over one arc; only the keys in that arc move (~1/N of them). Remove a server → its arc slides to the next neighbor. Compare that with mod-N's 80% reshuffle above. This is how Dynamo-style stores and Cassandra grow clusters without a stop-the-world migration. (Production versions place each server at many points — virtual nodes — so the arcs stay even.)`,
+    },
+    {
+      type: 'note',
+      md: `**Partitioning ≠ sharding — people conflate these constantly.** *Partitioning* splits one table into pieces **inside one database node** — classically by time: one partition per month. A query with \`WHERE created_at >= '2026-08-01'\` touches only the relevant partitions (**partition pruning**), and deleting old data is \`DROP PARTITION\` — instant — instead of a million-row DELETE. *Sharding* splits data **across machines** and drags in networks, routing, and failure modes. The interview-clean sentence: "partitioning is a table-management tool inside one database; sharding is a distributed-systems decision."`,
+    },
+    {
+      type: 'intuition',
+      title: 'The decision framework — say this in interviews',
+      md: `The checklist, in order. Each step is cheaper and less risky than the one after it.
+
+1. **Start with Postgres.** Joins, transactions, ad-hoc queries, constraints — maximum flexibility while requirements are still moving.
+2. **Profile before switching.** Most "we need NoSQL" pain is a missing index or an unbatched query. Fix those first.
+3. **Cache in front** (Redis) for hot reads — a key-value store as a supplement, not a replacement.
+4. **Read replicas** when reads outgrow one box. Accept and handle replication lag.
+5. **Shard, or move one workload to the matching NoSQL family**, only when you can name the access pattern and the number that breaks a single node.
+
+The interview-safe phrasing: *"I'd start relational for correctness and flexibility, and move a specific workload to a specialized store only when I can name the access pattern and the scale number that demands it."* That sentence — boring default, named trigger — is what senior answers sound like. Next stop is System Design proper: CAP, consistency models, and what happens when replicas disagree.`,
+    },
+  ],
+  quiz: [
+    {
+      question: 'Session storage: lookup is always by session_id, values expire after 30 minutes, traffic is enormous. Which store fits the access pattern best?',
+      options: [
+        { text: 'Document store', explanation: 'It would work, but you never query inside the session blob — document features are dead weight here.' },
+        { text: 'Key-value store (e.g. Redis)', explanation: 'Correct. One known key, get/put only, built-in TTL expiry — the access pattern uses exactly what key-value stores offer and nothing they lack.' },
+        { text: 'Graph database', explanation: 'Sessions have no relationships to traverse — the one thing graph databases are for.' },
+        { text: 'Relational with an index on session_id', explanation: 'Fine at small scale, but the pattern uses zero relational strengths (no joins, no transactions, no ad-hoc queries) while paying their costs.' },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'A user posts a comment, refreshes immediately, and the comment is GONE — then it appears on its own two seconds later. Most likely cause?',
+      options: [
+        { text: 'The transaction never committed', explanation: 'Then the comment would never appear. It showed up untouched two seconds later — the write succeeded.' },
+        { text: 'Async replication lag: the read was served by a follower that had not applied the write yet', explanation: 'Correct. The write hit the leader; the immediate read hit a stale follower. Classic read-your-own-write violation — fixed by routing a user\'s post-write reads to the leader.' },
+        { text: 'The write was lost in failover', explanation: 'A lost write stays lost. Self-healing after two seconds is the signature of lag, not loss.' },
+        { text: 'The browser cached the old page', explanation: 'Possible in general, but a fresh server-rendered read that self-corrects in seconds across users points at the replicated data layer.' },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'You shard the orders table by `country`. What goes wrong?',
+      options: [
+        { text: 'Nothing — country appears in most queries', explanation: 'Routing is not the issue. The problem is what the key does to load distribution.' },
+        { text: 'Low cardinality and heavy skew: a few big countries hotspot their shards while small ones idle', explanation: 'Correct. ~200 values, wildly uneven traffic — the busiest shard becomes the whole system\'s ceiling. A shard key needs high cardinality AND even spread.' },
+        { text: 'Cross-shard joins become impossible', explanation: 'True of any shard key — it is the general price of sharding, not what makes country specifically bad.' },
+        { text: 'Countries change too often', explanation: 'Order country is essentially immutable. Skew, not mutability, is the killer here.' },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'Events table sharded by RANGE on an auto-increment event_id. The range scans are cheap. What is the hidden cost?',
+      options: [
+        { text: 'Range scans secretly touch every shard', explanation: 'That is hash sharding\'s weakness. Range sharding keeps neighbors together — scans are genuinely cheap.' },
+        { text: 'Every INSERT lands on the newest shard: a monotonic key makes the last shard a permanent write hotspot', explanation: 'Correct. New ids are always the largest, so the freshest shard absorbs 100% of writes while the rest sit cold. Monotonic keys and range sharding are a hotspot machine.' },
+        { text: 'Auto-increment ids cannot be hashed', explanation: 'They hash fine — that is the usual fix, at the price of losing cheap range scans.' },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'Routing is `key % 4` across 4 shards. You add a 5th. Roughly what fraction of ALL keys must move?',
+      options: [
+        { text: '~20% — the share the new shard takes over', explanation: 'That is consistent hashing\'s behavior (~1/N moves). Mod-N is far worse: the modulus changed for everyone.' },
+        { text: '~50%', explanation: 'Still too kind. A key stays only when key % 4 == key % 5 — count how rare that is.' },
+        { text: '~80% — a key stays only when key % 4 equals key % 5', explanation: 'Correct. That coincidence holds for exactly 1 key in 5, so 4 in 5 relocate. One added node triggers a near-total data migration — the pain consistent hashing exists to fix.' },
+        { text: 'None — new keys just start using the new shard', explanation: 'Existing keys must be findable. The router now computes % 5 for every lookup, so old keys sitting at their % 4 position are simply lost.' },
+      ],
+      correct: 2,
+    },
+    {
+      question: 'A Postgres table is split into monthly pieces by `created_at`, all on one server. Is this sharding?',
+      options: [
+        { text: 'Yes — the table is split, that is sharding', explanation: 'The split is real but it never leaves the machine. Sharding specifically means distributing across nodes.' },
+        { text: 'No — it is partitioning: a single-node table-management tool that enables pruning and instant old-data drops', explanation: 'Correct. Queries filtered by date skip irrelevant partitions (pruning) and DROP PARTITION replaces million-row DELETEs. No network, no routing tier — not a distributed-systems decision.' },
+        { text: 'No — it is replication', explanation: 'Replication copies the SAME data to more nodes. Nothing is copied here; one table is sliced in place.' },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'A document store is "schemaless". What actually happened to the schema?',
+      options: [
+        { text: 'It moved into application code — every reader must handle every historical shape ever written', explanation: 'Correct. Schema-on-read means the store accepts anything; the checking your database used to do at INSERT is now your code\'s job, multiplied by document versions.' },
+        { text: 'It genuinely no longer exists', explanation: 'Your code still assumes fields exist and have types — that assumption IS a schema, just unenforced.' },
+        { text: 'The store infers and enforces it automatically', explanation: 'Document stores validate nothing by default — that non-enforcement is the flexibility being sold.' },
+      ],
+      correct: 0,
+    },
+    {
+      question: 'A new startup expects "Google scale eventually" and wants to launch on Cassandra to be safe. Best counsel?',
+      options: [
+        { text: 'Agree — migrating later is harder than starting right', explanation: 'The premise fails: their access patterns are unknown on day one, and Cassandra demands you design tables around known queries.' },
+        { text: 'Start relational; move a specific workload only when a named access pattern and a real scale number demand it', explanation: 'Correct. Early-stage needs are ad-hoc queries, joins, transactions, and cheap iteration — everything Cassandra trades away. Buy scale when a number, not a fear, requires it.' },
+        { text: 'Use both from day one to hedge', explanation: 'Two data stores means two operational burdens and a consistency problem between them — maximum cost, before a single scale problem exists.' },
+      ],
+      correct: 1,
+    },
+  ],
+  interviewQuestions: [
+    {
+      question: 'SQL or NoSQL — how do you actually decide? Give me your framework, not the buzzwords.',
+      answer:
+        'The real axis is not scale, it is access patterns. If queries are known upfront, few, and fixed — "get cart by session_id" — a specialized store can be shaped exactly for them and scale linearly. If querying is exploratory or changing, relational wins: normalize once, ask anything later. Then check what you would give up: joins, multi-row ACID transactions, ad-hoc queries, and enforced constraints. Still need any of those? Removing them is a bug, not an architecture. My default: start with Postgres, cache and replicate first, and move a specific workload to the matching NoSQL family only when I can name the access pattern and the scale number that breaks a single node.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Case: design the data layer for an e-commerce site — a product catalog where attributes vary wildly per category, shopping carts, and orders with payments. Choose stores and defend each.',
+      answer:
+        'Split by workload. Catalog → document store (or Postgres JSONB, worth saying): a laptop has 40 attributes, a t-shirt has 6, and categories drift — schema flexibility is genuinely needed here, and catalog reads are by product id or search index, not ad-hoc joins. Cart → key-value with TTL (Redis/Dynamo): always fetched by one known key, huge volume, expiry built in, and losing a cart is survivable. Orders and payments → relational, non-negotiable: money movement needs multi-row ACID ("create order, decrement stock, record payment — all or nothing"), constraints, and audit-friendly ad-hoc querying. The tradeoff to volunteer: three stores means data crossing boundaries (cart → order checkout) has no cross-store transaction, so the checkout path needs idempotent writes and reconciliation. If asked to simplify: all three fit in Postgres at startup scale; the split is what I would evolve toward, not start with.',
+      isCaseBased: true,
+    },
+    {
+      question: 'Explain leader-follower replication. What does it scale, and what does it not?',
+      answer:
+        'One node (leader) accepts all writes and streams them, in order, to followers that apply the same changes. Reads can be served by any replica, so read throughput scales roughly with replica count — and you get availability: a follower can be promoted if the leader dies. What it does not scale: writes and storage. Every node still applies every write and holds the full dataset, so write capacity stays that of one machine. The operational tax is replication lag — followers run behind by milliseconds to seconds — which surfaces as stale reads and the read-your-own-write anomaly. One-line summary: replication scales reads and survives failures; sharding is what scales writes.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Case: support tickets say "my new comment vanishes on refresh, then reappears seconds later." The system uses Postgres with two async read replicas behind a load balancer. Walk me through the debug and the fix.',
+      answer:
+        'The symptom is the fingerprint of replication lag: the write committed on the leader (it reappears — so nothing was lost), but the refresh READ was load-balanced to a replica that had not applied the change yet. Verify by checking replica lag metrics against ticket timestamps, and by reproducing: write, then immediately read from each replica directly. Fixes, cheapest first: (1) read-your-own-writes — route a user\'s reads to the leader for a short window after their own write (or until the replica confirms that write\'s LSN); (2) sticky sessions — pin a user to one replica so they at least never see time go backwards (monotonic reads); (3) for the comment widget only, read the leader — surgical, keeps replicas for the heavy anonymous traffic. What I would not do: switch to synchronous replication globally — it taxes every write in the system to fix one UI path.',
+      isCaseBased: true,
+    },
+    {
+      question: 'Synchronous vs asynchronous replication — the tradeoff, and what failover does to each.',
+      answer:
+        'Sync: the leader waits for follower acknowledgment before confirming the write. Guarantee: any committed write survives leader death. Cost: every write pays a network round trip, and a slow or dead follower can stall all writes — so real systems rarely make ALL followers sync (Postgres, for example, can wait on just one). Async: the leader confirms immediately and ships changes in the background. Fast, but on leader crash the un-shipped tail of commits is gone — a promoted follower simply never saw them. So failover under async means choosing between losing those writes or waiting for a possibly-dead leader. The deeper problems — who triggers promotion, and how to prevent two nodes both believing they are leader (split brain) — are consensus territory, covered in System Design.',
+      isCaseBased: false,
+    },
+    {
+      question: 'What makes a good shard key? Give me concrete ways bad ones fail.',
+      answer:
+        'Three properties: high cardinality (many distinct values — room to spread), even load distribution (no value dominates), and presence in nearly every query (so requests route to one shard instead of all). Failure gallery: country — ~200 values, massive skew, the India shard melts while Iceland idles; timestamp under range routing — every insert is "now", so the newest shard takes 100% of writes; the celebrity problem — user_id looks even until one account has 100M followers, because even key spread is not even LOAD spread. And any hot query missing the shard key becomes scatter-gather across every shard. Practical answer for most apps: hash of a high-cardinality entity id (user_id, device_id) that anchors the query patterns — plus special handling for known-hot entities.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Hash sharding vs range sharding — when each, and how real systems combine them.',
+      answer:
+        'Hash: route by hash(key). Even distribution, immune to skewed key ranges and monotonic keys — but neighboring keys scatter, so range scans ("all of March") must hit every shard. Range: contiguous key ranges per shard. Range scans touch one or two shards — but monotonic keys (auto-increment, time) hammer the newest shard permanently. Rule: hash when access is point lookups; range when range scans are the workload AND the key is not monotonic. The composition worth naming: Cassandra hashes the partition key across nodes (even spread), then sorts rows by clustering key within each partition (cheap scans inside). You get both — but only within one partition, which is exactly why choosing the partition key is the design.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Why are cross-shard joins so expensive, and how do sharded systems live without them?',
+      answer:
+        'A join matches rows pairwise; when the rows live on different machines, matching means shipping data across the network per query — latency and bandwidth costs that no query planner can optimize away. Most NoSQL stores simply refuse to offer it. Survival strategies, all decided at design time: (1) co-locate rows that join together — same shard key for a user and their orders, so the join is local; (2) denormalize — duplicate the joined fields into the row (order stores the product name), accepting that updates must chase copies; (3) scatter-gather for the rare cross-shard question, kept off hot paths; (4) ship analytics to a separate warehouse where joins are cheap again. The interview point: sharding does not just make joins slow — it makes join-avoidance a schema design requirement.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Partitioning vs sharding — people use them interchangeably. Untangle them.',
+      answer:
+        'Partitioning splits one table into pieces inside a single database node — classically time-based, one partition per month. Wins: partition pruning (a WHERE on the partition column skips irrelevant partitions entirely) and instant retention (DROP PARTITION versus a million-row DELETE with its vacuum aftermath). No network, no routing tier, transactions still work normally. Sharding splits data across machines: it buys write and storage scale, but drags in routing, cross-shard query costs, and distributed failure modes. The clean sentence: partitioning is a table-management tool inside one database; sharding is a distributed-systems decision. Muddying it: some docs say "partitioning" for both (Cassandra\'s "partition key" routes across nodes) — so in interviews, define the term before using it.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Your cluster routes with hash(key) % N. Why does adding one node hurt, and how does consistent hashing fix it?',
+      answer:
+        'Changing N changes the routing answer for almost every key: with 4 → 5 shards, a key stays put only when key % 4 == key % 5 — one key in five — so ~80% of all data must migrate, live. Consistent hashing decouples routing from the server count: servers and keys hash onto the same ring, and each key belongs to the next server clockwise. Adding a server claims one arc; only that arc\'s keys (~1/N of the total) move, and removing a server spills only its own arc to its neighbor. Production detail worth adding: each physical server is placed at many ring positions (virtual nodes) so arcs stay statistically even and a departing node\'s load spreads across many survivors instead of one. This is the resharding story behind Dynamo-style stores and Cassandra.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Case: an IoT platform ingests 1M sensor readings per second; the only queries are "last 24 hours for device X" dashboards. Pick the store and the data model.',
+      answer:
+        'The access pattern is fully known, write volume is far beyond one node, and there are no joins, transactions, or ad-hoc queries — the textbook column-family case. Cassandra (or a dedicated time-series store built on the same ideas): partition key = device_id — hashed across the cluster so a million devices spread writes evenly — and clustering key = timestamp descending, so each device is one wide row sorted by time and "last 24h for device X" is a single-partition sequential scan. Guard rails to volunteer: bound partition growth by bucketing the key as (device_id, day) so no row grows forever; and one hot aggregate query across ALL devices would be scatter-gather — that belongs in a pre-computed rollup, not a live query. Why not Postgres: a single leader cannot absorb 1M writes/sec, and sharded Postgres means hand-building the routing Cassandra ships with.',
+      isCaseBased: true,
+    },
+    {
+      question: 'When does schema flexibility become a trap? You seem to like schema-on-write.',
+      answer:
+        'Schema-on-read is genuinely right when document shapes legitimately vary (product catalogs) or during rapid prototyping. The trap is schema drift: five years of writes under evolving code leaves the store holding every historical shape at once — fields renamed, types changed, optional-then-required — and every reader forever carries if-else archaeology for versions nobody remembers. The enforcement did not disappear; it moved from one declarative place (the DDL) into scattered application code, minus the guarantee. Mitigations if you go document anyway: validation at the write path (Mongo schema validation, app-level schemas), version fields in documents, and lazy migration on read. And the middle path worth naming: Postgres JSONB — relational constraints and transactions around a flexible column — covers a surprising share of "we need Mongo" cases.',
+      isCaseBased: false,
+    },
+  ],
+  flashcards: [
+    { front: 'The four NoSQL families + one honest use case each', back: 'Document (Mongo): varied-shape product catalogs. Key-value (Redis/Dynamo): sessions, carts, caching. Column-family (Cassandra): write-heavy time-series, wide rows. Graph (Neo4j): friend-of-friend traversals.' },
+    { front: 'What relational keeps that NoSQL gives up', back: 'Joins on demand, multi-row ACID transactions, ad-hoc queries, enforced constraints (FK/UNIQUE/CHECK). Still need them → relational is the answer, not the compromise.' },
+    { front: 'The REAL SQL-vs-NoSQL driver', back: 'Access patterns. Known upfront, few, fixed at huge scale → NoSQL (design the table FOR the query). Exploratory or changing querying → relational (normalize, ask anything later).' },
+    { front: 'Schema-on-write vs schema-on-read', back: 'On-write (relational): shape enforced at INSERT, bad data rejected at the door. On-read (document): store accepts anything; the schema moves into application code × every historical document version.' },
+    { front: 'Leader-follower replication, one breath', back: 'All writes → leader; followers apply its change stream; reads from any replica. Scales READS and availability, never writes. Lag (ms–s) causes stale reads and the read-your-own-write surprise.' },
+    { front: 'Sync vs async replication', back: 'Sync: leader waits for follower ack — no lost writes on failover, but slower writes and a stalled follower stalls everyone. Async: instant ack — fast, but leader death loses the un-shipped tail of commits.' },
+    { front: 'Good shard key checklist', back: 'High cardinality + even LOAD spread + present in nearly every query. Failures: country (skew), timestamp (monotonic → newest shard takes all writes), celebrity user (hot entity).' },
+    { front: 'Hash vs range sharding', back: 'Hash: even spread, no hotspots — but range scans hit every shard. Range: cheap range scans — but monotonic keys hotspot the newest shard. Cassandra: hash across nodes, range-sort within a partition.' },
+    { front: 'mod-N vs consistent hashing', back: 'hash(key) % N: adding a node changes routing for ~all keys (4→5 shards moves ~80%). Consistent hashing: ring + next-server-clockwise → only ~1/N of keys move, the arc the new node claims.' },
+    { front: 'Partitioning vs sharding', back: 'Partitioning: split one table INSIDE one node (by month) → partition pruning, instant DROP PARTITION. Sharding: split ACROSS machines → write scale, but routing, scatter-gather, no cheap cross-shard joins.' },
+  ],
+  mindmapMarkdown: `- SQL vs NoSQL & Scaling the Data Layer
+  - Four NoSQL families
+    - Document: varied catalogs, schema drift
+    - Key-value: sessions, carts, cache
+    - Column-family: write-heavy time-series
+    - Graph: friend-of-friend traversals
+  - Relational still wins
+    - Joins, ACID, ad-hoc, constraints — the boring default
+  - The real driver
+    - Access patterns known upfront → NoSQL
+    - Schema-on-write vs schema-on-read
+  - Replication (leader-follower)
+    - Scales reads, never writes
+    - Lag → read-your-own-write surprise
+    - Sync safe-slow vs async fast-lossy (failover risk)
+  - Sharding
+    - Shard key: cardinality, spread, in every query
+    - Hotspots: country, timestamp, celebrity
+    - Hash (even) vs range (scannable)
+    - Cross-shard joins = the price
+    - mod-N reshuffle → consistent hashing ring
+  - Partitioning ≠ sharding
+    - One node: pruning, cheap drops
+  - Bridge to System Design
+    - CAP & consistency models live there
+    - Script: start Postgres, name the number`,
+}
+
+export default m

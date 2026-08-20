@@ -1,0 +1,520 @@
+import type { Module } from '../types'
+
+const m: Module = {
+  id: 'backend-l2-async-python',
+  subjectId: 'backend',
+  level: 2,
+  title: 'Async Python Properly: The Event Loop',
+  whyItMatters:
+    'Every backend interview eventually asks "why is your async service slow?" and the answer is almost always one blocking line sitting on the event loop. Typing async def is easy. Knowing when async helps, when it actively hurts, and how to find the single call that froze an entire server is the part that gets scored.',
+  estMinutes: 55,
+  sections: [
+    {
+      type: 'intuition',
+      title: 'A blocked thread is a paid employee staring at a wall',
+      md: `Your API calls the database. The query takes 12 ms. What is the CPU doing for those 12 ms?
+
+- Nothing. The thread is *blocked* — parked in the kernel, waiting for bytes to arrive.
+- That thread still costs ~8 MB of stack plus a context switch every time it wakes. You are paying full price for a worker who is asleep.
+- Typical web request: ~2 ms of your code, ~200 ms waiting on DBs, caches and other services. **99% of the time is waiting.**
+- One thread per request means 1000 concurrent users = 1000 mostly-sleeping threads. The box dies of overhead, not of work.
+- The fix is not more threads. The fix is: *stop dedicating a thread to waiting.*`,
+    },
+    {
+      type: 'intuition',
+      title: 'Concurrency vs parallelism — say this word for word',
+      md: `This is a definition question. Interviewers want the crisp version.
+
+- **Concurrency** = dealing with many things at once by *interleaving* them. One worker, many tasks, switching between them.
+- **Parallelism** = doing many things at once *simultaneously*. Many workers, same instant. Needs multiple cores.
+- Kitchen version: one chef juggling four dishes is concurrency. Four chefs, four dishes, is parallelism.
+- asyncio gives you **concurrency only** — one thread, no exceptions. multiprocessing gives you parallelism.
+- The trap sentence to never say: *"async makes my code faster."* Async makes your **waiting** overlap. It never makes computation faster.`,
+    },
+    {
+      type: 'intuition',
+      title: 'The event loop: one thread and a ready queue',
+      md: `Strip away the magic and asyncio is embarrassingly simple.
+
+- One thread runs a \`while True\` loop holding a **ready queue** — tasks that can make progress *right now*.
+- It pops one task and runs it until the task hits an \`await\` on something unfinished.
+- Then it **parks** the task: the coroutine's state (locals, the exact line it stopped on) is saved, and the loop registers "wake this one when that socket is readable".
+- It immediately pops the NEXT ready task. Nothing stares at a wall.
+- The OS reports readiness for *thousands* of sockets in one syscall (epoll on Linux, kqueue on BSD). Ready tasks go back on the queue and resume on the line right after their \`await\`.
+- That is the whole machine: one thread, save/restore, one readiness poll. No thread pool, no locks, no GIL fight.`,
+    },
+    {
+      type: 'hinglish',
+      md: `Async ka matlab **multitasking nahi** hai — *smart waiting* hai.
+
+Ek waiter, das tables. Order liya, parcha kitchen ko de diya — ab woh kitchen ke saamne khada intezaar nahi karta. Seedha table 2 pe, phir table 3 pe. Jaise hi koi dish ready hoti hai, waiter wapas jaake serve kar deta hai. **Das tables, ek waiter, zero extra staff.**
+
+- \`await\` ka matlab bas itna: *"parcha kitchen ko de diya, main abhi free hoon."*
+- Aur poora system ek hi cheez se toot-ta hai: agar waiter khud kitchen mein ghus ke sabzi kaatne lag jaye (CPU work), to saare das tables khade rehte hain — kyunki waiter to ek hi hai.`,
+    },
+    {
+      type: 'visual',
+      component: 'PointerBoxDiagram',
+      props: {
+        title: 'The event loop parking and resuming coroutines',
+        notice: 'One thread on the left. Real I/O in flight on the right. Watch the last frame — that is the bug everyone ships once.',
+        leftLabel: 'event loop',
+        rightLabel: 'in-flight I/O',
+        frames: [
+          {
+            note: 'Request A arrives. One thread, one task: the loop runs A until its first await.',
+            stack: [{ name: 'running: A' }],
+            heap: [],
+          },
+          {
+            note: 'A hits await db.fetch(). It PARKS and hands the thread straight back to the loop.',
+            stack: [{ name: 'parked: A', to: 'io1' }],
+            heap: [{ id: 'io1', value: 'DB query 12 ms', label: 'waiting' }],
+          },
+          {
+            note: 'The loop is free, so it picks up request B. A is still waiting — and costing zero threads.',
+            stack: [{ name: 'running: B' }, { name: 'parked: A', to: 'io1' }],
+            heap: [{ id: 'io1', value: 'DB query 12 ms', label: 'waiting' }],
+          },
+          {
+            note: 'B parks on its own HTTP call. Two requests in flight, one thread, both idle. C, D, E can walk in free.',
+            stack: [
+              { name: 'parked: A', to: 'io1' },
+              { name: 'parked: B', to: 'io2' },
+            ],
+            heap: [
+              { id: 'io1', value: 'DB query 12 ms', label: 'waiting' },
+              { id: 'io2', value: 'HTTP GET 200 ms', label: 'waiting' },
+            ],
+          },
+          {
+            note: "A's rows arrive. A goes back on the ready queue and the loop resumes it on the line after its await.",
+            stack: [{ name: 'running: A' }, { name: 'parked: B', to: 'io2' }],
+            heap: [
+              { id: 'io1', value: 'rows returned', label: 'done' },
+              { id: 'io2', value: 'HTTP GET 200 ms', label: 'waiting' },
+            ],
+          },
+          {
+            note: 'DANGER: a CPU-bound task never awaits. B is ready but cannot run for 2.1 s. Every request in the process stalls.',
+            stack: [
+              { name: 'running: report()', to: 'cpu', danger: true },
+              { name: 'ready: B', value: 'STALLED' },
+              { name: 'ready: C', value: 'STALLED' },
+            ],
+            heap: [
+              { id: 'cpu', value: '2.1 s pure CPU', label: 'no await' },
+              { id: 'io2', value: 'HTTP GET done', label: 'ignored' },
+            ],
+          },
+        ],
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'async / await — the four rules that end the confusion',
+      md: `- \`async def\` makes a **coroutine function**. Calling it does NOT run it — you get a coroutine object, a recipe you have not cooked.
+- \`await x\` means two things at once: *"give me x's result"* and *"until then I am parked, loop go do something else"*.
+- You may only \`await\` inside an \`async def\`. Not a style rule: parking requires a function the interpreter can suspend and resume mid-body, and only coroutines can be.
+- Nothing runs until a loop drives it — \`asyncio.run(main())\` in a script, or uvicorn, which already owns the loop in a FastAPI app.
+- A coroutine you build but never await is a silent bug. Python only warns: *"coroutine was never awaited"* — and the work simply never happened.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Coroutines are lazy — calling one runs nothing',
+      code: `import asyncio
+
+async def fetch(name, secs):        # async def: calling it BUILDS a coroutine
+    await asyncio.sleep(secs)       # park here, hand the thread back
+    return name.upper()
+
+c = fetch("a", 0.1)                 # nothing has run yet
+print(type(c).__name__)             # coroutine
+
+# await fetch("b", 0.1)             # SyntaxError: await outside an async def
+
+async def main():
+    print(await c)                  # A   <- the body executes only now
+
+asyncio.run(main())                 # creates the loop, runs main, closes it`,
+      annotations: {
+        4: 'asyncio.sleep is the async twin of time.sleep: it parks the task. time.sleep would freeze the whole loop.',
+        7: 'THE line people get wrong. No thread, no loop, no execution — just an object holding the recipe.',
+        10: 'Why the rule exists: only a coroutine can be suspended mid-body. A plain def has no resume point to save.',
+        15: 'One loop per process. Calling asyncio.run inside an already-running loop raises RuntimeError.',
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'gather / TaskGroup — ten calls in the time of one',
+      md: `Awaiting one call at a time is just slow synchronous code wearing new syntax.
+
+- Sequential awaits: 10 calls × 200 ms = **2.0 s**. Those awaits overlap with *other requests*, but never with each other.
+- \`asyncio.gather(*coros)\` launches all of them, then waits. Total ≈ **the slowest single call** — about 0.21 s.
+- \`asyncio.TaskGroup\` (Python 3.11+) is the modern form and is safer on failure: if one child raises, the siblings are **cancelled** and you get an ExceptionGroup.
+- \`gather\` without \`return_exceptions=True\` propagates the first error but leaves the siblings running — orphaned work, a classic slow leak.
+- Rule: fan out everything independent. Keep sequential only what genuinely needs the previous result.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Sync vs async, same ten calls, real numbers',
+      code: `import asyncio
+import httpx, requests
+
+URLS = [f"https://api.example.com/item/{i}" for i in range(10)]   # ~200 ms each
+
+def sync_all():
+    return [requests.get(u).json() for u in URLS]
+# sync_all()               -> 2.03 s wall clock  (10 x 200 ms, one after another)
+
+async def async_all():
+    async with httpx.AsyncClient() as client:
+        rs = await asyncio.gather(*(client.get(u) for u in URLS))
+    return [r.json() for r in rs]
+# asyncio.run(async_all()) -> 0.21 s wall clock  (all ten waits OVERLAP)
+
+async def async_all_311():
+    async with httpx.AsyncClient() as client:
+        async with asyncio.TaskGroup() as tg:
+            tasks = [tg.create_task(client.get(u)) for u in URLS]
+    return [t.result().json() for t in tasks]`,
+      annotations: {
+        7: 'requests is blocking. Ten waits stack end to end — the CPU is idle for 2 full seconds.',
+        12: 'gather schedules all ten as Tasks immediately, then parks. You pay max(latencies), not sum(latencies).',
+        14: '0.21 s, not 0.20: the extra ~10 ms is connection setup plus loop overhead. Async never beats one round trip.',
+        18: 'TaskGroup: leaving the block waits for every child. One failure cancels the rest — no orphaned requests.',
+        20: 'Results are read AFTER the block, because only then is every task guaranteed finished.',
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'When async helps — and when it is the wrong tool',
+      md: `One question decides it: **is the bottleneck waiting, or computing?**
+
+- **I/O-bound — yes.** HTTP calls, DB queries, Redis, disk, other services. This is the entire point of asyncio.
+- **CPU-bound — no, and worse than no.** Your computation holds the one thread, so every other request in the process stops dead. This is the cardinal sin of asyncio.
+- **Low concurrency** (a batch script, five calls) — async buys almost nothing over threads and costs you a whole programming model. Skip it.
+- The fix for CPU work inside an async service: \`loop.run_in_executor(pool, fn, args)\` with a **ProcessPoolExecutor** — separate interpreters, real cores, real parallelism.
+- Use a ThreadPoolExecutor (or the \`asyncio.to_thread(fn, *args)\` shortcut, 3.9+) only for *blocking* work that is not pure Python CPU: a legacy sync SDK, a C library that releases the GIL, a slow file read.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'The cardinal sin, and the two-line fix',
+      code: `import asyncio
+from concurrent.futures import ProcessPoolExecutor
+
+def score(rows):                     # pure Python CPU, ~2.1 s, never yields
+    return sum(r * r % 97 for r in rows)
+
+async def bad(rows):
+    return score(rows)               # every other request waits the full 2.1 s
+
+POOL = ProcessPoolExecutor(max_workers=4)
+
+async def good(rows):
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(POOL, score, rows)`,
+      annotations: {
+        4: 'No await anywhere inside. The loop has no way to interrupt it — asyncio is cooperative, never preemptive.',
+        8: 'The async keyword changed nothing. A coroutine that does not await is a plain blocking function with extra steps.',
+        10: 'Build the pool ONCE at startup. Creating it per request forks processes on the hot path and is slower than the bug.',
+        14: 'Now the loop parks here like any other await, while a separate process burns a separate core. Cost: arguments and results are pickled across.',
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'The blocking-call trap — how one line freezes a whole server',
+      md: `The loop cannot preempt you. If your code does not \`await\`, nothing else runs. Period.
+
+- The usual suspects: \`requests\`, \`time.sleep\`, \`psycopg2\`, most \`boto3\` calls, \`open()\` on a slow disk, \`pandas.read_csv\`, a big JSON dump of a 50 MB payload.
+- The symptom is distinctive: **every** endpoint gets slow, including \`/health\`. It looks like a queue, not like one slow function — p50 fine at low traffic, p99 exploding as soon as requests overlap.
+- Spotting it in review: inside an \`async def\`, find any call that touches the network or the disk and has **no \`await\` in front of it**. That is the bug, every time.
+- The swap table: \`requests\` → \`httpx.AsyncClient\` · \`time.sleep\` → \`asyncio.sleep\` · \`psycopg2\` → \`asyncpg\` · \`redis\` → \`redis.asyncio\` · \`open()\` → \`aiofiles\` or a thread.
+- The diagnostic that actually works: run with \`PYTHONASYNCIODEBUG=1\` (or \`loop.set_debug(True)\`) and asyncio logs *"Executing <Task ...> took 2.104 seconds"* — with your function's name in it.`,
+    },
+    {
+      type: 'intuition',
+      title: 'FastAPI: def and async def are two different worlds',
+      md: `The rule that sounds backwards, and is worth memorizing exactly.
+
+- \`def route()\` (plain) → FastAPI runs it in an **anyio threadpool** (40 threads by default). A blocking call there hurts only that one thread.
+- \`async def route()\` → runs **directly on the event loop**. A blocking call there hurts *every request in the process*.
+- Therefore: **a blocking call is worse inside \`async def\` than inside \`def\`.** Sprinkling \`async\` onto a route that still calls \`requests\` makes the service worse, not faster.
+- Decision rule: fully async libraries → \`async def\`. A sync library you cannot replace today → plain \`def\`, and let the threadpool absorb it.
+- The threadpool is finite, so be honest about it: 40 threads each blocked for 1 s caps you at ~40 req/s. Better than a frozen loop, still a ceiling — replace the library eventually.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Three FastAPI routes: worst, acceptable, best',
+      code: `import asyncio, time
+import requests, httpx
+from fastapi import FastAPI
+
+app = FastAPI()
+
+@app.get("/worst")
+async def worst():                       # async route + blocking calls
+    r = requests.get("https://slow.api/x", timeout=5)
+    time.sleep(1)
+    return r.json()
+
+@app.get("/ok")
+def ok():                                # plain def: FastAPI uses a threadpool
+    return requests.get("https://slow.api/x", timeout=5).json()
+
+@app.get("/best")
+async def best():                        # async route + async client
+    async with httpx.AsyncClient(timeout=5) as c:
+        r = await c.get("https://slow.api/x")
+    await asyncio.sleep(1)
+    return r.json()`,
+      annotations: {
+        9: 'The whole server is frozen for the duration of this call. /health times out too.',
+        10: 'time.sleep on the loop is the purest form of the bug — one second of total server death.',
+        14: 'No async keyword, and that is deliberate. The damage is contained to one of the 40 pool threads.',
+        20: 'await gives the loop back. Thousands of these can be in flight on one thread.',
+        21: 'asyncio.sleep parks; time.sleep blocks. Same intent, opposite consequence.',
+      },
+    },
+    {
+      type: 'note',
+      md: 'Async data layer, one note: the driver must be async too — asyncpg (Postgres) or aiomysql, never psycopg2 in an async route. SQLAlchemy 2.0 ships `create_async_engine` and `AsyncSession`, and the API is the familiar sync one with `await` in front: `await session.execute(stmt)`, `await session.commit()`. Two gotchas that bite everyone: lazy-loaded relationships raise `MissingGreenlet`, because the implicit load would need I/O outside an `await` (fix: eager-load with `selectinload`/`joinedload`), and your `pool_size` + `max_overflow` is now the real concurrency ceiling — an event loop can park 5000 requests, but 20 pooled connections still serve them 20 at a time.',
+    },
+    {
+      type: 'note',
+      md: 'Cross-ref to the Python track (GIL, Concurrency & Memory): threads do not speed up CPU work because the GIL lets only one thread execute bytecode at a time. asyncio does not fight that lock at all — it simply stops spending a whole thread per waiter, dodging thread stacks and context switches entirely. Neither buys CPU parallelism; only processes do.',
+    },
+  ],
+  quiz: [
+    {
+      question: 'Which sentence defines concurrency and parallelism exactly?',
+      options: [
+        {
+          text: 'Concurrency = interleaving many tasks on one worker; parallelism = many workers running at the same instant',
+          explanation: 'Correct. Interleaving vs simultaneous is the whole distinction — and asyncio only ever gives you the first one.',
+        },
+        {
+          text: 'Concurrency needs multiple cores; parallelism needs multiple threads',
+          explanation: 'Backwards. Concurrency works fine on a single core — parallelism is the one that physically requires more cores.',
+        },
+        { text: 'They are two names for the same thing', explanation: 'A single-threaded event loop is concurrent and never parallel — proof they are different.' },
+      ],
+      correct: 0,
+    },
+    {
+      question: 'What does calling an `async def` function do?',
+      options: [
+        { text: 'Runs the body and returns the result', explanation: 'That is a normal function. An async def call executes none of the body.' },
+        {
+          text: 'Returns a coroutine object; the body runs only when it is awaited or scheduled as a Task',
+          explanation: 'Correct. Coroutines are lazy — the object is a recipe, and await (or create_task) is the cooking.',
+        },
+        { text: 'Schedules it on the event loop in the background', explanation: 'That is `asyncio.create_task(coro)`. A bare call schedules nothing at all.' },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'An `async def` FastAPI route calls `time.sleep(1)`. Fifty requests arrive at once. When does the last one finish?',
+      options: [
+        { text: 'After ~1 s — they overlap', explanation: 'Overlap requires an await. time.sleep holds the single thread and yields to nobody.' },
+        {
+          text: 'After ~50 s — the loop is frozen for 1 s per request, strictly one after another',
+          explanation: 'Correct. This is the exact shape of the p99 blowup: latency grows linearly with concurrency because nothing overlaps.',
+        },
+        { text: 'After ~1 s — FastAPI moves blocking calls to a thread automatically', explanation: 'FastAPI does that for plain `def` routes only. It cannot inspect the body of your `async def`.' },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'You must call a legacy sync SDK inside a FastAPI endpoint. Which signature limits the damage?',
+      options: [
+        { text: '`async def` — async routes are always faster', explanation: 'This is the counterintuitive trap. On an async route the blocking call freezes the loop for every request in the process.' },
+        {
+          text: '`def` — FastAPI runs plain def routes in a threadpool, so the block is contained to one thread',
+          explanation: 'Correct. Worse per-request ceiling (~40 threads), but the blast radius is one thread instead of the whole server.',
+        },
+        { text: '`async def` with the call wrapped in try/except', explanation: 'Exception handling has nothing to do with blocking. The loop is frozen whether the call succeeds or raises.' },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'A 2-second pure-Python computation must happen inside an async service. Best fix?',
+      options: [
+        { text: 'Put `await` in front of it', explanation: 'You cannot await a normal function, and awaiting would not create a yield point inside its loop anyway.' },
+        {
+          text: 'Offload it: `await loop.run_in_executor(process_pool, fn, args)`',
+          explanation: 'Correct. A process pool has its own interpreter and its own core, so the loop parks on the await like any I/O.',
+        },
+        {
+          text: 'Sprinkle `await asyncio.sleep(0)` inside the computation loop',
+          explanation: 'It does yield, so other tasks get a turn — but the work still burns the one thread, so total throughput is unchanged. It spreads the pain instead of removing it.',
+        },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'Ten independent HTTP calls, 200 ms each, run through `asyncio.gather` with an async client. Wall clock?',
+      options: [
+        { text: '~2.0 s', explanation: 'That is the sequential sum — what you get when you await them one at a time instead of gathering.' },
+        {
+          text: '~0.2 s — the waits overlap, so you pay the slowest call',
+          explanation: 'Correct. gather turns sum(latencies) into max(latencies), plus a few ms of connection and loop overhead.',
+        },
+        { text: '~20 ms', explanation: 'Async cannot beat one network round trip. 200 ms is the physical floor here.' },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'One task inside an `asyncio.TaskGroup` raises. What happens to its siblings?',
+      options: [
+        {
+          text: 'They are cancelled, and the group raises an ExceptionGroup on exit',
+          explanation: 'Correct — structured concurrency: no task outlives its group, so no orphaned in-flight work.',
+        },
+        { text: 'They keep running; the first exception propagates immediately', explanation: 'That is `asyncio.gather` behaviour — and exactly the orphaned-task leak TaskGroup was designed to remove.' },
+        { text: 'Nothing — exceptions inside tasks are swallowed', explanation: 'Only true for a fire-and-forget task whose result is never retrieved. A group always surfaces failures.' },
+      ],
+      correct: 0,
+    },
+    {
+      question: 'Why does asyncio beat threads for 10,000 mostly-idle connections?',
+      options: [
+        { text: 'It uses all CPU cores', explanation: 'It uses exactly one thread on one core. Cores are the parallelism story, not the asyncio story.' },
+        {
+          text: 'No per-connection stack or context switch — one thread plus one readiness syscall covering every socket',
+          explanation: 'Correct. 10k threads means ~80 GB of stacks and constant switching; 10k parked coroutines are just small objects in a dict.',
+        },
+        { text: 'It bypasses the GIL', explanation: 'There is no lock to bypass — a single thread never contends for the GIL. asyncio removes thread overhead, not the lock.' },
+      ],
+      correct: 1,
+    },
+  ],
+  interviewQuestions: [
+    {
+      question: 'Define concurrency and parallelism, then say where asyncio, threads and processes each sit.',
+      answer:
+        'Concurrency is dealing with many tasks by interleaving them — one worker switching between them. Parallelism is doing many tasks simultaneously on multiple cores. asyncio: concurrency only, one thread, switching at await points. Threads: concurrency, and in CPython no CPU parallelism because of the GIL — but real overlap for I/O, since blocking calls release the lock. Processes: true parallelism, separate interpreters, paid for with memory and pickling. The one-liner that lands: "concurrency is a structure for dealing with lots of things at once; parallelism is doing lots of things at once."',
+      isCaseBased: false,
+    },
+    {
+      question: 'Explain the event loop mechanically in sixty seconds. No hand-waving.',
+      answer:
+        'A single thread runs a loop over a ready queue of tasks. It pops a task and executes it until the task awaits something unfinished. At that await the coroutine suspends: its frame — locals and the resume point — is saved, and the loop registers interest in the underlying file descriptor with the OS selector (epoll/kqueue). The loop then runs the next ready task. Once per iteration it asks the OS which descriptors are ready — one syscall for thousands of sockets — and moves the corresponding tasks back onto the ready queue, where they resume on the line after their await. Three claims worth making explicit: it is cooperative (only await yields), it is single-threaded (no locks needed for your own state), and it is preemption-free (a task that never awaits owns the process).',
+      isCaseBased: false,
+    },
+    {
+      question: 'Case: you shipped one new endpoint and service-wide p99 went from 120 ms to 4 s. Every route is slow, including /health. Walk the debug.',
+      answer:
+        'The pattern — every endpoint degrading, including one that does nothing — says the problem is shared, not per-route. In an async service that means the event loop is being blocked. Debug order: (1) confirm the shape: p50 is near normal at low traffic and everything explodes as concurrency rises, and latency grows linearly with in-flight requests — that is queueing, not slow work. (2) Turn on asyncio debug mode (PYTHONASYNCIODEBUG=1 or loop.set_debug(True)) and read the "Executing <Task ...> took 2.104 seconds" warnings — they name the coroutine. (3) If you cannot enable it, add an event-loop-lag metric: a background task that sleeps 100 ms in a loop and records actual elapsed minus expected; lag spikes are your signal. (4) Read the new endpoint for the classic offenders inside async def: requests, time.sleep, psycopg2, boto3, a synchronous file read, a big CPU or serialization step. (5) Fix: swap to httpx/asyncpg/asyncio.sleep, or offload to run_in_executor, or — as a same-day mitigation — drop the async keyword from the route so FastAPI runs it in the threadpool. That last one is the emergency patch worth mentioning, because it turns a global outage into a bounded slowdown.',
+      isCaseBased: true,
+    },
+    {
+      question: 'When does async NOT help? Give three cases and be specific about why.',
+      answer:
+        'One: CPU-bound work. The loop is one thread, so computation blocks everything — async makes it strictly worse than a threadpool because the blast radius is the whole process. Two: low concurrency. Ten sequential calls in a nightly script gain nothing over threads, and you pay in a more complex programming model and an async-only library ecosystem. Three: when the bottleneck is downstream. If your database can only take 20 connections, an event loop that happily parks 5000 requests just moves the queue — p99 gets worse because requests now wait longer with no backpressure. Add the honest fourth: any codebase where a critical dependency has no async version. One sync driver in a hot path costs you more than async ever gained.',
+      isCaseBased: false,
+    },
+    {
+      question: 'In FastAPI, what is the difference between a `def` route and an `async def` route, and what is the counterintuitive consequence?',
+      answer:
+        'A plain def route is run by FastAPI in an anyio threadpool (40 threads by default), so it never touches the loop. An async def route runs directly on the event loop. The counterintuitive consequence: a blocking call is WORSE inside async def than inside def. In def it stalls one pool thread; in async def it stalls the entire process, including health checks. So "add async for speed" is exactly wrong advice unless the body is fully async. Decision rule: fully async libraries → async def; any unavoidable sync library → plain def and accept the threadpool ceiling of roughly (threads / blocking seconds) requests per second.',
+      isCaseBased: false,
+    },
+    {
+      question: 'What exactly does `await` do at runtime, and why can it only appear inside an `async def`?',
+      answer:
+        'await suspends the current coroutine and returns control to whatever is driving it — ultimately the event loop — handing over an awaitable the loop can watch. The coroutine frame (locals plus the exact bytecode offset) stays alive on the heap; when the awaited thing completes, the loop sends the result back in and execution continues on the next line. It only works inside async def because that is what makes the function a coroutine — a resumable object with a suspension point. A regular function has one entry and one exit; there is nowhere to save "we are halfway through". Worth adding: await is not a thread yield or a sleep — if the awaited thing is already done, execution continues immediately without any switch.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Case: an async FastAPI service passes load tests at 2000 req/s but times out in production against Postgres at 300 req/s. Diagnose.',
+      answer:
+        'The load test almost certainly mocked or skipped the database — so the difference is the data layer. Hypotheses in order: (1) A sync driver: psycopg2 in an async route blocks the loop on every query. Symptom is global slowness; fix is asyncpg or SQLAlchemy async. (2) Connection pool starvation: pool_size 5 with max_overflow 10 caps you at 15 concurrent queries no matter how many coroutines are parked; requests queue on pool checkout and time out there, not in the query. Check pool checkout wait metrics and raise the pool — but only up to what Postgres max_connections and its per-connection memory can take, otherwise put PgBouncer in front. (3) N+1 queries: one request issuing 50 round trips, invisible at low load. (4) Lazy-load MissingGreenlet errors masked as retries. The senior move is naming the ceiling: an event loop can park 5000 requests, but the real concurrency limit is the pool, and async without backpressure converts a database bottleneck into a timeout storm.',
+      isCaseBased: true,
+    },
+    {
+      question: 'Compare `asyncio.gather`, `asyncio.create_task`, and `asyncio.TaskGroup`. When do you reach for each?',
+      answer:
+        'create_task schedules one coroutine to run in the background and returns a handle; it is the primitive, and its danger is fire-and-forget — if you drop the reference the task can be garbage collected mid-flight, and its exception is never seen. gather takes many awaitables, runs them concurrently and returns results in order; by default the first exception propagates while the siblings keep running (return_exceptions=True instead collects errors as results). TaskGroup (3.11+) is structured concurrency: children cannot outlive the async with block, a failure cancels the siblings and surfaces as an ExceptionGroup. Default to TaskGroup for new code, gather when you need return_exceptions or must support 3.10, create_task only for genuinely long-lived background work whose handle you keep and whose errors you log.',
+      isCaseBased: false,
+    },
+    {
+      question: 'How would you prove — not guess — that a coroutine is blocking the event loop?',
+      answer:
+        'Three levels of proof. Cheapest: asyncio debug mode (PYTHONASYNCIODEBUG=1 or loop.set_debug(True)) logs any callback that runs longer than 100 ms, with the coroutine name and source location. Continuous: an event-loop-lag gauge — a background task that awaits asyncio.sleep(0.1) in a loop and exports (actual_elapsed − 0.1); healthy loops sit under a millisecond, and any spike is a blocked loop. Deepest: py-spy dump or a sampling profiler against the live process, which shows the one thread parked inside a socket read or a numeric loop rather than in the selector. The metric to correlate against is a rising queue: request latency growing linearly with in-flight count while CPU stays flat.',
+      isCaseBased: false,
+    },
+    {
+      question: 'The GIL exists. Does asyncio work around it?',
+      answer:
+        'No, and confusing the two is a common failure. The GIL means only one thread executes Python bytecode at a time, which is why threads give no speedup on CPU work. asyncio does not touch that: it runs on a single thread, so there is never any contention to win. What asyncio removes is a different cost — one OS thread per concurrent waiter, with its stack and its context switches. So the honest framing is: threads and asyncio are both concurrency tools that only help when you are waiting; the GIL is why neither of them helps when you are computing; multiprocessing (or dropping into C/NumPy code that releases the GIL) is the only route to CPU parallelism.',
+      isCaseBased: false,
+    },
+    {
+      question: 'What changes when you move a SQLAlchemy data layer from sync to async?',
+      answer:
+        'The driver changes first — psycopg2 to asyncpg, or the async MySQL driver — because SQLAlchemy async is a thin adaptation over a genuinely async DBAPI. Then create_async_engine and AsyncSession, and every I/O call gets an await: await session.execute(stmt), await session.commit(), await session.get(User, id). The real behavioural change is that implicit I/O is now illegal: touching a lazy-loaded relationship after the query raises MissingGreenlet, because the load would need I/O where no await exists — so you eager-load with selectinload or joinedload, which is usually a performance improvement anyway since it kills N+1. Sessions are also not concurrency-safe: one session per request, never shared across gathered tasks. And be clear-eyed about the payoff — async SQLAlchemy raises the number of concurrent requests you can hold, not the query throughput, which the connection pool and the database still cap.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Your async service must call a machine-learning model that takes 300 ms of pure CPU per request, at 200 req/s. Sketch the design.',
+      answer:
+        'Do the arithmetic first: 200 × 0.3 s = 60 CPU-seconds per second, so you need ~60 busy cores no matter what the concurrency model is. Async is not the lever here — it only makes waiting cheap. Design: keep the event loop for the HTTP edge (connection handling, validation, fan-out to feature stores and caches, streaming responses), and push inference off the loop entirely — either a ProcessPoolExecutor sized to core count via run_in_executor, or, better at this scale, a dedicated inference service behind a queue so it scales independently. Add request batching, since GPU and vectorised CPU inference is far cheaper per item in batches (accept a few ms of added latency for a large throughput win), plus a bounded queue with fast rejection so overload sheds load instead of building an unbounded backlog. State the load-bearing tradeoff: one model copy per process worker means model memory multiplies, which is the usual reason people move inference out of the API process altogether.',
+      isCaseBased: true,
+    },
+  ],
+  flashcards: [
+    { front: 'Concurrency vs parallelism', back: 'Concurrency = interleaving many tasks on one worker. Parallelism = many workers at the same instant. asyncio is concurrency ONLY.' },
+    { front: 'The event loop in one sentence', back: 'One thread + a ready queue: run a task until it awaits, park it with its saved frame, run the next, resume it when the OS says its I/O is ready.' },
+    { front: 'What await actually does', back: 'Suspends this coroutine (frame saved on the heap), hands the thread back to the loop, and resumes on the next line when the result arrives.' },
+    { front: 'Calling an async def function…', back: 'Runs nothing. It returns a lazy coroutine object; only await or create_task executes the body.' },
+    { front: 'When async helps / does not', back: 'Helps: I/O-bound and high concurrency. Does not: CPU-bound (blocks the loop), low concurrency, or when the real limit is downstream.' },
+    { front: 'The cardinal sin, and the fix', back: 'CPU work on the event loop stalls every request. Fix: await loop.run_in_executor(ProcessPoolExecutor, fn, args) — or asyncio.to_thread for blocking non-Python work.' },
+    { front: 'FastAPI def vs async def', back: 'def → anyio threadpool (~40 threads). async def → straight on the loop. So a blocking call is WORSE in async def than in def.' },
+    { front: 'gather vs TaskGroup', back: 'gather: first error propagates, siblings keep running (orphans). TaskGroup (3.11+): siblings cancelled, ExceptionGroup raised. Prefer TaskGroup.' },
+    { front: 'Blocking-call swap table', back: 'requests → httpx.AsyncClient · time.sleep → asyncio.sleep · psycopg2 → asyncpg · redis → redis.asyncio · open() → aiofiles/thread.' },
+    { front: 'Proving the loop is blocked', back: 'PYTHONASYNCIODEBUG=1 logs "Executing <Task> took N seconds"; or export event-loop lag (sleep 0.1 in a loop, record the overshoot).' },
+  ],
+  mindmapMarkdown: `- Async Python Properly
+  - The problem
+    - Blocked thread = paid worker staring at a wall
+    - ~99% of a request is waiting, not computing
+    - Thread-per-request dies of overhead
+  - Concurrency vs parallelism
+    - Concurrency = interleaving, one worker
+    - Parallelism = simultaneous, many cores
+    - asyncio = concurrency only, never faster CPU
+  - The event loop
+    - One thread + a ready queue
+    - await parks the coroutine, frame saved
+    - epoll/kqueue: one syscall, thousands of sockets
+    - Cooperative, never preemptive
+  - async / await syntax
+    - async def builds a LAZY coroutine
+    - await only inside async def
+    - asyncio.run / uvicorn owns the loop
+  - Fan-out
+    - gather: sum(latencies) → max(latencies)
+    - 10 x 200 ms → 0.21 s
+    - TaskGroup 3.11+ cancels siblings
+  - When it helps and when it does not
+    - I/O-bound yes
+    - CPU-bound no — the cardinal sin
+    - Fix: run_in_executor + ProcessPool
+  - The blocking trap
+    - requests, time.sleep, psycopg2, boto3
+    - Symptom: even /health is slow
+    - Swap: httpx, asyncio.sleep, asyncpg
+    - Detect: asyncio debug mode, loop-lag metric
+  - FastAPI and the data layer
+    - def → threadpool, async def → the loop
+    - Blocking is WORSE inside async def
+    - AsyncSession + eager-load, pool is the ceiling
+    - GIL cross-ref: asyncio dodges threads, not the lock`,
+}
+
+export default m

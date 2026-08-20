@@ -1,0 +1,40 @@
+{
+  "name": "faang-prep",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "lint": "oxlint",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@fontsource/ibm-plex-sans": "^5.2.5",
+    "@fontsource/jetbrains-mono": "^5.2.5",
+    "@fontsource/space-grotesk": "^5.2.5",
+    "katex": "^0.18.4",
+    "markmap-lib": "0.18.12",
+    "markmap-view": "0.18.12",
+    "pyodide": "314.0.4",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router": "^7.9.0",
+    "shiki": "^4.4.3",
+    "sql.js": "^1.13.0",
+    "zustand": "^5.0.10"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.0",
+    "@types/katex": "^0.16.7",
+    "@types/node": "^24.13.3",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@types/sql.js": "^1.4.9",
+    "@vitejs/plugin-react": "^6.0.4",
+    "oxlint": "^1.75.0",
+    "tailwindcss": "^4.3.0",
+    "typescript": "~5.9.2",
+    "vite": "^8.2.0"
+  }
+}

@@ -1,0 +1,519 @@
+import type { Module } from '../types'
+
+const m: Module = {
+  id: 'sysdesign-l1-estimation',
+  subjectId: 'sysdesign',
+  level: 1,
+  title: 'Back-of-Envelope Estimation: QPS, Storage & Bandwidth',
+  whyItMatters:
+    'Estimation is how you justify an architecture. The same design question has a different answer at 10 QPS and at 200,000 QPS — one box or a thousand, a cache or a CDN, one database or forty shards. Interviewers make you do arithmetic because a candidate who cannot size the problem is guessing at the solution. This module turns that arithmetic into a fixed seven-step recipe, drills it on three worked systems, and leaves you five more to practise on.',
+  estMinutes: 50,
+  sections: [
+    {
+      type: 'intuition',
+      title: 'The numbers decide the architecture, not your taste',
+      md: `You are asked to design a photo feed. Do you need a CDN?
+
+- At 100 users: no. One server, one database, done. A CDN is pure cost.
+- At 100 million users pushing 90 Gbps of images: yes, and it is not optional — no origin server survives that.
+- Same question, opposite answers. **The number chose the architecture.**
+- So when an interviewer asks "would you cache this?", the honest answer starts with arithmetic, not opinion.
+- This is also the fastest way to sound senior: juniors name components, seniors name the number that forces the component.`,
+    },
+    {
+      type: 'intuition',
+      title: 'The actual skill: approximately right, fast, out loud',
+      md: `Nobody wants three decimal places. They want to know you can size a system in ninety seconds without a calculator.
+
+- **Order of magnitude is the goal.** 4,600 QPS and 5,000 QPS lead to the same design. 4,600 and 460,000 do not.
+- **State every assumption as you make it.** "I will assume 200M daily active users and 2 posts each" — the interviewer is grading the assumptions, and will correct one if it matters.
+- **Round aggressively.** You are allowed to turn 86,400 into 100,000. Do it in the open so it reads as a technique, not a mistake.
+- **Carry units.** Every quantity is *per day*, *per second*, *bytes*, or *bits*. Most estimation errors are unit errors.
+- **Never freeze.** A wrong-by-2× answer delivered confidently beats silence. A wrong-by-1000× answer means you skipped the sanity check.`,
+    },
+    {
+      type: 'note',
+      md: `**The powers of ten, and the one shortcut that matters.** Thousand 10³, million 10⁶, billion 10⁹, trillion 10¹². Storage climbs the same ladder: KB 10³, MB 10⁶, GB 10⁹, TB 10¹², PB 10¹⁵. The shortcut: **2¹⁰ = 1024 ≈ 10³**, so 2²⁰ ≈ 10⁶ and 2³⁰ ≈ 10⁹ — that is why a "gigabyte" and 2³⁰ bytes are the same thing to an estimator. And the single most-used constant: **seconds in a day = 86,400 ≈ 10⁵**. Dividing by 100,000 is moving a decimal point five places; dividing by 86,400 needs a calculator. Round, and say "call it 10⁵" out loud — you overestimate QPS by 16%, which is inside your error bars anyway.`,
+    },
+    {
+      type: 'intuition',
+      title: 'The latency ladder — memorize the shape, not the digits',
+      md: `Each rung is roughly 100× the one before it. That ratio is the point: it tells you what you are allowed to do inside a request.
+
+- **L1 cache ~1 ns** · **main memory ~100 ns** — free. You can do millions of these per request.
+- **SSD read ~100 µs** — 1,000× slower than memory. A few per request is fine.
+- **Same-datacenter round trip ~0.5 ms** — this is what a Redis call or an internal service hop costs.
+- **Disk seek ~10 ms** — 20× worse than a network hop inside the DC. Spinning disks are a network away in cost terms.
+- **Cross-country ~50 ms** · **cross-continent ~150 ms** — physics, not engineering. You cannot optimize the speed of light; you move the data closer (that *is* what a CDN is).
+- The one-line takeaway: **memory is free, local network is cheap, disk is expensive, distance is fatal.**`,
+    },
+    {
+      type: 'note',
+      md: `**What one machine can actually take — ranges, with the honest caveat.** These depend entirely on what the work *is*, so quote them as ranges and say so. A simple stateless API server: **~1,000 QPS** (a heavy endpoint doing three DB calls might do 100; a trivial one 10,000). A relational database: **~1,000–5,000 QPS** for simple indexed queries on one leader — far less for anything scanning or joining wide. Redis or another in-memory store: **100,000+ ops/s** per node, because there is no disk in the path. Kafka: **hundreds of MB/s per broker**, since it is sequential appends. Use these to convert QPS into a machine count — "700K peak read QPS ÷ 1K per box ≈ 700 app servers" — which is the sentence that makes an estimate feel real.`,
+    },
+    {
+      type: 'note',
+      md: `**Object sizes, so you can turn counts into bytes.** A text post or a database row: **~1 KB**. A thumbnail: **~10 KB**. A web-sized photo: **~200 KB**. A full-resolution photo: **~1 MB**. A minute of video: **~10–50 MB** depending on resolution. A URL record (short code, long URL, timestamps, owner): **~500 B**. Metadata rows are almost always ~1 KB and media is almost always ~1 MB — those two numbers carry most interview questions. When unsure, pick the round number and say "I will assume 1 MB per photo".`,
+    },
+    {
+      type: 'intuition',
+      title: 'The recipe — seven steps, identical every time',
+      md: `Do not improvise. Run the same pipeline on every problem so you never lose your place under pressure.
+
+1. **Scale**: state DAU and the per-user action rate → multiply → total actions per day.
+2. **Average QPS**: divide daily actions by 86,400 (call it 10⁵).
+3. **Peak QPS**: multiply by a peak factor of **2–5×**, and say why — traffic is not uniform; a day's requests bunch into a few waking hours.
+4. **Read:write ratio**: compute it explicitly. This number, more than any other, chooses the architecture.
+5. **Storage**: objects/day × object size × retention, then × replication factor, then add ~20–30% for indexes.
+6. **Bandwidth**: QPS × payload size. Multiply bytes by 8 when you quote bits, because network capacity is sold in bits.
+7. **Cache memory**: the working set — apply the 80/20 rule (20% of objects serve ~80% of reads) and *say* that you are applying it.`,
+    },
+    {
+      type: 'math',
+      intro: 'The whole module in four formulas.',
+      latex: [
+        '\\text{QPS}_{\\text{avg}} = \\frac{\\text{DAU} \\times \\text{actions per user per day}}{86{,}400}',
+        '\\text{QPS}_{\\text{peak}} = k \\cdot \\text{QPS}_{\\text{avg}}, \\qquad k \\in [2, 5]',
+        '\\text{Storage} = \\frac{\\text{writes}}{\\text{day}} \\times \\text{size} \\times \\text{days} \\times R_{\\text{replicas}} \\times (1 + i_{\\text{index}})',
+        '\\text{Bandwidth}_{\\text{bits/s}} = \\text{QPS} \\times \\text{payload bytes} \\times 8',
+      ],
+    },
+    {
+      type: 'visual',
+      component: 'PointerBoxDiagram',
+      props: {
+        title: 'The seven-step recipe, running on a Twitter-scale feed',
+        notice: 'Left column: the assumption you state at each step. Right column: the answer sheet filling up. Step through it once, then run the same seven steps on any system you are given.',
+        leftLabel: 'assumptions you state',
+        rightLabel: 'the answer sheet',
+        frames: [
+          {
+            note: 'Step 1 — scale. State DAU and the per-user action rate out loud, then multiply. The interviewer is grading the assumptions, not the multiplication: if 2 posts per user is wrong for their product, this is when they say so.',
+            stack: [
+              { name: 'DAU', value: '200M' },
+              { name: 'posts / user / day', value: '2' },
+              { name: 'reads / user / day', value: '100' },
+            ],
+            heap: [
+              { id: 'w', value: '400M posts / day', label: 'writes' },
+              { id: 'r', value: '20B reads / day', label: 'reads' },
+            ],
+          },
+          {
+            note: 'Step 2 — average QPS. Divide by seconds in a day. Round 86,400 to 100,000 and the division becomes a decimal-point shift: 400M / 1e5 = 4,000. The exact answer is 4,630 — the same design either way.',
+            stack: [{ name: 'divide by 86,400', value: 'call it 1e5', to: 'w' }],
+            heap: [
+              { id: 'w', value: '4.6K QPS', label: 'write QPS, average' },
+              { id: 'r', value: '231K QPS', label: 'read QPS, average' },
+            ],
+          },
+          {
+            note: 'Step 3 — peak factor. Nobody tweets uniformly across 24 hours; traffic piles into a few waking hours. Multiply by 2-5x and justify it. Using 3x here. You size machines for the peak, not the average.',
+            stack: [{ name: 'x3 peak factor', to: 'r', danger: true }],
+            heap: [
+              { id: 'w', value: '14K QPS', label: 'write peak' },
+              { id: 'r', value: '694K QPS', label: 'read peak', danger: true },
+            ],
+          },
+          {
+            note: 'Step 4 — read:write ratio. 100 reads against 2 writes is 50:1. This is the number that picks the architecture: read-heavy means caches, read replicas and a CDN; write-heavy would have meant sharding and queues instead.',
+            stack: [{ name: '100 reads : 2 writes', value: '50 : 1' }],
+            heap: [
+              { id: 'ratio', value: '50 : 1, read-heavy', label: 'the driver' },
+              { id: 'plan', value: 'cache + replicas + CDN', label: 'what it forces' },
+            ],
+          },
+          {
+            note: 'Step 5 — storage. Writes per day x object size gives the daily figure; then multiply by retention, then by the replication factor, then add roughly 20-30% for indexes. Forgetting replication is the most common miss.',
+            stack: [
+              { name: '400M x 1KB' },
+              { name: 'x 365 x 5 years' },
+              { name: 'x 3 replicas' },
+            ],
+            heap: [
+              { id: 'd', value: '400 GB / day', label: 'storage per day' },
+              { id: 'y', value: '2.2 PB / 5 years', label: 'replicated' },
+            ],
+          },
+          {
+            note: 'Step 6 — bandwidth. QPS x payload. 231K reads/s x 1KB = 231 MB/s. Multiply by 8 to quote bits, because switches and links are sold in bits per second. Byte-vs-bit is the classic 8x blunder.',
+            stack: [
+              { name: '231K QPS x 1KB' },
+              { name: 'x 8 for bits' },
+            ],
+            heap: [{ id: 'bw', value: '231 MB/s = 1.9 Gbps', label: 'read bandwidth' }],
+          },
+          {
+            note: 'Step 7 — cache memory. The working set, not the whole dataset. Apply 80/20 out loud: about 20% of one day\'s objects serve most reads. 400 GB x 0.2 = 80 GB, which is a handful of Redis nodes. Seven steps, one answer sheet, ninety seconds.',
+            stack: [{ name: '400 GB x 20% hot' }],
+            heap: [
+              { id: 'cache', value: '80 GB working set', label: 'fits in RAM' },
+              { id: 'done', value: '4.6K w / 231K r QPS', label: 'the finished estimate' },
+            ],
+          },
+        ],
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'Worked example 1 — a Twitter-scale feed, arithmetic visible',
+      md: `Assumptions, stated first: **200M DAU**, **2 posts per user per day**, **100 feed reads per user per day**, **1 KB per post**, **5-year retention**, **3× replication**, peak factor **3×**.
+
+1. **Daily actions.** Writes: 200M × 2 = **400M posts/day**. Reads: 200M × 100 = **20B reads/day**.
+2. **Average QPS.** 400M ÷ 86,400 ≈ **4.6K writes/s**. 20B ÷ 86,400 ≈ **231K reads/s**.
+3. **Peak (×3).** **~14K writes/s**, **~694K reads/s**.
+4. **Read:write = 50:1.** Overwhelmingly read-heavy — so the money goes into caching and read replicas, not write scaling.
+5. **Storage.** 400M × 1 KB = **400 GB/day**. × 365 × 5 = 730 TB, × 3 replicas = **~2.2 PB**, plus ~25% for indexes ≈ 2.7 PB.
+6. **Bandwidth.** 231K/s × 1 KB = **231 MB/s ≈ 1.9 Gbps** average read egress; ~5.7 Gbps at peak.
+7. **Cache.** 80/20 on one day: 400 GB × 0.2 = **80 GB** working set.`,
+    },
+    {
+      type: 'intuition',
+      title: 'What those Twitter numbers actually decided',
+      md: `An estimate is worthless until you convert it into design consequences. Say these sentences:
+
+- **694K peak read QPS ÷ ~1K QPS per app server ≈ 700 app servers.** That is a fleet, a load balancer tier, and autoscaling — not "a server".
+- **231K read QPS is 50–200× what one relational leader does.** Therefore the reads cannot come from the database. They come from cache; the DB is the fallback.
+- **80 GB working set fits in RAM.** A few Redis nodes hold the entire hot feed. Caching is not a nice-to-have here, it is the primary datastore for reads.
+- **4.6K writes/s sits right at the ceiling of a single relational leader** (1–5K). So writes need sharding by user_id, or a queue in front, or both.
+- **2.2 PB over five years** means blob storage and lifecycle policies, not one big disk. And the 3× replication factor is a third of that bill — worth naming.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'The estimator: inputs in, full table out',
+      code: `SEC_PER_DAY = 86_400                       # 8.64e4 -> call it 1e5 in your head
+
+
+def human(n, unit=''):
+    for div, suf in ((1e15, 'P'), (1e12, 'T'), (1e9, 'G'), (1e6, 'M'), (1e3, 'K')):
+        if abs(n) >= div:
+            return f'{n / div:.1f}{suf}{unit}'
+    return f'{n:.1f}{unit}'
+
+
+def estimate(name, dau, writes_pu, reads_pu, obj_bytes,
+             years=5, peak=3, replicas=3, hot=0.2):
+    w_day, r_day = dau * writes_pu, dau * reads_pu           # step 1: daily actions
+    w_qps, r_qps = w_day / SEC_PER_DAY, r_day / SEC_PER_DAY  # step 2: average QPS
+    per_day = w_day * obj_bytes                              # step 5: storage/day
+    rows = [
+        ('write QPS  avg / peak', f'{human(w_qps)} / {human(w_qps * peak)}'),
+        ('read  QPS  avg / peak', f'{human(r_qps)} / {human(r_qps * peak)}'),
+        ('read : write', f'{reads_pu / writes_pu:.0f} : 1'),
+        ('storage / day', human(per_day, 'B')),
+        (f'storage / {years}y  x{replicas} repl', human(per_day * 365 * years * replicas, 'B')),
+        ('read bandwidth', human(r_qps * obj_bytes * 8, 'bps')),
+        (f'cache = hot {int(hot * 100)}% of one day', human(per_day * hot, 'B')),
+    ]
+    print(name)
+    for k, v in rows:
+        print(f'  {k:<26} {v}')
+    print()
+
+
+estimate('TWITTER FEED    200M DAU, 2 posts + 100 reads/user, 1KB post',
+         200e6, 2, 100, 1e3)
+estimate('VIDEO PLATFORM  50M DAU, 50k uploads/day, 5 views/user, 300MB raw',
+         50e6, 0.001, 5, 300e6, replicas=2, hot=0.05)
+estimate('URL SHORTENER   10M DAU, 1M new links/day, 10 redirects/user, 500B',
+         10e6, 0.1, 10, 500)`,
+      annotations: {
+        1: 'The only constant worth hard-coding. Everything else is an argument, because everything else changes per problem.',
+        14: 'Steps 1 and 2 of the recipe are literally two lines. The recipe is short on purpose — it has to survive interview nerves.',
+        17: 'Peak is a multiplier on the average, never a separately guessed number. Keeping it as a parameter forces you to state it.',
+        21: 'Retention AND replication in one line. Dropping the replication factor is the most common estimation miss — it hides a 3x bill.',
+        22: 'x8 converts bytes to bits. Network capacity is quoted in bits per second; storage in bytes. Mixing them is an 8x error.',
+        34: 'Video overrides the defaults: 2 copies instead of 3 (media is huge and re-encodable) and a 5% hot set (long-tail catalog).',
+      },
+    },
+    {
+      type: 'code',
+      lang: 'bash',
+      title: 'Real output',
+      code: `$ python estimate.py
+TWITTER FEED    200M DAU, 2 posts + 100 reads/user, 1KB post
+  write QPS  avg / peak      4.6K / 13.9K
+  read  QPS  avg / peak      231.5K / 694.4K
+  read : write               50 : 1
+  storage / day              400.0GB
+  storage / 5y  x3 repl      2.2PB
+  read bandwidth             1.9Gbps
+  cache = hot 20% of one day 80.0GB
+
+VIDEO PLATFORM  50M DAU, 50k uploads/day, 5 views/user, 300MB raw
+  write QPS  avg / peak      0.6 / 1.7
+  read  QPS  avg / peak      2.9K / 8.7K
+  read : write               5000 : 1
+  storage / day              15.0TB
+  storage / 5y  x2 repl      54.8PB
+  read bandwidth             6.9Tbps
+  cache = hot 5% of one day  750.0GB
+
+URL SHORTENER   10M DAU, 1M new links/day, 10 redirects/user, 500B
+  write QPS  avg / peak      11.6 / 34.7
+  read  QPS  avg / peak      1.2K / 3.5K
+  read : write               100 : 1
+  storage / day              500.0MB
+  storage / 5y  x3 repl      2.7TB
+  read bandwidth             4.6Mbps
+  cache = hot 20% of one day 100.0MB`,
+    },
+    {
+      type: 'intuition',
+      title: 'Worked example 2 — a video platform, where egress eats everything',
+      md: `Assumptions: **50M DAU**, **50,000 uploads/day**, **300 MB raw per upload**, **5 views per user per day**, 2 stored copies.
+
+1. **Write side.** 50K uploads ÷ 86,400 = **0.6 uploads/s**. That is *nothing* — uploads are never the QPS problem.
+2. **Raw storage.** 50K × 300 MB = **15 TB/day**.
+3. **Transcoding multiplier.** You keep the source plus a rendition ladder (240p/480p/720p/1080p). Total ≈ **2× the raw** → **~30 TB/day**, ~11 PB/year, ~110 PB over 5 years with 2 copies.
+4. **Read side.** 50M × 5 views = 250M views/day = **2.9K views/s** average, ~8.7K at peak.
+5. **Egress.** 250M views × 300 MB = **75 PB/day** ≈ 868 GB/s ≈ **6.9 Tbps** average, ~20 Tbps at peak.
+6. **The punchline.** You ship ~2,500× more bytes per day than you store per day — and you pay storage once but egress *every single day*. At a modest $0.01/GB, 75 PB/day is ~$750K **per day** in bandwidth; the incremental storage is a few hundred dollars.`,
+    },
+    {
+      type: 'note',
+      md: `**That last number is why YouTube and Netflix built their own CDNs.** The estimate does not just say "use a CDN" — it says bandwidth is the P&L line of the entire company, so caching at the edge is not an optimization, it is the business model. Netflix ships appliances into ISP racks (Open Connect) precisely so those bytes never cross a paid transit link. Notice also what the 5,000:1 read:write ratio bought you: with 0.6 uploads/s you can transcode asynchronously through a queue on a modest worker fleet, and nobody will ever notice. In video, the write path is easy and the read path is the entire system — the exact opposite of what the words "upload" and "view" suggest.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Worked example 3 — a URL shortener, and the ID-space arithmetic',
+      md: `Assumptions: **1M new links/day**, **100M redirects/day**, **500 B per record**, 10-year lifetime.
+
+1. **Writes.** 1M ÷ 86,400 = **11.6 writes/s**. Peak ~35/s. One Postgres box, comfortably.
+2. **Reads.** 100M ÷ 86,400 = **1.2K reads/s**, ~3.5K at peak. **Read:write = 100:1.**
+3. **Storage.** 1M × 500 B = **500 MB/day**; 5 years × 3 replicas = **2.7 TB**. One SSD.
+4. **ID space.** 1M/day × 365 × 10 years = **3.65 billion** links. Base62 (a–z, A–Z, 0–9) gives 62 options per character, so you need L where 62^L ≥ 3.65×10⁹ — the log below says L = 6. **62⁶ ≈ 57 billion**, 15× headroom.
+5. **Cache-friendliness.** The read:write ratio is 100:1, the mapping is **immutable** (a short code never re-points), objects are tiny, and popularity is heavily skewed — a handful of viral links carry most traffic. That is the perfect cache workload: no invalidation problem at all.
+6. **The design falls out.** 1.2K QPS of immutable 500-byte lookups = one Redis node in front of one replicated database. The interesting engineering here is ID generation and collision avoidance, **not** scale.`,
+    },
+    {
+      type: 'math',
+      intro: 'How many base62 characters for N URLs — do the log, do not guess.',
+      latex: [
+        'N \\le 62^{L} \\;\\Longrightarrow\\; L \\ge \\log_{62} N = \\frac{\\ln N}{\\ln 62}',
+        'L \\ge \\frac{\\ln(3.65 \\times 10^{9})}{\\ln 62} = \\frac{22.0}{4.13} = 5.33 \\;\\Longrightarrow\\; L = 6',
+        '62^{6} \\approx 5.7 \\times 10^{10}, \\qquad 62^{7} \\approx 3.5 \\times 10^{12}',
+      ],
+    },
+    {
+      type: 'note',
+      md: `**Memorize the two rungs, skip the log in the room.** 6 base62 characters ≈ 57 billion codes; 7 characters ≈ 3.5 trillion. Almost every shortener question lands between them, so the answer is "6 or 7 characters" and the reason is the count of URLs over the product's lifetime. Same trick elsewhere: 64-bit IDs give ~1.8×10¹⁹ values (Snowflake territory), and a UUID's 122 random bits are so far past any real need that collisions are a rounding error. The transferable move is: **an ID length is an arithmetic result, not a style choice.**`,
+    },
+    {
+      type: 'note',
+      md: `**The five sanity rules.** (1) **Round aggressively** — 2.4 becomes 2, 86,400 becomes 100,000, 365 becomes 400 if it helps; nobody is checking your long division. (2) **Carry units through every step** — writing "400M posts/day ÷ 86,400 s/day = 4.6K posts/s" makes the units cancel and catches half of all errors. (3) **State assumptions as you go**, so a wrong assumption gets corrected early instead of poisoning ten minutes of work. (4) **Sanity-check against something you know** — if you computed 50M QPS for a startup, or more storage than Google owns, you slipped a decimal; go back. (5) **Convert the number into a decision** — an estimate you do not turn into "therefore N servers" or "therefore a CDN" scored you nothing.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Practice problems — run all seven steps, then check the key numbers',
+      md: `Do these on paper with a 5-minute timer each. Only the headline answers are given; the working is the point.
+
+- **Chat app.** 500M DAU, 40 messages/user/day, 100 B per message, 10% concurrently connected. → 20B msgs/day, **231K msg/s** avg, ~700K peak; **2 TB/day**, ~11 PB over 5 years ×3; 50M concurrent sockets ÷ ~100K per box ≈ **500 connection servers**. The insight: connection count, not QPS, is the sizing constraint.
+- **Ride-hailing.** 5M drivers online, location ping every 4 s, 100 B per ping, 20M rides/day. → **1.25M location writes/s** (!), 125 MB/s, 10.8 TB/day *if you persisted every ping* — which is why last-known location lives in memory and the trail is downsampled. Rides themselves: only **230/s**.
+- **Ad serving.** 1B ad requests/day, 1 KB impression log, 0.1% CTR, hard 100 ms auction budget. → **11.6K QPS** avg, ~35K peak; **1 TB/day** of logs; 1M clicks/day. The budget forbids a database in the serving path — everything hot is in memory.
+- **Photo sharing.** 100M DAU, 0.5 uploads/user/day at 1 MB (+0.5 MB of renditions), 50 photo views/user/day at 200 KB. → 50M photos/day, **580 writes/s**; **75 TB/day**, ~410 PB over 5 years ×3; **58K read QPS**, egress **~93 Gbps** → CDN, immediately.
+- **Search autocomplete.** 100M DAU, 20 searches/user/day, 4 keystroke-prefix queries each. → 8B prefix queries/day = **93K QPS** avg, ~280K peak, each with a <100 ms budget. Storage is trivial (a trie of a few GB); the whole design is "keep it in RAM, replicate for reads".`,
+    },
+  ],
+  quiz: [
+    {
+      question: '100M DAU, each performing 10 actions per day. Average QPS?',
+      options: [
+        { text: '~3K', explanation: 'Too low by 4×. Check the division: 1 billion actions ÷ 86,400 is not 3,000.' },
+        { text: '~12K', explanation: 'Correct. 100M × 10 = 1e9 actions/day; 1e9 ÷ 86,400 ≈ 11,574. Rounding 86,400 to 1e5 gives 10K — same ballpark, same design.' },
+        { text: '~120K', explanation: 'That is 10× too high — you divided by 10,000 instead of ~100,000. A one-decimal slip is the classic estimation error.' },
+        { text: '~1.2M', explanation: 'That is the count per day divided by roughly a thousand. Seconds in a day is 86,400, not 864.' },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'Why multiply average QPS by a peak factor of 2–5×?',
+      options: [
+        { text: 'To leave headroom for next year\'s user growth', explanation: 'Growth headroom is a separate, later multiplier. The peak factor is about today\'s traffic within today.' },
+        { text: 'Because a server can only sustain about half of its rated QPS', explanation: 'Server headroom is a real concern, but it is not what the peak factor models — and it would be a factor on the capacity side, not the demand side.' },
+        { text: 'Because traffic is not uniform — a day\'s requests bunch into a few waking hours, and you must size for the peak', explanation: 'Correct. The average assumes users are evenly spread across 86,400 seconds. They are not, so the busiest hour can be several times the mean, and machines must survive that hour.' },
+        { text: 'To account for retries and failed requests', explanation: 'Retries do add load, but they are a smaller and separate effect — and if retries are tripling your traffic you have a retry-storm bug, not a capacity plan.' },
+      ],
+      correct: 2,
+    },
+    {
+      question: '10M photos uploaded per day, 2 MB each, 3× replication, 1-year retention. Total storage?',
+      options: [
+        { text: '~7 PB', explanation: 'That is the yearly figure BEFORE replication (20 TB/day × 365 = 7.3 PB). You still owe the ×3.' },
+        { text: '~20 TB', explanation: 'That is a single day (10M × 2 MB). Retention and replication are both still missing.' },
+        { text: '~2 PB', explanation: 'Off by roughly 10×. Recompute: 20 TB/day × 365 days × 3 copies.' },
+        { text: '~22 PB', explanation: 'Correct. 10M × 2 MB = 20 TB/day; × 365 = 7.3 PB; × 3 replicas ≈ 22 PB. Forgetting the replication factor is the single most common miss.' },
+      ],
+      correct: 3,
+    },
+    {
+      question: 'How many base62 characters do you need to encode 100 billion distinct URLs?',
+      options: [
+        { text: '7', explanation: 'Correct. log62(1e11) = ln(1e11)/ln(62) ≈ 25.3/4.13 ≈ 6.14, so round UP to 7. 62⁷ ≈ 3.5 trillion — plenty of headroom.' },
+        { text: '6', explanation: 'Close, but short: 62⁶ ≈ 57 billion, which is less than 100 billion. The log gives 6.14 and you must round up.' },
+        { text: '11', explanation: 'That is the number of DECIMAL digits in 100 billion. Base62 packs far more per character — that is the entire point of using it.' },
+        { text: '4', explanation: '62⁴ ≈ 14.8 million. Off by four orders of magnitude.' },
+      ],
+      correct: 0,
+    },
+    {
+      question: 'A same-datacenter round trip is ~0.5 ms; a cross-continent one is ~150 ms. Roughly how many local round trips fit inside one cross-continent trip?',
+      options: [
+        { text: '~30', explanation: 'That would be true if the local hop were 5 ms. It is 0.5 ms — ten times faster.' },
+        { text: '~3', explanation: 'Off by 100×. These two rungs of the latency ladder are far further apart than that.' },
+        { text: '~300', explanation: 'Correct. 150 ÷ 0.5 = 300. This is why you can afford dozens of internal service hops per request but not a single extra ocean crossing — and why you move data to the user instead of optimizing the trip.' },
+        { text: '~3000', explanation: '10× too many — that would need a 50 µs local round trip, which is SSD territory, not network.' },
+      ],
+      correct: 2,
+    },
+    {
+      question: 'Your estimate says 200K read QPS, 2K write QPS, read:write = 100:1. What does that ratio point you at FIRST?',
+      options: [
+        { text: 'Cache the hot reads and push static objects to a CDN', explanation: 'Correct. At 100:1 almost all traffic is reads, and reads are the cheap thing to replicate — memory cache, read replicas, edge caching. You attack the 99%, not the 1%.' },
+        { text: 'Shard the database by user_id', explanation: 'Sharding buys write and storage scale. Writes here are only 2K/s — near one leader\'s ceiling, worth watching, but not the first lever for a 100:1 workload.' },
+        { text: 'Move to a NoSQL store', explanation: 'A store swap is a big, risky change that does not follow from a ratio. Name the access pattern and the failing number first.' },
+        { text: 'Put a message queue in front of the database', explanation: 'Queues absorb write bursts. In a 100:1 read-heavy system they solve the smaller half of the problem.' },
+      ],
+      correct: 0,
+    },
+    {
+      question: '50K read QPS, 200 KB per response. Read bandwidth?',
+      options: [
+        { text: '~10 Gbps', explanation: 'You computed 10 GB/s and then wrote "Gbps". Bytes are not bits — multiply by 8. This exact confusion is why interviewers ask.' },
+        { text: '~80 Gbps', explanation: 'Correct. 50,000 × 200 KB = 10 GB/s; × 8 = 80 Gbps. Big enough that a single origin cannot serve it — this number is what forces a CDN.' },
+        { text: '~10 GB/day', explanation: 'Wrong unit entirely: bandwidth is per second. Per day this would be ~864 TB.' },
+        { text: '~800 Mbps', explanation: '100× too small. 50K × 200 KB is 10 GB/s, not 100 MB/s.' },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'You estimate 60M QPS for a startup with 50K daily users. What is the right move?',
+      options: [
+        { text: 'Design for 60M QPS — better to over-provision', explanation: 'You would be designing a global-scale system for a number that cannot be real. Over-provisioning against an arithmetic error is not caution.' },
+        { text: 'Round it down to something that feels reasonable', explanation: 'Never fudge an answer to look sane. Find the actual mistake, otherwise every downstream number stays wrong.' },
+        { text: 'Continue and let the interviewer correct you', explanation: 'They will — and the thing being graded is whether YOU noticed. Catching your own error is a positive signal; missing it is not.' },
+        { text: 'Stop and recheck the arithmetic — 50K users cannot produce 60M QPS', explanation: 'Correct. 50K users doing even 100 actions each is 5M/day ≈ 58 QPS. You are off by a million, so a decimal or a unit slipped. Sanity-checking against something you already know is the fifth rule for exactly this reason.' },
+      ],
+      correct: 3,
+    },
+  ],
+  interviewQuestions: [
+    {
+      question: 'Why do you make candidates do back-of-envelope math at all? What does it tell you?',
+      answer:
+        'Because the numbers choose the architecture, and a candidate who cannot size the problem is guessing at the solution. The same "design a photo feed" question is one box and a database at 100 users, and a 700-server fleet plus CDN plus sharded storage at 100M users — nothing about the component list survives the change in scale. Estimation is the step that converts a vague prompt into constraints you can defend a decision against: "231K read QPS is 50× what one relational leader does, therefore reads come from cache" is an argument; "I would add Redis because it is fast" is a preference. It also tests the meta-skill the job actually needs: being approximately right quickly, stating assumptions out loud, and noticing when your own answer is absurd.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Give me your estimation recipe. I want the steps, in order.',
+      answer:
+        'Seven steps, same every time. (1) Scale: state DAU and per-user action rate, multiply for daily actions. (2) Average QPS: divide by 86,400 — I round that to 1e5 out loud so it is a decimal shift. (3) Peak QPS: multiply by 2-5×, because traffic bunches into waking hours and machines are sized for the peak, not the mean. (4) Read:write ratio, explicitly — it decides the whole architecture. (5) Storage: writes/day × object size × retention days × replication factor, plus ~20-30% for indexes. (6) Bandwidth: QPS × payload, ×8 if I am quoting bits. (7) Cache: the working set, via the 80/20 rule, stated as an assumption. I run the same pipeline every time so that under pressure I never lose my place — and I finish by converting each number into a decision, because an estimate nobody turns into "therefore N servers" scored nothing.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Case: estimate a Twitter-scale feed. 200M DAU, 2 posts a day, 100 feed reads a day. Talk me through it.',
+      answer:
+        'Assumptions first: 1 KB per post, 5-year retention, 3× replication, 3× peak factor. Writes: 200M × 2 = 400M/day ÷ 86,400 ≈ 4.6K QPS, ~14K at peak. Reads: 200M × 100 = 20B/day ≈ 231K QPS, ~694K at peak. Read:write is 50:1, so this is a read-heavy system and the budget goes into reads. Storage: 400M × 1 KB = 400 GB/day; × 365 × 5 × 3 replicas ≈ 2.2 PB, ~2.7 PB with indexes. Bandwidth: 231K × 1 KB ≈ 231 MB/s ≈ 1.9 Gbps average. Cache: 80/20 on a day gives 400 GB × 0.2 = 80 GB — small enough to hold the hot feed entirely in RAM. Now the consequences, which is the actual answer: 694K peak reads ÷ ~1K QPS per app server ≈ 700 app servers behind a load balancer; 231K read QPS is 50-200× a single relational leader, so reads must be served from cache with the DB as fallback; 4.6K writes/s is at the ceiling of one leader (1-5K), so writes get sharded by user_id or queued; and 2.2 PB means object storage with lifecycle policies. If you told me posts average 300 B instead of 1 KB, every storage number drops 3× and nothing about the topology changes — which is the test that my rounding was safe.',
+      isCaseBased: true,
+    },
+    {
+      question: 'You compute the read:write ratio before you draw anything. Why is that specific number so load-bearing?',
+      answer:
+        'Because reads and writes are scaled by completely different machinery, and the ratio tells you which problem you actually have. Read-heavy (50:1, 100:1): reads are cheap to duplicate, so caches, read replicas, CDNs and denormalized precomputed views all work, and correctness worries shift to staleness and invalidation. Write-heavy (1:1 or write-dominant, e.g. sensor ingest or location pings): none of that helps — every node must apply every write — so you need sharding, queues to absorb bursts, batching, and write-optimized stores like LSM-tree engines. It also tells you where to spend the interview: on a 5,000:1 video platform I will spend thirty seconds on the upload path and the rest on delivery. And it is a cheap error-detector: if someone claims a social feed is write-heavy, one of the input assumptions is wrong.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Case: a video platform, 50M DAU, 50K uploads a day at 300 MB, 5 views per user. Where does the money go?',
+      answer:
+        'Uploads: 50K ÷ 86,400 = 0.6/s — nothing, so transcoding goes through a queue on a modest worker fleet and nobody notices the latency. Raw storage 50K × 300 MB = 15 TB/day; with a rendition ladder plus the source, roughly 2× that, so ~30 TB/day, ~11 PB/year, ~110 PB over five years with two copies. Reads: 50M × 5 = 250M views/day = 2.9K/s average, ~8.7K peak. Egress: 250M × 300 MB = 75 PB/day ≈ 6.9 Tbps average, ~20 Tbps at peak. That is the answer: you ship about 2,500× more bytes per day than you add to storage, and storage is paid once while egress is paid daily. At $0.01/GB that is roughly $750K a day in bandwidth against a few hundred dollars of incremental storage. So the design is CDN-first — and at that bill, building your own edge (Netflix Open Connect, Google\'s edge nodes) stops being an optimization and becomes the business model. Follow-up defense: if you push me to cut storage with aggressive transcoding, I would decline — halving 30 TB/day saves rounding-error money while a 10% CDN hit-rate improvement saves 7.5 PB/day.',
+      isCaseBased: true,
+    },
+    {
+      question: 'Case: a URL shortener, 1M new links a day, 100M redirects. Size it, and tell me how long the short code is.',
+      answer:
+        'Writes: 1M ÷ 86,400 ≈ 11.6/s, ~35/s at peak. Reads: 100M ÷ 86,400 ≈ 1.2K/s, ~3.5K peak. Read:write = 100:1. Storage: 500 B per record × 1M = 500 MB/day; five years × 3 replicas ≈ 2.7 TB — one SSD. ID space: over a 10-year life that is 1M × 365 × 10 = 3.65 billion links; base62 needs L with 62^L ≥ 3.65e9, and log62(3.65e9) ≈ 5.3, so L = 6, giving 62⁶ ≈ 57 billion and 15× headroom. The honest conclusion is that this system is not a scale problem: 1.2K QPS of immutable 500-byte lookups is one Redis node in front of one replicated database. It is also the ideal cache workload — 100:1 reads, values that never change so there is no invalidation problem at all, tiny objects, and heavily skewed popularity. The real engineering is ID generation: a counter-plus-base62 encoder is simple but leaks volume and is guessable; hashing the URL needs collision handling; a pre-generated key pool or a Snowflake-style ID trades coordination for unpredictability. If asked to go to 100 billion URLs, the only thing that changes is the code length — 7 characters.',
+      isCaseBased: true,
+    },
+    {
+      question: 'Recite the latency ladder, and then tell me what you actually use it for.',
+      answer:
+        'L1 cache ~1 ns, main memory ~100 ns, SSD read ~100 µs, same-datacenter round trip ~0.5 ms, disk seek ~10 ms, cross-country ~50 ms, cross-continent ~150 ms. Roughly 100× per rung, and the ratios are what matter — not the digits. I use it to answer "what can I afford inside one request?" With a 100 ms budget I can do hundreds of memory lookups and dozens of internal service hops, a handful of SSD reads, but essentially zero extra ocean crossings and no dependence on random disk seeks in the hot path. It also settles arguments: a spinning-disk seek at 10 ms is 20× worse than a network call to another machine inside the DC, so "keep it local on disk" can be slower than "ask the cache server". And it explains CDNs completely — 150 ms cross-continent is the speed of light plus routing, so the only fix is to move the bytes closer to the user, not to write faster code.',
+      isCaseBased: false,
+    },
+    {
+      question: 'How much traffic can one machine handle? Give me numbers and defend how loosely you are quoting them.',
+      answer:
+        'As ranges, with the caveat that they depend entirely on what the request does. A simple stateless API server: ~1K QPS — a trivial endpoint might do 10K, one making three database calls might do 100. A relational database on one leader: ~1-5K QPS for simple indexed queries, and much less for anything scanning or joining wide. Redis or another in-memory store: 100K+ ops/s per node, because there is no disk in the path. Kafka: hundreds of MB/s per broker, since it is sequential appends. I quote them loosely on purpose: the point is not the number, it is the conversion — "694K peak read QPS ÷ ~1K per box ≈ 700 app servers" turns an abstract estimate into a fleet size, a load balancer tier, and a bill. If an interviewer disagrees with my per-node figure, I take theirs; the reasoning shape is unchanged and I would rather argue about architecture than about whether an API server does 800 or 1,200 QPS.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Case: a chat app, 500M DAU, 40 messages per user per day. Estimate it, and tell me what the real constraint is.',
+      answer:
+        'Messages: 500M × 40 = 20B/day ÷ 86,400 ≈ 231K messages/s average, ~700K at peak. At 100 B per message that is 2 TB/day, and over five years with 3× replication roughly 11 PB — though for chat I would question the retention assumption hard, since storing everything forever is a product decision, not a technical one. Now the part the QPS number hides: chat runs over persistent connections, not request-response. If 10% of 500M users are connected at once, that is 50M concurrent WebSockets; at ~100K connections per box (a tuned server, file-descriptor and memory limits being the binding constraint) that is ~500 connection servers, and they must be stateful — a message for user X has to reach the specific box holding X\'s socket, which means a presence registry and a routing layer. So the real constraint is connection count and connection state, not throughput: 231K messages/s is not a hard number by itself, but 50M live sockets with delivery guarantees is a genuinely different system. That is the answer estimation is supposed to surface — the number that changes the shape of the design.',
+      isCaseBased: true,
+    },
+    {
+      question: 'You used a 3× peak factor. I think it should be 10×. Defend your choice or change it.',
+      answer:
+        'For a global consumer app with users spread across time zones, 2-3× is defensible: the load curve is smoothed by geography, so the busiest hour is a few times the daily mean rather than an order of magnitude above it. I would move to 5× or higher for a single-region product where everyone is awake at the same time, and I would abandon the multiplier entirely for event-driven spikes — ticket sales, a sports final, a Black Friday drop — because those are not "peaks", they are a different traffic model that needs queueing, admission control and pre-warming rather than a bigger constant. If you want 10×, I will take it, and here is what changes: peak reads go from 694K to 2.3M QPS, so the app fleet goes from ~700 to ~2,300 servers, and at that size I would stop provisioning for peak at all and argue for autoscaling plus a queue, because paying for 2,300 servers to sit idle 20 hours a day is the wrong trade. The number I would actually want before committing is the real traffic curve — peak factor is the one input that should come from data, not from a rule of thumb.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Halfway through, you realize you divided by 8,640 instead of 86,400. What do you do?',
+      answer:
+        'Say it immediately, fix it, and carry the correction forward — out loud. "I am off by 10× on QPS; average reads are 231K, not 2.3M, so the app fleet is ~700 servers rather than 7,000, and everything downstream of QPS moves with it." Catching your own error is a positive signal, not a negative one; interviewers are watching for exactly the self-correction reflex that keeps production systems from being sized on a bad spreadsheet. The prevention is built into the method: carry units through every step so "posts/day ÷ seconds/day = posts/s" cancels correctly, and sanity-check the final answer against something you already know — 2.3M QPS for a 200M-user app should have felt wrong, because it implies every user making ten requests a second, all day. What I would not do is quietly patch the number and hope nobody noticed; the arithmetic is recoverable, the credibility is not.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Case: an ad-serving system, 1B ad requests a day, with a 100 ms auction budget. What do the numbers forbid?',
+      answer:
+        'Throughput: 1B ÷ 86,400 ≈ 11.6K QPS average, ~35K at peak — large but not extraordinary; at ~1K QPS per box that is ~35 servers of serving capacity. Logging: 1 KB per impression × 1B = 1 TB/day of event data, and at a 0.1% click-through rate about 1M clicks/day, so the click stream is a thousand times smaller than the impression stream and can be handled completely differently. The binding constraint is the latency budget, not the QPS. A 100 ms end-to-end auction, with network time to and from the exchange, leaves maybe 20-40 ms of actual compute — and the latency ladder says that buys you hundreds of memory lookups but not a disk-backed database query, not a cross-region call, and not a chain of synchronous service hops. So the numbers forbid a database in the serving path: user profiles, budgets and targeting indexes must be in memory on or beside the serving box, refreshed asynchronously and tolerating seconds of staleness. Everything durable — impression logs, budget reconciliation, billing — goes onto a queue and is processed offline, which is also why over-delivery is tolerated and reconciled after the fact rather than prevented with a synchronous transaction. One estimate, two decisions: memory-resident serving state, and asynchronous everything else.',
+      isCaseBased: true,
+    },
+  ],
+  flashcards: [
+    { front: 'Seconds in a day', back: '86,400 ≈ 10⁵. Round it out loud: dividing by 100,000 is a decimal shift, and the 16% overestimate is inside your error bars.' },
+    { front: 'The 2¹⁰ shortcut and the storage ladder', back: '2¹⁰ = 1024 ≈ 10³, so 2²⁰ ≈ 10⁶ and 2³⁰ ≈ 10⁹. KB 10³ · MB 10⁶ · GB 10⁹ · TB 10¹² · PB 10¹⁵.' },
+    { front: 'The latency ladder', back: 'L1 ~1 ns · memory ~100 ns · SSD read ~100 µs · same-DC round trip ~0.5 ms · disk seek ~10 ms · cross-country ~50 ms · cross-continent ~150 ms. ~100× per rung.' },
+    { front: 'Per-node capacity, as ranges', back: 'Simple API server ~1K QPS · relational DB ~1–5K QPS on simple queries · Redis 100K+ ops/s · Kafka hundreds of MB/s per broker. All depend on the work — quote as ranges.' },
+    { front: 'Object sizes worth memorizing', back: 'Text post / DB row ~1 KB · thumbnail ~10 KB · web photo ~200 KB · full photo ~1 MB · one minute of video ~10–50 MB · URL record ~500 B.' },
+    { front: 'The seven-step recipe', back: '1 DAU × rate → daily actions. 2 ÷86,400 → avg QPS. 3 ×2–5 → peak. 4 read:write ratio. 5 storage = objects/day × size × retention × replication (+20–30% index). 6 bandwidth = QPS × payload. 7 cache = working set via 80/20.' },
+    { front: 'Peak factor: value and justification', back: '2–5× the average. Reason to say out loud: traffic is not uniform — a day\'s requests bunch into a few waking hours, and you size machines for the peak, not the mean.' },
+    { front: 'The three storage multipliers people forget', back: 'Retention (days × the daily figure), replication factor (usually 3× — a third of the bill), and index overhead (+20–30%). Dropping replication is the single most common miss.' },
+    { front: 'Bandwidth formula, and the 8× trap', back: 'Bandwidth = QPS × payload size. Storage is quoted in BYTES, network capacity in BITS — multiply by 8 to convert. 10 GB/s = 80 Gbps.' },
+    { front: 'Base62 ID length', back: 'Need L with 62^L ≥ N, so L = ⌈log₆₂ N⌉. 62⁶ ≈ 57 billion, 62⁷ ≈ 3.5 trillion. An ID length is an arithmetic result, not a style choice.' },
+  ],
+  mindmapMarkdown: `- Back-of-Envelope Estimation: QPS, Storage & Bandwidth
+  - Why interviewers ask
+    - Numbers choose the architecture — one box vs 700 servers, cache vs CDN
+  - The meta-skill
+    - Approximately right, fast, out loud; assumptions stated; order of magnitude only
+  - Numbers to memorize
+    - 86,400 s/day ≈ 1e5
+    - 2^10 ≈ 10^3 → KB MB GB TB PB
+    - Latency ladder ~100x per rung: memory 100ns, SSD 100µs, DC hop 0.5ms
+    - Disk seek 10ms, cross-country 50ms, cross-continent 150ms
+    - Per-node: API ~1K QPS, RDBMS 1–5K, Redis 100K+ ops/s
+    - Object sizes: row 1KB, photo 1MB, video 10–50MB/min
+  - The seven-step recipe
+    - 1 DAU x rate → daily actions
+    - 2 ÷86,400 → average QPS
+    - 3 x2–5 peak factor (traffic is not uniform)
+    - 4 read:write ratio → picks the architecture
+    - 5 storage x retention x replication + index overhead
+    - 6 bandwidth = QPS x payload (x8 for bits)
+    - 7 cache = working set via 80/20
+  - Worked examples
+    - Twitter feed: 4.6K w / 231K r QPS, 2.2 PB, 80 GB cache
+    - Video: 6.9 Tbps egress dwarfs 30 TB/day of storage
+    - URL shortener: 11.6 writes/s, 6 base62 chars (62^6 ≈ 57B)
+  - Sanity rules
+    - Round hard, carry units, state assumptions
+    - Sanity-check against what you know, then turn it into a decision
+  - Practice drills
+    - Chat: connections not QPS · ride-hail: 1.25M location writes/s
+    - Ads: 100ms budget forbids a DB · photos: 93 Gbps → CDN · autocomplete: all RAM`,
+}
+
+export default m

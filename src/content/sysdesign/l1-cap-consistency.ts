@@ -1,0 +1,452 @@
+import type { Module } from '../types'
+
+const m: Module = {
+  id: 'sysdesign-l1-cap-consistency',
+  subjectId: 'sysdesign',
+  level: 1,
+  title: 'CAP, PACELC & Consistency Models',
+  whyItMatters:
+    'CAP is the most quoted and least understood theorem in interviews — "pick 2 of 3" is a wrong answer that sounds like a right one. Get it precise and you unlock the real skill: choosing consistency per operation, defending it with the business cost of a stale read versus an error, and knowing that the tradeoff you actually pay every day is latency, not partitions.',
+  estMinutes: 55,
+  sections: [
+    {
+      type: 'intuition',
+      title: 'Partitions are weather, not a menu item',
+      md: `Two offices share one customer list. The phone line between them dies. Both offices are open, both are staffed, neither knows if the other burned down or just lost its phone.
+
+- A customer walks into office B and asks for their balance. Office B has exactly two options: **read out the number it has** (possibly out of date) or **say "I cannot confirm that right now"**.
+- There is no third option. "Give the correct number" requires talking to office A, and the line is dead.
+- Nobody *chose* the line to die. It died. Networks drop packets, switches reboot, availability zones isolate — at scale this happens weekly.
+- That is CAP in one paragraph: **when the network splits, you must choose between answering and being right.**
+- The famous "pick 2 of 3" phrasing invites you to pick C and A and skip P. You cannot skip P. P is the weather.`,
+    },
+    {
+      type: 'intuition',
+      title: 'The three letters, defined properly',
+      md: `Most CAP confusion is vocabulary. Each letter means something narrower than it sounds.
+
+- **C = linearizability.** Every read returns the most recent completed write, as if there were exactly one copy of the data. This is *not* the C in ACID (which means "no constraint is violated"). Same letter, different theorem, constant confusion.
+- **A = every request to a non-failing node gets a non-error response.** Note what this excludes: "the node crashed" is not an availability violation, it is a failure. A node that is up and deliberately answers with an error IS an availability violation.
+- **P = the system keeps operating despite arbitrary messages being dropped between nodes.** P is not a feature you build — it is a hazard you tolerate.
+- The precise statement: **a distributed system cannot be both linearizable and available during a network partition.** During. Not in general.
+- When the network is healthy, CAP says nothing at all. Systems can and do give you both C and A on a good day — which is why CAP alone is a bad design tool.`,
+    },
+    {
+      type: 'hinglish',
+      md: `Partition ka matlab theek se samjho: do server, dono **zinda**, dono healthy — bas beech ka taar kat gaya. Ab node A pe koi likh raha hai, aur node B se koi padh raha hai. B ke paas sirf do raste hain: ya to purana jawab de de (*"jo mere paas hai, wahi bol deta hoon"* — availability), ya haath khada kar de (*"jab tak A se baat nahi hoti, main jhooth nahi bolunga"* — consistency). Teesra rasta — "sahi bhi bataunga aur turant bhi" — exist hi nahi karta, kyunki sach A ke paas hai aur A tak pahunch nahi hai. Aur partition ko *mana* bhi nahi kar sakte: network hai, kabhi na kabhi tootega. Isliye CAP "teen mein se do choose karo" nahi hai — partition ke waqt **do mein se ek** choose karna hai.`,
+    },
+    {
+      type: 'visual',
+      component: 'PointerBoxDiagram',
+      props: {
+        title: 'One key, two replicas, one dead network link',
+        notice: 'Both nodes stay alive the whole time. Watch what each branch costs the person on the other end.',
+        leftLabel: 'clients',
+        rightLabel: 'replicas',
+        frames: [
+          {
+            note: 'Healthy network. Both replicas hold x = 10, and every write reaches both before it is acknowledged. CAP has no opinion here — a working network lets you have consistency and availability at the same time.',
+            stack: [{ name: 'client', value: 'reads and writes x' }],
+            heap: [
+              { id: 'A', value: 'x = 10', label: 'node A — in sync' },
+              { id: 'B', value: 'x = 10', label: 'node B — in sync' },
+            ],
+          },
+          {
+            note: 'The link drops: a switch reboots, a cable is cut, an availability zone isolates. Both nodes are ALIVE and serving. Neither can tell whether the other crashed or is merely unreachable — from A\'s side those two look identical. This is the partition, and nobody chose it.',
+            stack: [{ name: 'clients', value: 'still reaching both sides' }],
+            heap: [
+              { id: 'A', value: 'x = 10', label: 'node A — cannot reach B', danger: true },
+              { id: 'B', value: 'x = 10', label: 'node B — cannot reach A', danger: true },
+            ],
+          },
+          {
+            note: 'A client writes x = 20 and it lands on node A. A cannot replicate it. Decision point: accept the write (stay available, knowing B is now wrong) or reject it (stay consistent, refuse to diverge). Here A accepts — the two copies have officially disagreed.',
+            stack: [{ name: 'PUT x = 20', to: 'A' }],
+            heap: [
+              { id: 'A', value: 'x = 20', label: 'node A — accepted, diverged' },
+              { id: 'B', value: 'x = 10', label: 'node B — never heard about it' },
+            ],
+          },
+          {
+            note: 'AP branch. Another client reads x from node B: it gets 10 — stale, but instant, and no error. Being available, B also accepts its own client\'s write x = 15. Both sides now take writes and drift apart. This is a DELIBERATE choice: we priced a stale like-count cheaper than an outage.',
+            stack: [
+              { name: 'GET x -> 10 (stale)', to: 'B' },
+              { name: 'PUT x = 15', to: 'B' },
+            ],
+            heap: [
+              { id: 'A', value: 'x = 20', label: 'node A — its own writes' },
+              { id: 'B', value: 'x = 15', label: 'AP: available, diverging', danger: true },
+            ],
+          },
+          {
+            note: 'CP branch — rewind and choose the other way. B knows it is in the minority and cannot prove it is current, so it refuses: an error, or a block until the partition heals. The user sees a failure instead of a lie. Equally deliberate: a wrong bank balance costs more than a retry button.',
+            stack: [{ name: 'GET x -> ERROR', to: 'B', danger: true }],
+            heap: [
+              { id: 'A', value: 'x = 20', label: 'node A — majority side, still serving' },
+              { id: 'B', value: '(refuses to answer)', label: 'CP: consistency chosen' },
+            ],
+          },
+          {
+            note: 'Healing the AP branch. The link returns and two versions meet: A says 20, B says 15, and neither happened "after" the other — they are concurrent. Somebody must decide. Last-write-wins picks by clock and silently deletes the loser. Version vectors detect the concurrency and hand both values to the application. A CRDT merges by construction. AP did not avoid the consistency work — it deferred it to this frame.',
+            stack: [{ name: 'reconcile', value: 'conflict: 20 vs 15' }],
+            heap: [
+              { id: 'A', value: 'x = 20', label: 'candidate (from A)' },
+              { id: 'B', value: 'x = 15', label: 'concurrent candidate — one will be lost', danger: true },
+            ],
+          },
+        ],
+      },
+    },
+    {
+      type: 'note',
+      md: `**Where "CA" actually lives.** People label a single-node Postgres "CA", and in a narrow sense that is fair: with one node there is nothing to partition, so you get consistency and availability. But say the real behaviour instead — **when the network to that node fails, the system is simply down**. That is not a clever third corner of the triangle; it is choosing C and accepting zero availability for anyone on the wrong side of the break. The honest sentence for an interview: *"CA means you have not distributed the data yet."*`,
+    },
+    {
+      type: 'intuition',
+      title: 'PACELC: the 99.9% of the time CAP ignores',
+      md: `CAP only speaks during partitions. Partitions are rare. So what governs your system the rest of the time?
+
+- **PACELC**: *if* **P**artitioned, choose **A** or **C**; **E**lse, choose **L**atency or **C**onsistency.
+- The "else" half is the one you live with every single day. Making a read linearizable means coordinating — a quorum round trip, a leader hop, sometimes a cross-region hop at 80–150 ms. Serving it from the nearest replica costs 1 ms and may be stale.
+- So every normal-day read is a priced question: *how much latency is this operation's freshness worth?*
+- Notation people use: DynamoDB is **PA/EL** (available under partition, latency-first otherwise). Spanner is **PC/EC** (consistent under partition, and still consistent — paying the coordination — when healthy).
+- Why it matters more than CAP in practice: you will tune latency-vs-consistency in a config file this quarter. You will handle a partition maybe twice a year.
+- Interview line worth memorising: *"CAP is the failure-mode question; PACELC is the Tuesday-afternoon question."*`,
+    },
+    {
+      type: 'intuition',
+      title: 'Classifying real systems without lying',
+      md: `Labels are shorthand for *default* behaviour. Almost every modern store is tunable, so name the default and then name the knob.
+
+- **Single-node Postgres / MySQL**: "CA" — meaning it stops when unreachable. With sync replication and automatic failover it becomes a CP-leaning system that refuses writes when it cannot form a majority.
+- **Cassandra / DynamoDB / Riak**: **AP by default** — every replica answers, conflicts are reconciled later. But the quorum knobs are per-query: \`W=1, R=1\` is maximally AP, \`W=QUORUM, R=QUORUM\` buys strong-ish reads at the cost of failing when a majority is unreachable. The same cluster is AP for one query and CP for the next.
+- **ZooKeeper / etcd / Consul**: **CP** — built on a consensus protocol, so a minority partition refuses to serve rather than serve stale metadata. That is exactly what you want from the thing that stores "who is the leader".
+- **Spanner**: **CP** — it uses synchronised clocks (TrueTime) and Paxos to give linearizable transactions globally, and it stalls writes for a few milliseconds rather than risk an ordering violation. Google reports enough nines that people *call* it CA; it is CP with very good networking.
+- **MongoDB**: CP-leaning today (majority write concern, majority read concern), but historically shipped with defaults that lost writes on failover — a reminder that a system's CAP class is really its *default config's* class.
+- The interview move: never say "Cassandra is AP" and stop. Say "AP by default, and I would set W and R per operation" — that shows you know the choice is yours.`,
+    },
+    {
+      type: 'intuition',
+      title: 'The consistency ladder — strongest first, and what each rung costs',
+      md: `"Strong vs eventual" is a two-rung ladder for a five-rung problem. Each step down removes coordination and buys latency and availability.
+
+- **Linearizable (strong)**: the system behaves as if there is exactly one copy and every operation happens at a single instant between its call and its return. Once a write returns, *every* subsequent read anywhere sees it. Cost: coordination on every operation — a quorum or a leader, so cross-region reads pay the round trip. Use for: bank balances, distributed locks, "is this seat still free", leader election, uniqueness checks.
+- **Sequential**: all nodes see the same total order of operations, but that order need not match real time. Your write may be ordered after mine even though yours happened first by the wall clock — everyone just agrees. Cheaper than linearizable (no real-time anchor), and honestly rare as an explicit product choice; it matters because it is the line where "same order everywhere" stops implying "matches reality".
+- **Causal**: if operation B was influenced by operation A, everyone sees A before B. Operations that did not influence each other can be seen in any order. A reply never shows up above the comment it replies to; a photo never appears before the album that contains it. Cost: track causality (version vectors / dependency metadata), but **no global coordination and no leader** — so it survives partitions while staying available. This is the sweet spot most products actually need, and the most under-used answer in interviews.
+- **Eventual**: if writes stop, replicas converge. That is the entire promise — no bound on when, no ordering guarantee on the way there. Cost: nearly free, always available, and you must be able to tolerate a wrong answer briefly. Use for: like counts, view counters, feed ranking, recommendation caches, DNS.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Session guarantees: what users actually notice',
+      md: `Between causal and eventual sit three narrow promises scoped to *one user's session*. They are cheap, and they fix the anomalies users actually complain about.
+
+- **Read-your-own-writes**: after you post a comment, *you* always see it. Fix: route a user's reads to the leader for a short window after their write, or pin the session to a replica that has caught up past their write. (Full walkthrough of the lag that causes this is in *Scaling the Database: Replication, Sharding & Consistent Hashing*, earlier in this subject.)
+- **Monotonic reads**: time never moves backwards for you. You see 5 comments, refresh, and never see 4. Fix: pin a session to one replica — the anomaly needs *two* replicas at different lag to appear.
+- **Consistent prefix reads**: you never see an effect before its cause across shards. Without it, a sharded chat can show "Because I moved to India" before "Where do you live now?".
+- Why these matter: they cost almost nothing (sticky routing, a version token) and they cover most of the user-visible pain that people reach for linearizability to solve.
+- Interview framing: *"I would start with session guarantees and only escalate to linearizability for the operations that genuinely need it."*`,
+    },
+    {
+      type: 'note',
+      md: `**Consistency is a per-OPERATION decision, not a per-system one.** This is the single sentence that separates a junior answer from a senior one. Your bank app shows an eventually-consistent transaction *list* — a pending charge appearing 30 seconds late annoys nobody — next to a strongly-consistent *balance*, because an overdraft decision cannot be made on stale data. Same product, same request, two different consistency levels chosen deliberately. Amazon does the same thing: the product page and review count are eventual, the "last item in stock" checkout is not. So when an interviewer asks "would you use strong or eventual consistency here?", the winning first move is *"for which operation?"*.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Quorums: buying overlap with arithmetic',
+      md: `A leaderless store (Dynamo, Cassandra) writes each key to **N** replicas. You choose how many must answer.
+
+- **W** = replicas that must acknowledge before a write returns. **R** = replicas that must reply before a read returns.
+- The guarantee is pure set arithmetic: **W + R > N** forces the read set and the write set to share at least one node — so at least one responding replica has the newest value.
+- N=3, W=2, R=2: 2 + 2 = 4 > 3. Any two writers and any two readers overlap in at least one node. The read then takes the newest version among the replies.
+- Tuning is a latency/durability dial. Lower W → faster writes, more replicas potentially behind. Lower R → faster reads, more risk. \`W=1, R=1\` is maximally fast and gives you no overlap at all: pure eventual consistency.
+- Failure tolerance is the other half: writes survive **N − W** dead nodes, reads survive **N − R**. \`W=3, R=1\` on N=3 is technically "safe" and operationally absurd — one node down and no write ever succeeds again.
+- The honest caveat: W + R > N gives *overlap*, not linearizability. Concurrent writes, failed writes that partially landed, and hinted handoff all leak edge cases. Dynamo-style quorums are usually called "strong-ish", and Cassandra's own docs say the same.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Enumerate every W/R choice for N=3 — with real output',
+      code: `N = 3                                    # replicas holding each key
+
+print(f"N={N}  |  W = acks before a write returns, R = replies before a read returns")
+print(" W  R  W+R  overlap?  writes survive  reads survive")
+for W in range(1, N + 1):
+    for R in range(1, N + 1):
+        overlap = "YES" if W + R > N else " no"
+        print(f"{W:>2} {R:>2} {W + R:>4}    {overlap}      {N - W} node(s)      {N - R} node(s)")
+
+print("\\nwhat people actually deploy")
+for W, R, why in [(1, 1, "fastest, may read stale"), (2, 2, "balanced quorum"),
+                  (1, 3, "cheap writes, expensive reads"), (3, 1, "cheap reads, fragile writes")]:
+    print(f"  W={W} R={R}  {'SAFE ' if W + R > N else 'STALE'}  {why}")
+
+# ---------------- real output ----------------
+# N=3  |  W = acks before a write returns, R = replies before a read returns
+#  W  R  W+R  overlap?  writes survive  reads survive
+#  1  1    2     no      2 node(s)      2 node(s)
+#  1  2    3     no      2 node(s)      1 node(s)
+#  1  3    4    YES      2 node(s)      0 node(s)
+#  2  1    3     no      1 node(s)      2 node(s)
+#  2  2    4    YES      1 node(s)      1 node(s)
+#  2  3    5    YES      1 node(s)      0 node(s)
+#  3  1    4    YES      0 node(s)      2 node(s)
+#  3  2    5    YES      0 node(s)      1 node(s)
+#  3  3    6    YES      0 node(s)      0 node(s)
+#
+# what people actually deploy
+#   W=1 R=1  STALE  fastest, may read stale
+#   W=2 R=2  SAFE   balanced quorum
+#   W=1 R=3  SAFE   cheap writes, expensive reads
+#   W=3 R=1  SAFE   cheap reads, fragile writes`,
+      annotations: {
+        7: 'The whole guarantee on one line: if the write set and the read set are bigger than N combined, they cannot be disjoint — pigeonhole principle, nothing more.',
+        18: 'W=1, R=1 — two acks total out of six possible. Fastest configuration in the table, and the only guarantee it offers is eventual convergence.',
+        22: 'W=2, R=2 is the default everyone ships: overlap guaranteed, and one node can be down for BOTH reads and writes. The only row with slack on both sides.',
+        26: 'W=3, R=3 buys nothing over W=2, R=2 and tolerates zero failures. Maximum consistency settings are not maximum safety — an unavailable system is not consistent, it is off.',
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'When replicas disagree: resolving concurrent writes',
+      md: `Choosing availability means accepting divergence. Divergence means somebody must merge. Three real strategies, honestly priced.
+
+- **Last-write-wins (LWW)**: attach a timestamp, keep the highest. Trivially simple, O(1) storage, and it **silently deletes data** — two users edited concurrently, one edit vanishes with no error anywhere. Worse, it depends on clocks: a node whose clock is 5 minutes ahead wins every conflict it enters, including against writes that genuinely happened later. Cassandra defaults to this. Use it only when losing a concurrent write is acceptable (a cache entry, a status flag).
+- **Version vectors**: each replica keeps a counter per node, so the system can tell "B strictly follows A" from "A and B are concurrent". Real conflicts are *detected* rather than guessed, and both siblings are handed to the application to merge (Dynamo's shopping cart famously unions the two carts — the worst case is a re-added item, never a lost one). Cost: metadata grows with the number of writing replicas, and your application now needs merge logic.
+- **CRDTs**: data types whose merge function is mathematically guaranteed to converge no matter what order updates arrive in — a grow-only counter, an add-wins set, the text structure behind collaborative editors. Honest line: they eliminate conflict resolution by restricting what operations you are allowed to have, which is a great trade for counters and collaborative text and no help at all for "transfer $500".
+- Decision rule: if losing a concurrent write is invisible to the user, LWW. If it is a customer complaint, version vectors. If the data type is a counter, set, or shared document, a CRDT is strictly better than both.`,
+    },
+    {
+      type: 'intuition',
+      title: 'How to answer a CAP question in an interview',
+      md: `Reciting the theorem scores nothing — everyone recites it. Do this instead.
+
+1. **Reframe immediately.** "Partitions aren't optional, so the real question is what this product should do *during* one — and I'd answer it per operation, not for the whole system."
+2. **Ask what the product does during a partition.** Is a stale read visible? Is it dangerous? "If the payment service can't reach the ledger, do we decline the charge or accept it and reconcile?" That question is the answer.
+3. **Split the operations.** Name two from the same product with different needs — a stale follower count is fine, a double-spent balance is not. This is where the "per-operation" framing earns its points.
+4. **Defend with business cost, not theory.** *"A stale like count costs nothing; an outage on the like button costs engagement — AP. A stale account balance costs a chargeback and a regulator; a failed read costs a retry — CP."* Compare the two prices out loud.
+5. **Then bring up PACELC unprompted.** "Partitions are rare; the tradeoff I'd actually be tuning weekly is latency versus consistency on the healthy path."
+6. **Survive the follow-up.** When they push ("your AP choice just double-sold the last ticket"), do not flip — bound the damage: oversell by a known margin, reconcile asynchronously, compensate the loser. Changing your answer under pressure reads worse than defending a stated tradeoff.`,
+    },
+  ],
+  quiz: [
+    {
+      question: 'Which statement of CAP is actually correct?',
+      options: [
+        { text: 'Pick any 2 of Consistency, Availability, Partition tolerance', explanation: 'The popular phrasing, and the wrong one — it implies P is optional. You cannot opt out of packet loss; the network decides, not you.' },
+        { text: 'When a network partition occurs, you must choose between linearizability and availability', explanation: 'Correct. CAP constrains behaviour DURING a partition only. On a healthy network a system can offer both, which is exactly why CAP alone is a weak design tool.' },
+        { text: 'A distributed system can never be both consistent and available', explanation: 'Too strong. With a healthy network, systems routinely deliver both — the conflict is specific to partitions.' },
+        { text: 'Consistency here means the ACID C — no constraint violations', explanation: 'A very common mix-up. CAP\'s C is linearizability (one-copy behaviour); ACID\'s C is constraint preservation. Same letter, unrelated meanings.' },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'A node is up and healthy but returns an error because it cannot reach a majority. In CAP terms, this is…',
+      options: [
+        { text: 'An availability violation — the system chose C', explanation: 'Correct. A is "every request to a NON-FAILING node gets a non-error response". A live node deliberately erroring is precisely the CP choice.' },
+        { text: 'Not an availability question — the node is fine', explanation: 'The node being fine is what makes it an availability violation. If it had crashed there would be nothing to discuss.' },
+        { text: 'A partition-tolerance violation', explanation: 'The system is still operating despite dropped messages — that IS partition tolerance. What it gave up is the ability to answer.' },
+        { text: 'A durability violation', explanation: 'Nothing was lost. Refusing to answer protects data rather than losing it.' },
+      ],
+      correct: 0,
+    },
+    {
+      question: 'What does PACELC add that CAP misses?',
+      options: [
+        { text: 'A third choice during partitions', explanation: 'There is no third choice during a partition — that is the whole point of CAP. PACELC extends to the OTHER case.' },
+        { text: 'A formal proof of the theorem', explanation: 'PACELC is a classification framework, not a proof. The proof of CAP came from Gilbert and Lynch.' },
+        { text: 'The else-case: with a healthy network you still trade latency against consistency', explanation: 'Correct. Coordinating for a linearizable read costs a round trip you pay on every normal-day request. That is the tradeoff you actually tune, since partitions are rare.' },
+        { text: 'Durability as a fourth dimension', explanation: 'Durability is not in PACELC — the E branch is strictly Latency vs Consistency.' },
+      ],
+      correct: 2,
+    },
+    {
+      question: 'A reply to a comment shows up in a feed ABOVE the comment it replies to. Which consistency model would have prevented this at the lowest cost?',
+      options: [
+        { text: 'Linearizability', explanation: 'It would prevent it, but it is the most expensive fix — global coordination on every operation to solve an ordering problem that only involves two related writes.' },
+        { text: 'Causal consistency', explanation: 'Correct. The reply causally depends on the parent, so causal consistency orders them everywhere — and it needs no leader and no global coordination, so it stays available under partition.' },
+        { text: 'Eventual consistency', explanation: 'Eventual consistency is what produced the bug: replicas converge, but nothing constrains the order they get there in.' },
+        { text: 'Monotonic reads', explanation: 'Monotonic reads only stops YOUR view moving backwards. It says nothing about the relative order of two different writes.' },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'N=3 replicas. Which (W, R) pair guarantees a read sees the latest acknowledged write AND survives one node being down for both reads and writes?',
+      options: [
+        { text: 'W=1, R=1', explanation: 'Maximum failure tolerance (2 down on each side) but W+R = 2, not > 3 — no overlap, so reads can miss the newest write entirely.' },
+        { text: 'W=3, R=1', explanation: 'Overlap is guaranteed (4 > 3) and reads are cheap, but writes survive 3−3 = 0 failures. One node down and writes stop forever.' },
+        { text: 'W=1, R=3', explanation: 'Also overlaps (4 > 3), but reads survive 3−3 = 0 failures. Symmetric to the previous option and equally brittle.' },
+        { text: 'W=2, R=2', explanation: 'Correct. 2+2 = 4 > 3 gives overlap, and both sides survive 3−2 = 1 failure. The only row in the table with slack on both reads and writes — which is why it is everyone\'s default.' },
+      ],
+      correct: 3,
+    },
+    {
+      question: 'Two users edit the same profile field concurrently on different replicas. The store uses last-write-wins. What happens?',
+      options: [
+        { text: 'One edit is silently discarded, decided by node clocks', explanation: 'Correct. LWW keeps the higher timestamp and drops the other with no error to anyone. A node whose clock runs fast wins conflicts it should have lost — data loss driven by clock skew.' },
+        { text: 'Both edits are preserved and handed to the application', explanation: 'That is what version vectors do — detect concurrency and surface siblings. LWW deliberately does not.' },
+        { text: 'The write is rejected until the conflict is resolved', explanation: 'That would be a CP-style refusal. LWW exists precisely so writes never block.' },
+        { text: 'The values are merged automatically and correctly', explanation: 'Automatic correct merging is the CRDT promise, and only for data types built for it. LWW just picks a winner.' },
+      ],
+      correct: 0,
+    },
+    {
+      question: 'An interviewer asks: "strong or eventual consistency for this e-commerce site?" What is the best FIRST response?',
+      options: [
+        { text: 'Strong — money is involved', explanation: 'Half right, and it over-applies. Making the product catalog and review counts linearizable buys nothing and costs latency on every page view.' },
+        { text: 'Eventual — it must scale', explanation: 'Applying eventual consistency to inventory decrement and payment is how you oversell stock and double-charge cards.' },
+        { text: '"For which operation?" — then split them and price each', explanation: 'Correct. Consistency is a per-operation decision: eventual for catalog, reviews and recommendations; strong for the checkout stock decrement and the payment ledger. Asking this shows the senior framing.' },
+        { text: 'Whichever the chosen database defaults to', explanation: 'Backwards — the requirement chooses the store and the per-query settings, not the reverse. Most stores are tunable per operation anyway.' },
+      ],
+      correct: 2,
+    },
+    {
+      question: 'Why is calling a single-node Postgres "CA" misleading?',
+      options: [
+        { text: 'Postgres is actually AP', explanation: 'It is not — a single node accepts no divergent writes at all. AP requires multiple replicas that can accept conflicting writes.' },
+        { text: 'It has no partitions to tolerate, so when the network to it fails the system is just DOWN', explanation: 'Correct. "CA" is not a third corner of a triangle — it describes a system that has not been distributed yet, and whose response to a network failure is zero availability.' },
+        { text: 'Postgres cannot give linearizability', explanation: 'A single node trivially gives one-copy semantics — linearizability is the easy part here.' },
+        { text: 'Because CAP does not apply to relational databases', explanation: 'CAP applies to any replicated data system, relational or not. The category of the database is irrelevant.' },
+      ],
+      correct: 1,
+    },
+  ],
+  interviewQuestions: [
+    {
+      question: 'State CAP precisely, and tell me what is wrong with "pick 2 of 3".',
+      answer:
+        'Precisely: when a network partition occurs, a distributed data store cannot be both linearizable and available. C means linearizability — reads return the most recent completed write, as if one copy existed. A means every request to a non-failing node returns a non-error response. P means the system keeps operating while messages between nodes are dropped. What is wrong with "pick 2 of 3" is that it presents P as a choice. Partitions are a property of networks, not a design decision — cables break, switches reboot, AZs isolate. So P is always selected for you, and the actual choice is a binary one taken during a partition: answer possibly-stale, or refuse to answer. The second flaw is scope: CAP says nothing about a healthy network, so people use it to justify permanently giving up consistency when the real everyday tradeoff is latency, which is what PACELC covers.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Walk me through a concrete two-node partition. What does each choice do to the user in front of me?',
+      answer:
+        'Two replicas, both holding x = 10, both alive. The link between them dies — and critically, neither can distinguish "the other crashed" from "the other is unreachable". A client writes x = 20 to node A. A either accepts (diverging from B) or refuses. Say it accepts. Now a second client reads x from node B. AP choice: B answers 10. The user gets an instant answer that is wrong — fine if x is a like count, catastrophic if x is an account balance being checked for overdraft. CP choice: B returns an error or blocks. The user sees a spinner or a failure and retries — annoying, but never wrong. When the link heals, the AP branch has a conflict to resolve (A says 20, B may say 15 from its own writes) and someone must merge or lose a write; the CP branch has nothing to reconcile because it never allowed divergence. That final point is the one people miss: AP does not remove the consistency work, it defers it to reconciliation time and makes it the application\'s problem.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Case: design the consistency strategy for a ride-hailing app. Driver locations, ride matching, ride payment. Choose per operation and defend it.',
+      answer:
+        'Split it. Driver location pings — pure eventual, in a fast key-value or geo index: they arrive every few seconds and a 2-second-stale position is meaningless error compared to GPS noise; making them strongly consistent would add coordination to the highest-write-volume path in the system for zero user benefit. Ride matching — this is a mutual-exclusion problem, not a consistency-model problem: two riders must never be assigned the same driver. I would make the assignment a linearizable compare-and-set on driver state (CP, backed by a consensus-based store or a single-shard transaction keyed by driver id), and eat the coordination cost because it happens once per ride, not once per second. Payment ledger — strong, non-negotiable, single-writer per account with ACID transactions; a double charge is a regulatory event. Ride history and receipts — eventual with read-your-own-writes, so a rider always sees their own just-completed trip. The framing to state out loud: three consistency levels in one product, chosen by the cost of being wrong on each operation, not by a system-wide label. Follow-up defence: if matching is unavailable during a partition, riders see "no drivers nearby" and retry — worse than a stale map, far better than two riders in one car.',
+      isCaseBased: true,
+    },
+    {
+      question: 'Explain PACELC and why you would bring it up unprompted.',
+      answer:
+        'PACELC: if Partitioned, choose Availability or Consistency; Else — the normal case — choose Latency or Consistency. It completes CAP by covering the 99.9% of time when the network works. The E branch matters because a linearizable read requires coordination: a quorum round trip, a hop to the leader, sometimes a cross-region hop at 80–150 ms versus about 1 ms from the nearest replica. That price is paid on every request, forever, while the partition price is paid maybe twice a year. Classifications: DynamoDB is PA/EL, Cassandra PA/EL by default, Spanner PC/EC, MongoDB with majority concerns PC/EC. I bring it up unprompted because it moves the conversation from a theorem everyone recites to the dial I would actually be tuning: which reads can come from a nearby replica, and which must pay for coordination. One sentence version: CAP is the failure-mode question; PACELC is the Tuesday-afternoon question.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Give me the consistency ladder from strongest to weakest, with what each one costs and one product example.',
+      answer:
+        'Linearizable: behaves like a single copy, every completed write is visible to every later read anywhere. Cost: coordination per operation — quorum or leader, so latency scales with your geography. Example: account balance, distributed lock, seat reservation. Sequential: all nodes agree on one total order, but it need not match real time — cheaper because there is no real-time anchor, and mainly worth knowing as the line where "everyone agrees" stops meaning "matches the wall clock". Causal: anything that influenced something else is seen in order everywhere; unrelated operations may be seen in any order. Cost: causality metadata (version vectors), but no global coordination and no leader, so it stays available under partition. Example: comment threads, message ordering, "album exists before photo". Session guarantees — read-your-own-writes, monotonic reads, consistent prefix: narrow per-user promises that cost only sticky routing or a version token, and cover most user-visible anomalies. Eventual: replicas converge if writes stop, no bound, no ordering. Cost: nearly free and always available. Example: like counts, view counters, feeds, DNS. The point of the ladder is that most teams jump from eventual to linearizable when causal plus session guarantees was the correct rung — cheap, partition-tolerant, and indistinguishable from strong for the user.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Case: your social feed shows a like count of 1,204 on one refresh and 1,199 on the next. Product is furious. Diagnose and fix — cheaply.',
+      answer:
+        'This is a monotonic-reads violation: two replicas at different replication lag, and the load balancer sent the two reads to different ones, so the user\'s view of time went backwards. Nothing is lost or corrupted; the counter is fine. Fix order, cheapest first: (1) session stickiness — pin a user to one replica via a consistent hash on session id, and the anomaly disappears because a single replica never moves backwards; (2) if reads must spread, carry a version token (the highest counter or LSN the client has seen) and have the replica either serve a value at least that fresh or forward the read; (3) for the count specifically, serve from a single counter cache (Redis) that all replicas read through. What I would NOT do: make like counts linearizable. That puts a coordination round trip on the single highest-QPS read in the product to fix a cosmetic complaint. Say the tradeoff explicitly: stickiness costs some load imbalance and a slightly worse cache hit rate on rebalance — that is far cheaper than global coordination.',
+      isCaseBased: true,
+    },
+    {
+      question: 'N, W, R — explain the quorum arithmetic and how you would tune it.',
+      answer:
+        'N is how many replicas hold each key; W is how many must acknowledge before a write returns; R is how many must reply before a read returns. If W + R > N, the write set and the read set cannot be disjoint — pigeonhole — so at least one replica in every read has the newest value, and the read picks the highest version among the replies. N=3, W=2, R=2: 4 > 3, overlap guaranteed. Tuning: lower W means faster writes and more durability risk; lower R means faster reads and more staleness risk. Failure tolerance is the half people forget: writes survive N−W failures, reads survive N−R. That is why W=2, R=2 on N=3 is the default — it is the only setting with overlap AND one node of slack on both sides. W=3, R=1 also satisfies the inequality but tolerates zero write failures, which is worse than useless in production. Read-heavy workload: W=3, R=1 is tempting but brittle; I would rather raise N to 5 and use W=3, R=3, or accept W=1, R=1 with eventual consistency where the data allows. The caveat I always add: W + R > N gives overlap, not linearizability — concurrent writes, partial write failures and hinted handoff leak anomalies, so call it "strong-ish", not strong.',
+      isCaseBased: false,
+    },
+    {
+      question: 'How do you resolve conflicts when two replicas accepted concurrent writes? Compare the strategies honestly.',
+      answer:
+        'Last-write-wins: timestamp each write, keep the highest. Simple, constant space, and it silently destroys data — the losing edit disappears with no error surfaced anywhere. It also inherits clock skew: a node running five minutes fast wins every conflict it participates in, including against writes that truly happened later. Acceptable for caches, status flags, sensor readings where the newest value is the only one that matters. Cassandra defaults to it, which surprises people. Version vectors: a per-node counter set that lets the system distinguish "B happened after A" from "A and B are concurrent". Real conflicts are detected rather than guessed, and both siblings go to the application — Dynamo\'s canonical example is a shopping cart, where the merge is a union, so the worst outcome is a deleted item reappearing rather than an added item vanishing. Cost: metadata grows with the number of writing replicas, and the application must own merge logic. CRDTs: data types whose merge is provably convergent regardless of order — G-counters, add-wins sets, sequence types behind collaborative editors. Honest limitation: they buy convergence by restricting the operations you may define, which is perfect for counters, sets and text and no help whatsoever for "transfer $500 if the balance allows". Decision rule: is a lost concurrent write invisible to the user? LWW. Is it a support ticket? Version vectors. Is the type a counter, set or document? CRDT.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Case: an inventory system for a flash sale — 1,000 units, expected 100,000 concurrent buyers, replicated across three regions. AP or CP for the stock decrement, and defend it under pressure.',
+      answer:
+        'CP for the decrement itself, but I would keep the surface area of CP tiny. The reasoning is business cost: overselling a limited-edition item means cancellations, refunds and reputational damage, while a failed checkout means a retry — so I price the stale read far above the error. Design: the authoritative counter lives in ONE region as a single-shard linearizable resource (a consensus-backed store or a single-writer row with a conditional update), and the decrement is a compare-and-set. Everything else stays AP: the product page, the "almost sold out" banner, and the reservation UI read from local eventual replicas at 1 ms. To keep 100k buyers off a single coordinated counter, I would shard the 1,000 units into per-region sub-pools (say 400/300/300) so each region decrements locally and linearly, and only fall back to a cross-region rebalance when a pool empties — coordination happens a handful of times, not 100,000 times. Under the follow-up "your CP region just partitioned and checkout is down for two regions": that is the choice, and I bound it — the pre-allocated regional pools mean each region can keep selling its own sub-pool during the partition, so the outage only hits regions whose pool ran dry. If the business would rather oversell than stop selling, I flip to AP with a deliberate oversell margin (sell up to 1,010) plus asynchronous reconciliation and an apology-and-refund flow — but I make them state that preference, because it is a business decision, not an engineering one.',
+      isCaseBased: true,
+    },
+    {
+      question: 'Classify Cassandra, etcd, Spanner and a single-node Postgres in CAP/PACELC terms — and tell me where the labels lie.',
+      answer:
+        'Cassandra: AP by default, PA/EL — every replica answers, conflicts settled by last-write-wins. But the label describes the default config, not the system: W and R are per-query, so QUORUM/QUORUM makes the same cluster refuse to serve when a majority is unreachable, which is CP behaviour for that query. etcd and ZooKeeper: CP, PC/EC — consensus-based, a minority partition stops serving rather than serve stale metadata, which is exactly right for the store that answers "who is the leader". Spanner: CP, PC/EC — TrueTime plus Paxos give globally linearizable transactions, and it deliberately stalls writes for a few milliseconds rather than risk an ordering violation. People call it CA because Google\'s network partitions so rarely; the correct statement is that it is CP with enough nines that the A cost is rarely observed. Single-node Postgres: labelled CA, which really means "not distributed yet" — when the network to it fails, the system is down, so it is choosing C with zero availability on the far side. Where the labels lie generally: they describe defaults, they hide per-operation tunability, and they flatten a spectrum into three letters. The answer that scores is naming the default AND the knob.',
+      isCaseBased: false,
+    },
+    {
+      question: 'What are read-your-own-writes, monotonic reads, and consistent prefix reads — and why do you like them so much?',
+      answer:
+        'They are session guarantees: narrow promises scoped to one user rather than global properties of the system. Read-your-own-writes — after you write, you always see your own write; violated classically by routing a post-write read to a lagging follower, and fixed by sending a user\'s reads to the leader for a short window after their write, or by pinning them to a replica that has applied it. Monotonic reads — your view of time never goes backwards; you never see 5 comments then 4. It needs two replicas at different lag to break, so sticky sessions fix it outright. Consistent prefix reads — you never see an effect before its cause; without it a sharded chat can show "Because I moved to India" before "Where do you live now?". I like them because the price is almost nothing — sticky routing, or a version token in the request — and they cover the majority of anomalies that users actually notice and report. Teams routinely reach for linearizability, paying global coordination on every operation, to fix problems that three lines of routing logic would have solved. The escalation order I recommend: session guarantees first, causal consistency next, linearizability only for the operations that genuinely cannot tolerate staleness.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Follow-up pressure test: you chose AP for a messaging app\'s delivery. I tell you a user just saw messages out of order and is complaining. Do you change your answer?',
+      answer:
+        'No — I refine it, because flipping to CP under pressure would be the wrong instinct and would also not be the cheapest fix. The bug is not availability, it is ordering: out-of-order messages are a causal-consistency violation, and causal consistency does not require giving up availability. The fix is to attach causal metadata — a per-conversation sequence number or a version vector — so a receiving replica buffers a message until its causal dependencies have arrived, then delivers. That keeps every replica answering during a partition while making the ordering anomaly impossible. I would also add consistent prefix reads across shards if conversations are sharded, and read-your-own-writes so a sender always sees their own sent message immediately. What I would not do is make message delivery linearizable: that puts a coordination round trip on every message in the highest-volume path of a chat product to fix an ordering bug that per-conversation sequencing solves for free. The general principle worth saying: match the guarantee to the anomaly. Most complaints blamed on "eventual consistency" are causal or session-guarantee violations, and both are fixable without giving up availability.',
+      isCaseBased: true,
+    },
+  ],
+  flashcards: [
+    { front: 'CAP, stated correctly', back: 'During a network PARTITION you must choose between linearizability and availability. P is not a choice — it is a property of networks. "Pick 2 of 3" is wrong because it pretends you can skip P.' },
+    { front: 'The three letters, precisely', back: 'C = linearizability (behaves like one copy) — NOT the ACID C. A = every request to a non-failing node gets a non-error response. P = keeps operating while inter-node messages are dropped.' },
+    { front: 'PACELC in one line', back: 'If Partitioned: choose A or C. Else: choose Latency or Consistency. The Else branch is the tradeoff you tune every day; partitions happen twice a year.' },
+    { front: 'What "CA" really means', back: 'You have not distributed the data yet. A single node has nothing to partition — and when its network fails, the system is simply down.' },
+    { front: 'The consistency ladder', back: 'Linearizable (coordination per op) → Sequential (agreed order, not real time) → Causal (dependent ops ordered, no leader needed) → session guarantees (RYW, monotonic reads, consistent prefix) → Eventual (converges if writes stop).' },
+    { front: 'Causal consistency — why it is under-used', back: 'A reply never precedes its parent, an effect never precedes its cause — achieved with version vectors, WITHOUT global coordination, so it stays available under partition. Usually exactly what the product needed.' },
+    { front: 'The three session guarantees', back: 'Read-your-own-writes: you always see your own write. Monotonic reads: your view never goes backwards. Consistent prefix: you never see an effect before its cause. All cheap — sticky routing or a version token.' },
+    { front: 'Consistency is per-OPERATION', back: 'Not per system. Your bank shows an eventually-consistent transaction list next to a strongly-consistent balance. First response to "strong or eventual?" is "for which operation?".' },
+    { front: 'Quorum arithmetic', back: 'W + R > N forces read and write sets to overlap, so a read sees the latest acknowledged write. N=3, W=2, R=2 (4>3) — and each side still survives N−W = N−R = 1 failure. Overlap ≠ linearizability.' },
+    { front: 'Conflict resolution: three options', back: 'LWW — highest timestamp wins, silently loses data, breaks under clock skew. Version vectors — detects true concurrency, hands siblings to the app to merge. CRDTs — provably convergent, but only for restricted data types (counters, sets, text).' },
+  ],
+  mindmapMarkdown: `- CAP, PACELC & Consistency Models
+  - CAP stated correctly
+    - Choice happens DURING a partition
+    - P is weather, not a menu item
+    - "Pick 2 of 3" is the wrong framing
+  - The three letters
+    - C = linearizability (not ACID C)
+    - A = non-failing node answers, no error
+    - P = works despite dropped messages
+  - Partition walkthrough
+    - Both nodes alive, link dead
+    - AP: answer stale, diverge, reconcile later
+    - CP: refuse to answer, nothing to merge
+    - Heal: conflict must be resolved
+  - PACELC
+    - If P: A or C
+    - Else: Latency or Consistency
+    - The Else branch is the daily tradeoff
+    - DynamoDB PA/EL, Spanner PC/EC
+  - Classifying real systems
+    - Single-node Postgres: "CA" = not distributed
+    - Cassandra/Dynamo: AP, tunable per query
+    - ZooKeeper/etcd: CP consensus
+    - Spanner: CP with TrueTime
+  - Consistency ladder
+    - Linearizable: one-copy, coordination per op
+    - Sequential: agreed order, not real time
+    - Causal: cause before effect, no leader
+    - Eventual: converges if writes stop
+  - Session guarantees
+    - Read-your-own-writes
+    - Monotonic reads
+    - Consistent prefix
+  - Per-operation framing
+    - Bank: eventual list, strong balance
+    - Ask "for which operation?"
+  - Quorums
+    - W + R > N forces overlap
+    - N=3, W=2, R=2 is the default
+    - Tolerance: N−W writes, N−R reads
+    - Overlap is not linearizability
+  - Conflict resolution
+    - LWW: silent loss, clock skew
+    - Version vectors: detect concurrency
+    - CRDTs: converge, restricted types
+  - Interview method
+    - Ask what happens during a partition
+    - Choose per operation
+    - Price stale read vs error
+    - Bound the damage under follow-up`,
+}
+
+export default m

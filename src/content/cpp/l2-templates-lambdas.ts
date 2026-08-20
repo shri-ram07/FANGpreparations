@@ -1,0 +1,495 @@
+import type { Module } from '../types'
+
+const m: Module = {
+  id: 'cpp-l2-templates-lambdas',
+  subjectId: 'cpp',
+  level: 2,
+  title: 'Templates & Lambdas',
+  whyItMatters:
+    'Every STL container you will use in DSA — vector, map, priority_queue — is a class template, and every custom sort you will ever write in an interview is a lambda. This module explains the machinery once, so sort-with-a-comparator stops being an incantation and becomes something you can bend.',
+  estMinutes: 45,
+  sections: [
+    {
+      type: 'intuition',
+      title: 'Templates: one recipe, many cookies',
+      md: `You wrote max(int, int). Tomorrow you need max(double, double). Copy-paste with the types changed is a bug farm.
+
+- A **function template** is a recipe with a hole in it: \`template <typename T>\` says "T is a type I will name later".
+- Call it with ints → the compiler stamps out an int version. Call with doubles → a double version.
+- The compiler reads the argument types and fills T itself. That is **argument deduction**.
+- Deduction needs ONE consistent answer. \`myMax(3, 4.5)\` says T=int and T=double at once — compile error.
+- Fix: pick T yourself: \`myMax<double>(3, 4.5)\`. The 3 converts, everyone is happy.`,
+    },
+    {
+      type: 'code',
+      lang: 'cpp',
+      title: 'Function templates and deduction',
+      code: `template <typename T>
+T myMax(T a, T b) {
+    return a < b ? b : a;
+}
+
+int    lo = myMax(3, 7);        // T deduced: int
+double hi = myMax(2.5, 9.1);    // T deduced: double
+
+// myMax(3, 4.5);               // ERROR: is T int or double?
+double ok = myMax<double>(3, 4.5);  // you choose T: the 3 converts`,
+      annotations: {
+        1: 'The recipe line. typename T (or class T — identical) declares the hole. It covers only the function directly below it.',
+        6: 'No angle brackets at the call — the compiler looks at (3, 7), sees two ints, sets T = int.',
+        9: 'Both arguments vote for T, and they disagree. Deduction never averages or converts to break a tie — it just fails.',
+        10: 'Explicit template argument: deduction is skipped, T = double is law, and 3 quietly converts to 3.0. Same fix works on std::max.',
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'Templates run at compile time. All of it.',
+      md: `A template is not a function. It is a **stencil the compiler uses to generate functions** — before your program ever runs.
+
+- Each distinct T creates an **instantiation**: a separate, concrete, fully-compiled function.
+- Use the template with 10 types → 10 real functions land in your binary. That is the cost: **binary size grows per type**.
+- The payoff: zero runtime overhead. No type checks, no indirection — each stamped version is as fast as hand-written code.
+- Type-checking is per-instantiation too: the recipe looks fine until someone instantiates it with a type that has no \`<\`.
+- That is why template errors explode at the CALL site, deep inside code you did not write.`,
+    },
+    {
+      type: 'note',
+      md: 'Honest warning: template error messages are famously unreadable — one bad `sort` call can print a hundred lines of angle brackets. The survival rule: read the **first** error only (everything after it is fallout), and inside it find the **innermost type** it names — that is the actual type that broke the recipe. The layers wrapping it are just the compiler showing its work, and the "required from here" line points back at your call.',
+    },
+    {
+      type: 'intuition',
+      title: 'Class templates: containers with a hole in them',
+      md: `Same trick, bigger unit: put the \`template\` line above a **class**, and every member can use T.
+
+- \`Stack<int>\` and \`Stack<double>\` are two SEPARATE classes, stamped from one recipe.
+- They share nothing at runtime: no common base, no relation. Only the source code is shared.
+- This is exactly what the STL is: \`vector<T>\`, \`map<K,V>\`, \`pair<A,B>\` — class templates all the way down.
+- You usually write the type explicitly (\`Stack<int> s\`) — class templates deduce from constructor arguments only since C++17, and interviews expect the explicit form.`,
+    },
+    {
+      type: 'code',
+      lang: 'cpp',
+      title: 'A 10-line Stack<T>',
+      code: `#include <vector>
+
+template <typename T>
+class Stack {
+    std::vector<T> data;
+public:
+    void push(const T& x) { data.push_back(x); }
+    void pop()            { data.pop_back(); }
+    const T& top() const  { return data.back(); }
+    bool empty() const    { return data.empty(); }
+};
+
+Stack<int> ints;       // compiler stamps out Stack-of-int
+Stack<double> prices;  // a second, unrelated class`,
+      annotations: {
+        3: 'One template line covers the whole class body — every T inside is replaced at instantiation.',
+        7: 'const T& — pass by reference-to-const. T might be a 10MB string; never force a copy in a template, you do not know how big T is.',
+        14: 'Different T, different class. Stack<int>* cannot point at a Stack<double> — there is no family tree, just two stamps from one stencil.',
+      },
+    },
+    {
+      type: 'note',
+      md: 'Templates can also take **values**, not just types: in `std::array<int, 5>` the 5 is a **non-type template parameter** — a compile-time constant baked into the type. `array<int, 5>` and `array<int, 6>` are entirely different types. That is how `std::array` lives on the stack with zero overhead: the size is part of the type, so there is no allocation and no runtime size field.',
+    },
+    {
+      type: 'intuition',
+      title: 'Lambdas: a function born at the point of use',
+      md: `You need a one-line "is this small?" test, used exactly once, three lines below. Naming it and parking it at file scope is bureaucracy. A **lambda** is a function you write inline, right where it is needed.
+
+- Full syntax: \`[capture](params) -> ret { body }\`. The \`-> ret\` part is usually omitted — the compiler deduces the return type.
+- The interesting part is \`[capture]\`: a lambda can take local variables WITH it.
+- \`[counter]\` — capture by value: copy the variable into the lambda, right now.
+- \`[&counter]\` — capture by reference: store an arrow to the variable; the lambda sees it live.
+- Copy vs arrow is the whole game. Choose wrong and you get the classic C++ bug — drawn out in the next visual.`,
+    },
+    {
+      type: 'code',
+      lang: 'cpp',
+      title: 'Capture by value, by reference, and mutable',
+      code: `int main() {
+    int counter = 0;
+
+    auto byVal = [counter]() { return counter; };
+    auto byRef = [&counter]() { return counter; };
+    auto tick  = [counter]() mutable { return ++counter; };
+
+    counter = 100;
+
+    int a = byVal();   // 0   -- the copy was stamped at creation
+    int b = byRef();   // 100 -- the arrow sees the live variable
+    int c = tick();    // 1   -- increments the COPY; counter is still 100
+}`,
+      annotations: {
+        4: 'Copy happens HERE, at the line the lambda is created — not when it is called. byVal owns a private int frozen at 0.',
+        5: '& means the closure stores a reference. Cheap (no copy), live (sees updates) — and it must never outlive counter.',
+        6: 'Value-captures are const inside the lambda by default. mutable unlocks them — you are editing the lambda\'s own copy, never the original.',
+        12: 'tick() again would return 2 — the copy persists between calls, like private state. The outer counter never moves.',
+      },
+    },
+    {
+      type: 'visual',
+      component: 'PointerBoxDiagram',
+      props: {
+        title: 'Lambda captures, drawn as boxes and arrows',
+        notice: 'By-value gets its own box. By-reference gets an arrow — and an arrow can outlive the box it points at.',
+        leftLabel: 'names in scope',
+        rightLabel: 'storage',
+        frames: [
+          {
+            note: 'makeTicker() runs. Its local int counter lives in a box that dies when the function returns.',
+            stack: [{ name: 'counter', to: 'loc' }],
+            heap: [{ id: 'loc', value: 'int 7', label: 'local of makeTicker()' }],
+          },
+          {
+            note: '[counter] copies. The closure gets its OWN box, stamped with 7 at creation. The two boxes are strangers from now on.',
+            stack: [
+              { name: 'counter', to: 'loc' },
+              { name: 'byVal = [counter]', to: 'copy' },
+            ],
+            heap: [
+              { id: 'loc', value: 'int 7', label: 'local of makeTicker()' },
+              { id: 'copy', value: 'int 7', label: 'lambda closure' },
+            ],
+          },
+          {
+            note: '[&counter] copies nothing. The closure stores an arrow to the local. Cheap — but the closure does not own that box.',
+            stack: [
+              { name: 'counter', to: 'loc' },
+              { name: 'byVal = [counter]', to: 'copy' },
+              { name: 'byRef = [&counter]', to: 'loc' },
+            ],
+            heap: [
+              { id: 'loc', value: 'int 7', label: 'local of makeTicker()' },
+              { id: 'copy', value: 'int 7', label: 'lambda closure' },
+            ],
+          },
+          {
+            note: 'makeTicker() returned; the caller kept both lambdas. byVal still owns its copy — safe. byRef\'s arrow points at a dead box: calling it now is undefined behavior.',
+            stack: [
+              { name: 'byVal', to: 'copy' },
+              { name: 'byRef', to: 'loc', danger: true },
+            ],
+            heap: [
+              { id: 'loc', value: 'int 7', freed: true },
+              { id: 'copy', value: 'int 7', label: 'lambda closure' },
+            ],
+          },
+        ],
+      },
+    },
+    {
+      type: 'note',
+      md: '`[=]` captures every variable the body uses by value; `[&]` captures them all by reference. Treat both with suspicion: they hide WHAT the lambda took, and `[&]` in any lambda that outlives the current scope — stored callback, thread, returned value — is the dangling bug from the diagram, written invisibly. Extra trap: inside a member function, `[=]` copies the `this` *pointer*, so the object itself is effectively captured by reference in disguise. Explicit capture lists document themselves; save blanket captures for short-lived, same-scope lambdas.',
+    },
+    {
+      type: 'note',
+      md: 'Every lambda expression has its own unique, unnameable type — that is why you store one with `auto`. `auto f = lambda` keeps the exact closure type: zero overhead, calls can inline. `std::function<int(int)>` can hold ANY callable with that signature via **type erasure** (hiding the concrete type behind one uniform interface) — the price is an indirect call on every invocation and possibly a heap allocation for large captures. Rule: `auto` or a template parameter by default; `std::function` only when one variable must hold *different* callables — a callback registry, a vector of handlers.',
+    },
+    {
+      type: 'intuition',
+      title: 'Where lambdas actually live: next to the STL',
+      md: `STL algorithms are half a sentence. \`sort\` needs to know "which comes first?"; \`find_if\` needs "does this one count?". Lambdas are the other half.
+
+- A **comparator** answers: should \`a\` come strictly before \`b\`? Return \`true\` = yes.
+- \`[](int a, int b) { return a > b; }\` → bigger comes first. Descending sort, one line.
+- A **predicate** answers yes/no for one element: \`find_if\` returns the first yes, \`count_if\` counts the yeses.
+- Need a local variable inside the test? Capture it — this is exactly what captures are for.
+- One rule with teeth: a comparator must be a **strict weak ordering** — equal elements must return \`false\`. Write \`<=\` and \`sort\` can literally crash.`,
+    },
+    {
+      type: 'code',
+      lang: 'cpp',
+      title: 'The idiomatic pairing: sort, find_if, count_if',
+      code: `#include <algorithm>
+#include <vector>
+
+int main() {
+    std::vector<int> v = {42, 7, 19, 3, 88};
+
+    std::sort(v.begin(), v.end(),
+              [](int a, int b) { return a > b; });   // 88 42 19 7 3
+
+    auto hit = std::find_if(v.begin(), v.end(),
+                            [](int x) { return x < 10; });   // -> the 7
+
+    int limit = 20;
+    int below = std::count_if(v.begin(), v.end(),
+                              [limit](int x) { return x < limit; });   // 3
+
+    auto desc = [](const auto& a, const auto& b) { return a > b; };
+    std::sort(v.begin(), v.end(), desc);   // same lambda, ANY comparable type
+}`,
+      annotations: {
+        8: 'Comparator contract: return true means a goes before b. With >, big elements win the front — descending. Never use <= here.',
+        11: 'find_if returns an iterator to the first element passing the test — or v.end() if none did. Always check against end() before dereferencing.',
+        15: 'limit is a local, so the lambda must capture it — [limit] copies it in. Captureless brackets [] would not compile.',
+        17: 'auto parameters make a generic lambda: the compiler templates operator() and stamps a version per argument type. A lambda-shaped function template.',
+      },
+    },
+    {
+      type: 'note',
+      md: 'The module in three sentences. A **template** is a compile-time stencil: the compiler stamps one concrete function or class per type used, deducing T from the arguments when they agree and taking `myMax<double>` when they do not. A **lambda** is an inline function object that can capture locals — by value (a copy, safe to keep) or by reference (an arrow, fast, must never outlive its box). Together they are the STL\'s engine: containers are class templates, algorithms are function templates, and your lambdas fill in the customization holes.',
+    },
+  ],
+  quiz: [
+    {
+      question: 'myMax(3, 4.5) fails to compile. Why?',
+      options: [
+        {
+          text: 'C++ cannot compare an int with a double',
+          explanation: 'It can — with a conversion. The failure happens earlier, before any comparison: deduction cannot pick T.',
+        },
+        {
+          text: 'Deduction needs one answer for T, and the arguments say int AND double',
+          explanation: 'Correct. Both parameters are declared T, both arguments vote, and the votes conflict. Deduction never converts to break a tie — it fails.',
+        },
+        {
+          text: 'Templates only work with class types',
+          explanation: 'int and double instantiate templates perfectly well — the whole STL runs on it.',
+        },
+        {
+          text: 'You must always write the type explicitly for templates',
+          explanation: 'Deduction handles same-type arguments fine — myMax(3, 7) needs no angle brackets. Explicit T is only the tiebreaker.',
+        },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'A function template gets called with int, double, and std::string across your codebase. What lands in the compiled binary?',
+      options: [
+        {
+          text: 'One flexible function that checks the argument type at runtime',
+          explanation: 'Templates have zero runtime machinery — no type checks, no dispatch. Everything is settled at compile time.',
+        },
+        {
+          text: 'Three separate concrete functions, generated at compile time',
+          explanation: 'Correct. Each distinct T is an instantiation — a real, independent function. This is also why heavy template use grows binaries.',
+        },
+        {
+          text: 'Nothing — templates are compile-time only, so no code is emitted',
+          explanation: 'Half right: the template DEFINITION emits nothing. But every instantiation emits real, callable machine code.',
+        },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'A function creates a local x, returns a [&x] lambda, and the caller invokes it. What happens?',
+      options: [
+        {
+          text: 'A compile error — the compiler rejects escaping references',
+          explanation: 'It compiles clean (a warning at best). Lifetime tracking is your job in C++ — the compiler does not prove lambda lifetimes.',
+        },
+        {
+          text: 'The lambda keeps x alive as long as it needs it',
+          explanation: 'That is garbage-collected-language thinking. A C++ reference never extends a lifetime; the stack slot dies on return regardless.',
+        },
+        {
+          text: 'Undefined behavior — the closure holds a reference to a dead stack slot',
+          explanation: 'Correct. The classic dangling capture: it may "work" in a demo because the bytes are still there, then crash in production. Capture by value to escape a scope.',
+        },
+      ],
+      correct: 2,
+    },
+    {
+      question: 'auto f = [count]() { return ++count; }; fails to compile. Why?',
+      options: [
+        {
+          text: 'Value-captures are const inside the lambda by default; mutable unlocks them',
+          explanation: 'Correct. Add mutable after the parameter list and ++count compiles — mutating the lambda\'s private copy, never the original.',
+        },
+        {
+          text: 'Lambdas can never modify any variable',
+          explanation: 'A [&count] lambda mutates the original freely. Only by-value captures are const-locked by default.',
+        },
+        {
+          text: 'count was never captured',
+          explanation: 'It was — [count] is a valid by-value capture. The error is about constness, not visibility.',
+        },
+      ],
+      correct: 0,
+    },
+    {
+      question: 'auto f = someLambda; versus std::function<int(int)> g = someLambda; — the real difference?',
+      options: [
+        {
+          text: 'g is faster because std::function is optimized by the standard library',
+          explanation: 'Backwards. std::function adds a layer; it cannot be faster than holding the exact type.',
+        },
+        {
+          text: 'auto keeps the exact closure type (zero overhead, inlinable); std::function type-erases (indirect call, possible heap allocation)',
+          explanation: 'Correct. Type erasure buys flexibility — one variable, many callables — and pays with indirection. Default to auto; reach for std::function when storing heterogeneous callbacks.',
+        },
+        {
+          text: 'No difference — std::function is just the official name for auto',
+          explanation: 'They are entirely different: auto deduces the unique closure type; std::function is a wrapper class that hides it.',
+        },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'In std::sort(v.begin(), v.end(), [](int a, int b) { return a > b; }), what does the comparator mean?',
+      options: [
+        {
+          text: 'Return true means a should come BEFORE b — so this sorts descending',
+          explanation: 'Correct. The comparator answers "does a go strictly first?". With >, bigger elements claim earlier positions.',
+        },
+        {
+          text: 'Return true tells sort to swap a and b',
+          explanation: 'It is an ordering question, not a swap command — sort decides its own swaps from the answers.',
+        },
+        {
+          text: 'It sorts ascending — that is what sort always does',
+          explanation: 'Default sort (no comparator) is ascending via <. Passing > is precisely how you flip it.',
+        },
+      ],
+      correct: 0,
+    },
+    {
+      question: 'In std::array<int, 5>, what is the 5?',
+      options: [
+        {
+          text: 'A constructor argument evaluated at runtime',
+          explanation: 'No constructor involved — by then it is too late. The 5 is settled at compile time, inside the type itself.',
+        },
+        {
+          text: 'A non-type template parameter — a compile-time constant baked into the type',
+          explanation: 'Correct. array<int, 5> and array<int, 6> are different types. That is why std::array needs no allocation and no runtime size field.',
+        },
+        {
+          text: 'The largest value the array is allowed to hold',
+          explanation: 'It is the element count, not a value bound.',
+        },
+      ],
+      correct: 1,
+    },
+  ],
+  interviewQuestions: [
+    {
+      question: 'The compiler sees myMax(3, 7). Walk me through what happens, precisely.',
+      answer:
+        'Three steps, all at compile time. (1) **Deduction**: both parameters are T, both arguments are int, so T = int — consistent, accepted. (2) **Instantiation**: the compiler generates a concrete function int myMax(int, int) from the stencil and fully type-checks it for int. (3) **Reuse**: every later myMax call with two ints binds to that same instantiation; a double call would stamp a second, independent function. Key sentence: a template is compile-time code generation — by runtime there is no template left, only ordinary functions.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Templates vs virtual functions — both give "one interface, many types". Compare them.',
+      answer:
+        'Static vs dynamic polymorphism. Templates: types resolved at compile time, direct (inlinable) calls, zero dispatch overhead — but one code copy per type (binary growth), all types must be known at compile time, and errors surface at instantiation. Virtual functions: one function body, works with types chosen at runtime (plugins, heterogeneous containers of Base*), smaller binary — but every call pays a vtable indirection and can rarely inline. Rule of thumb: templates when the type set is closed at compile time and speed matters (STL); virtual when the type arrives at runtime. Saying "STL chose templates, not inheritance, exactly for this" lands well.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Case: your team templated a serialization library. Forty instantiated types later, build time doubled and the binary tripled. Explain what happened and give mitigations.',
+      answer:
+        'Cause: every translation unit that uses the template instantiates it for every type it touches — 40 types times N source files of compile work, and 40 concrete copies of every function in the binary. Mitigations, in order: (1) **explicit instantiation** — instantiate once in one .cpp, declare extern template elsewhere, killing the duplicate compile work; (2) **thin template idiom** — hoist type-independent logic (buffer management, framing) into a non-template core the thin templated layer calls, so per-type code shrinks to what genuinely varies; (3) **type-erase at the API boundary** (std::function or an interface) — accepting one indirect call to collapse 40 instantiations into one path. Tradeoff to name: each step trades raw speed or flexibility for build time and binary size — measure before choosing.',
+      isCaseBased: true,
+    },
+    {
+      question: 'Capture by value vs capture by reference: how do you choose?',
+      answer:
+        'By lifetime first, cost second. By value: the closure owns a copy — safe to store, return, or ship to a thread; cost is the copy (matters for big objects — consider capturing a move or a shared_ptr). By reference: free and live — but the closure must die before the captured variable does. Decision rule: if the lambda crosses ANY lifetime boundary (returned, stored in a callback registry, passed to a thread), capture by value; if it is consumed immediately in the same scope (STL algorithm calls), by reference is fine and idiomatic. Blanket [=]/[&] hide the decision — explicit lists keep it visible in review.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Case: production crash. A setup function registers a [&config] lambda into a long-lived event bus. The service crashes intermittently, hours after startup. Diagnose it.',
+      answer:
+        'Dangling capture. config was a local of the setup function; setup returned long ago, and the closure kept a reference into that dead stack frame. When the event fires, the lambda reads freed stack memory — intermittent because the slot sometimes still holds plausible bytes (works in the demo, dies under load). Diagnosis: ASan/UBSan flags stack-use-after-return instantly; code review greps for [&] in anything stored. Fixes: capture by value ([config], a copy — pay memory, gain safety); if the state must be shared and mutable, capture a shared_ptr so ownership travels with the closure. Rule to state: & in a stored callback is guilty until proven innocent.',
+      isCaseBased: true,
+    },
+    {
+      question: 'What IS a lambda, under the hood?',
+      answer:
+        'Compiler-generated class. Each lambda expression produces an unnamed class (the closure type): captures become member variables ([counter] → an int member, [&counter] → a reference member), the body becomes operator(), and the object you get is one instance. mutable simply makes operator() non-const, allowing it to modify the members. Consequences that fall out for free: each lambda has a unique type (hence auto), value-captures persist between calls (private state), and a captureless lambda can convert to a plain function pointer since it has no members. Interviewers love this because it turns "magic syntax" into a class you could write by hand.',
+      isCaseBased: false,
+    },
+    {
+      question: 'When would you store a lambda in std::function despite the cost — and what exactly is the cost?',
+      answer:
+        'Cost: type erasure — an indirect call on every invocation (no inlining) and a possible heap allocation when the captures outgrow the small-buffer optimization. Worth paying when one variable must hold different callables over its life: a callback registry, a vector<std::function<...>> of handlers, a pluggable strategy chosen at runtime, or an API boundary that must not leak concrete types (headers, ABI). Not worth paying inside hot loops or when a template parameter can carry the exact type. The one-line tradeoff: std::function buys uniformity with indirection; auto and templates buy speed with type rigidity.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Why must a sort comparator be a strict weak ordering — and what happens if you write <=?',
+      answer:
+        'The comparator answers "is a strictly before b?". With <=, two equal elements answer true both ways — the comparator claims a is before b AND b is before a, which is a contradiction (violates irreflexivity: cmp(x, x) must be false). std::sort assumes the contract to skip bounds checks in its partitioning; a lying comparator makes it walk past buffer ends — real out-of-bounds crashes, not a wrong order. Rule to say: equal elements must return false; write < or >, never <= or >=. Same contract applies to the comparator you hand a map, set, or priority_queue.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Generic lambdas — what does [](auto x) generate, and when do you prefer one over a named function template?',
+      answer:
+        'auto parameters make the closure\'s operator() itself a template — the compiler stamps an instantiation per argument type, so all template economics (per-type codegen, instantiation-time errors) apply. Prefer a generic lambda for short, local, single-use callables — comparators and predicates fed straight to algorithms, where locality beats ceremony. Prefer a named function template when the callable is reused across files, needs documentation and tests, or needs explicit template arguments and overloads. Same machinery, different packaging: the choice is about scope and readability, not power.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Deduction picked the wrong type, or failed on mixed arguments. What are your options?',
+      answer:
+        'Four, in rising order of ceremony: (1) explicit template argument — myMax<double>(3, 4.5): local, readable, the default fix; (2) cast one argument — myMax(3.0, 4.5): fine for literals, noisy otherwise; (3) give the template two type parameters — template<typename A, typename B>: accepts mixed calls, but pushes the problem into choosing the return type (auto return lets the compiler derive it from the ?: expression); (4) constrain expectations with a static_assert or (C++20) a concept so the failure message says what you meant. Tradeoff to name: option 3 makes the template more accepting — which is not always a feature; explicit callsite intent (option 1) is often the clearest contract.',
+      isCaseBased: false,
+    },
+  ],
+  flashcards: [
+    {
+      front: 'Function template deduction fails on myMax(3, 4.5) — why, and the fix?',
+      back: 'Both arguments vote for T and disagree (int vs double); deduction never converts to break ties. Fix: myMax<double>(3, 4.5) — you pick T, the 3 converts.',
+    },
+    {
+      front: 'What is a template instantiation?',
+      back: 'A separate, concrete, fully-compiled function/class the compiler stamps out per distinct T — at compile time. 10 types used = 10 real copies in the binary, zero runtime dispatch.',
+    },
+    {
+      front: 'Full lambda syntax',
+      back: '[capture](params) -> ret { body } — the -> ret is usually deduced. Under the hood: a compiler-generated class; captures are members, the body is operator().',
+    },
+    {
+      front: '[x] vs [&x]',
+      back: '[x] copies x into the closure at creation (safe to store/return). [&x] stores a live reference — cheap, sees updates, and dangles if the lambda outlives x.',
+    },
+    {
+      front: 'mutable lambda',
+      back: 'Value-captures are const inside the lambda by default; mutable makes operator() non-const. You mutate the closure\'s private COPY — the original never changes.',
+    },
+    {
+      front: 'auto vs std::function for storing a lambda',
+      back: 'auto keeps the exact closure type: zero overhead, inlinable. std::function type-erases: indirect call + possible heap allocation. Use std::function only to hold different callables in one slot.',
+    },
+    {
+      front: 'How to read a 100-line template error',
+      back: 'First error only — the rest is fallout. Inside it, find the innermost type named: that is what broke the recipe. "Required from here" points at your call.',
+    },
+    {
+      front: 'Sort comparator contract',
+      back: 'Return true = a goes strictly BEFORE b. Must be a strict weak ordering: equal elements return false. Writing <= breaks sort\'s invariants — real crashes, not just wrong order.',
+    },
+    {
+      front: 'Non-type template parameter',
+      back: 'A compile-time VALUE in the type: std::array<int, 5>. array<int, 5> and array<int, 6> are different types — size lives in the type, so no allocation, no runtime size field.',
+    },
+  ],
+  mindmapMarkdown: `- Templates & Lambdas
+  - Function templates
+    - template<typename T>: one recipe
+    - deduction reads the arguments
+    - mixed args → myMax<double>(3, 4.5)
+  - Compile-time codegen
+    - one concrete function per type
+    - binary-size cost
+    - errors: first error, innermost type
+  - Class templates
+    - Stack<T> wrapping vector<T>
+    - Stack<int> ≠ Stack<double>
+    - non-type params: array<int, 5>
+  - Lambdas
+    - [capture](params) -> ret { body }
+    - [x] copy now, [&x] live arrow
+    - [&] outliving scope = dangling
+    - mutable edits the copy
+    - store: auto exact, std::function erases
+  - Lambdas + STL
+    - comparator: true = a goes first
+    - strict weak ordering, never <=
+    - find_if / count_if predicates
+    - auto params = generic lambda`,
+}
+
+export default m

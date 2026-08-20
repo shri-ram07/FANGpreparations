@@ -1,0 +1,629 @@
+import type { Module } from '../types'
+
+const m: Module = {
+  id: 'sysdesign-l2-case-notification-idgen',
+  subjectId: 'sysdesign',
+  level: 2,
+  title: 'Case Studies: Notification System, Rate Limiter & Distributed ID Generator',
+  whyItMatters:
+    'These three show up as full 45-minute rounds and as the follow-up question inside every other design ("how do you not double-charge on a retry?", "how do you cap this API?", "what is the primary key?"). They are also the cheapest rounds to fail, because each has one non-obvious core: a notification system is really an idempotency problem, a rate limiter is really a distributed-counter problem, and an ID generator is really a clock problem. Learn the three cores and you can rebuild all three designs from scratch at the whiteboard.',
+  estMinutes: 60,
+  sections: [
+    {
+      type: 'intuition',
+      title: 'Three designs, one method',
+      md: `Each part below runs the same loop: **requirements → estimation and API → data model → architecture → deep-dive → bottlenecks and tradeoffs**. Nothing else.
+
+- Read the requirements paragraph, then **stop and attempt the step yourself** before reading the answer. The reveal is worth much less than the attempt.
+- These are compact case studies, not the full 45-minute treatment. The point is the *core insight* of each, plus the numbers you would say out loud.
+- Each core in one line: notification = **do not send twice**; rate limiter = **one counter, many machines**; ID generator = **the clock lies**.
+- Numbers over adjectives. When you say "high throughput", an interviewer hears nothing. When you say "4.1 million ids per second per node", they hear an engineer.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Part A — Notification system: pin the requirements first',
+      md: `*Attempt first: list five functional and four non-functional requirements for "send notifications to our 100M users".* Then compare with this.
+
+**Functional**
+- Send over four channels: **push** (mobile), **SMS**, **email**, **in-app** (a row in your own DB the client polls).
+- Two traffic classes: **transactional** (a payment receipt, a 2FA code — one user, must arrive) and **bulk** (a marketing blast to 50M users — best effort).
+- Respect **user preferences**: per-channel opt-out, per-category opt-out, and **quiet hours** (no push at 3am local time).
+- **Templates**: the caller sends \`template_id\` + variables, not a rendered string, so copy and localization change without a deploy.
+
+**Non-functional**
+- **Reliability**: a payment receipt must not be lost. Losing a marketing email is fine — say the difference out loud, it is the whole design.
+- **No duplicates**: a retried job must not send twice.
+- Survive a **third-party provider outage** (APNs, Twilio, SES all have bad days).
+- Latency: transactional in seconds, bulk in minutes-to-hours. Two different SLAs in one system.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Estimate, then draw the API',
+      md: `100M users, ~2 notifications per user per day = **200M/day**.
+
+- Average: 200,000,000 / 86,400 ≈ **2,300 notifications/sec**. Peak at 5–10× average ≈ **20,000/sec**. That is a modest number — a handful of worker boxes, not a datacenter.
+- Storage: a delivery record of ~500 bytes × 200M/day = **100 GB/day**. Keep 30 days hot (3 TB) and archive the rest — this alone justifies a separate delivery-log store, not your main OLTP database.
+- One API, deliberately thin: \`POST /v1/notifications\` with \`{user_id, template_id, channels, params, priority, dedup_key}\` → **202 Accepted** plus a \`notification_id\`.
+- 202, not 200. The API only **validates and enqueues**; it never talks to Apple or Twilio on the request path. A third-party timeout must never become your caller's timeout.
+- \`GET /v1/notifications/{id}\` returns the per-channel status. \`dedup_key\` is the caller's idempotency handle — the deep-dive below.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Part A — data model: four stores, and why they are not one',
+      md: `*Attempt first: name the tables this needs, then for each one name the single query it exists to serve. If a table has no query, you invented it.*
+
+- **notification** (the message row, OLTP — Postgres or DynamoDB, sharded by \`user_id\`): \`notification_id\` (Snowflake, so it sorts by creation time for free), \`user_id\`, \`channel\`, \`template_id\`, \`template_version\`, \`dedup_key\`, \`state\` (queued → sending → accepted → failed), \`provider_message_id\`, \`created_at\`, \`updated_at\`. \`provider_message_id\` is the only thread back to the vendor when support asks "did this actually go out?".
+- **Its three indexes, one query each.** A **unique** index on \`dedup_key\` — that constraint *is* the idempotency mechanism, not a convention; the atomic insert either wins or tells you the job already exists. A \`(user_id, created_at DESC)\` index for \`GET /v1/notifications\` and the in-app inbox. A \`(state, updated_at)\` index for the sweeper that finds rows stuck in \`sending\` — jobs whose worker died mid-flight.
+- **preferences + quiet hours** (key-value — Redis or DynamoDB, keyed by \`user_id\`): channel opt-ins, per-category mutes, quiet-hour window, and the **IANA timezone name**, never a fixed UTC offset — an offset is wrong twice a year. One single-key read, no joins, on the send path at ~20,000/sec peak. It is a separate store because it is read on *every* send and written almost never.
+- **templates** (\`template_id\` + version → per-channel bodies): tiny, read-mostly, cached in-process with a short TTL. Versioned so a job queued an hour ago renders the copy it was queued with, not whatever marketing edited since.
+- **delivery-event log** (append-only): \`(notification_id, channel, event, provider_code, at)\` — one row per state change and per provider callback. **Append-only means never updated**, so there are no row locks, no read-modify-write, and writes never contend with the OLTP path. It goes out through the queue to object storage and a warehouse, with ~30 days kept hot for support.
+- **Why the log does not live in the OLTP store**: 200M notifications/day is several hundred million event rows/day at ~500 bytes ≈ **100 GB/day, 3 TB for 30 days**. Putting write-once analytical rows in the same store that serves your \`dedup_key\` uniqueness check bloats the index your idempotency depends on, for queries ("what was our SMS accept rate in March?") that a warehouse answers better and cheaper.`,
+    },
+    {
+      type: 'intuition',
+      title: 'The architecture: one API, N queues, N worker pools',
+      md: `The request path is short on purpose; everything slow happens behind a queue.
+
+1. **Notification API** — auth, schema validation, and the dedup check. Enqueues, returns 202.
+2. **Preference / opt-out store** — consulted **before** sending, never after. A key-value lookup on \`user_id\` returning channel opt-ins, category mutes, quiet-hour window and timezone. Sending to an opted-out user is a legal problem (GDPR, TCPA, CAN-SPAM), not a bug report.
+3. **Template service** — renders \`template_id\` + params into per-channel bodies (a push has 178 characters, an email has HTML). Versioned, so an in-flight job renders the template it was queued with.
+4. **One queue per channel** — push, SMS, email, in-app. Each with a **priority lane** inside it.
+5. **Per-channel workers** — pull, render, call the provider adapter, write the delivery record.
+6. **Provider adapters** — one thin class per vendor (APNs, FCM, Twilio, SES) behind a common interface, so failover is a config change and not a rewrite.
+
+The order in step 2 is a real interview trap: check preferences **before** you enqueue *and* again in the worker. A user can opt out in the minutes a bulk job sits in the queue.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Why a queue PER channel — and a priority lane inside each',
+      md: `One shared queue looks simpler and fails in three separate ways.
+
+- **Different rate limits.** SES allows a few hundred emails/sec on a warmed domain; Twilio meters SMS per number (~1/sec on a long code); APNs will take tens of thousands/sec. One queue means one consumer rate — you either starve push or get throttled by SMS.
+- **Different latencies.** A push round trip is ~50 ms; an SMS submit is ~500 ms; an email with a large attachment is seconds. Shared workers means slow channels **head-of-line block** fast ones.
+- **Different failure modes.** APNs returns \`BadDeviceToken\` (permanent — delete the token, never retry). Twilio returns 429 (retry later). SES returns a hard bounce (permanent, and retrying damages your sender reputation). Retry policy is per channel, so the queue is per channel.
+- **Isolation.** Twilio going down should drain nothing but the SMS queue. In a shared queue, its retries poison every channel.
+- **Priority lanes**: within each channel, a *high* and a *bulk* queue with separate worker pools (or weighted consumption, e.g. 9 high : 1 bulk). A **2FA code must never queue behind a 50M-recipient marketing blast** — that is the single most quotable sentence in this case study.`,
+    },
+    {
+      type: 'visual',
+      component: 'PointerBoxDiagram',
+      props: {
+        title: 'One notification through the pipeline — including the bad day',
+        notice: 'Follow one payment receipt: enqueue, send, provider failure, failover, and the dead-letter queue.',
+        leftLabel: 'in flight',
+        rightLabel: 'system state',
+        frames: [
+          {
+            note: 'POST /v1/notifications arrives with dedup_key "pay-8891". The API checks the dedup store: unseen. It checks preferences: push is on, quiet hours are 23:00-07:00 local and it is 14:20 — allowed. It writes the record, enqueues to the push HIGH lane, and returns 202 in ~5 ms. It has not touched Apple.',
+            stack: [{ name: 'POST receipt (pay-8891)', to: 'q-push-high' }],
+            heap: [
+              { id: 'dedup', value: 'pay-8891 -> notif_991 (TTL 24h)', label: 'dedup store' },
+              { id: 'q-push-high', value: '[notif_991]', label: 'push queue — HIGH lane' },
+              { id: 'q-push-bulk', value: '[ 4.9M marketing jobs ]', label: 'push queue — BULK lane' },
+              { id: 'log', value: 'notif_991: queued', label: 'delivery log' },
+            ],
+          },
+          {
+            note: 'A HIGH-lane worker picks it up immediately. Note what it did NOT do: wait behind the 4.9M bulk jobs sitting in the other lane. Separate lanes, separate worker pools — this is the whole reason 2FA codes arrive during a marketing blast.',
+            stack: [{ name: 'worker-3 -> APNs', value: 'render + send' }],
+            heap: [
+              { id: 'q-push-high', value: '[ ]', label: 'push queue — HIGH lane (drained)' },
+              { id: 'q-push-bulk', value: '[ 4.9M marketing jobs ]', label: 'push queue — BULK lane (untouched)' },
+              { id: 'apns', value: 'timeout after 2s', label: 'primary provider — DEGRADED', danger: true },
+              { id: 'log', value: 'notif_991: sending', label: 'delivery log' },
+            ],
+          },
+          {
+            note: 'APNs times out. The worker does NOT ack the message, so it returns to the queue with an exponential backoff (1s, 2s, 4s, 8s + jitter). Meanwhile the health checker has seen 3 consecutive failures and flipped the adapter to the secondary path. The retry is redelivered — and the dedup key is what makes redelivery safe.',
+            stack: [{ name: 'retry #2 (backoff 2s)', to: 'fcm', danger: true }],
+            heap: [
+              { id: 'apns', value: 'unhealthy: 3/3 checks failed', label: 'primary — circuit open', danger: true },
+              { id: 'fcm', value: 'healthy', label: 'secondary provider — now active' },
+              { id: 'dedup', value: 'pay-8891 -> notif_991 (already sent? no)', label: 'dedup store — retry is safe' },
+              { id: 'log', value: 'notif_991: retrying (attempt 2)', label: 'delivery log' },
+            ],
+          },
+          {
+            note: 'Secondary accepts it: status "accepted by provider" — which is NOT "seen by human". A sibling job for a deleted app exceeded 5 attempts and went to the dead-letter queue: it is not lost, it is parked for a human and for alerting. A DLQ filling up is your best early signal that a provider or a template broke.',
+            stack: [{ name: 'ack + record', value: 'accepted by FCM' }],
+            heap: [
+              { id: 'log', value: 'notif_991: accepted (fcm, 2 attempts)', label: 'delivery log — best-effort truth' },
+              { id: 'dlq', value: '[notif_882: BadDeviceToken x5]', label: 'dead-letter queue — parked, alerting', danger: true },
+              { id: 'q-push-bulk', value: '[ 4.9M marketing jobs ]', label: 'bulk lane still grinding' },
+            ],
+          },
+        ],
+      },
+    },
+    {
+      type: 'note',
+      md: `**Provider failover, concretely.** Each channel gets a primary and a secondary vendor behind the same adapter interface (push: APNs/FCM; SMS: Twilio/Vonage; email: SES/SendGrid). A health checker tracks the rolling error rate and latency per provider; N consecutive failures opens a **circuit breaker** and routes new sends to the secondary, with a trickle of probe traffic to detect recovery. Two honest costs nobody volunteers: (1) you must keep both vendors warmed and pre-registered — an SMS sender ID or a warmed email domain takes weeks to provision, so "we will fail over" only works if you set it up months earlier; (2) two providers means two delivery-receipt formats, two throttling behaviours, and double the integration surface to test. For a low-volume startup, "retry harder and wait" is the correct, boring answer.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Deep-dive 1: idempotency — the receipt that must not send twice',
+      md: `At-least-once delivery is the only thing a queue can cheaply promise. Which means **your worker will run twice**, sooner or later: an ack lost on the network, a worker killed after sending but before acking, a client retrying a 504.
+
+- The caller supplies a **dedup_key** (\`payment:8891:receipt\`). The API does an atomic insert of that key: succeeded → this is new; already exists → return the existing \`notification_id\` and enqueue nothing.
+- That makes the **API** idempotent. The **worker** needs its own guard: before calling the provider, atomically claim the job (\`UPDATE ... SET state='sending' WHERE state='queued'\` — zero rows updated means somebody else has it).
+- Push adapters help: APNs accepts an \`apns-collapse-id\`, and most vendors accept a client-supplied message id they de-duplicate on. Use it — belt and braces.
+- The gap you cannot close: the worker sends, then dies before recording it. On retry it cannot tell "sent" from "not sent". Every at-least-once system has this window; you shrink it by recording *intent* before sending, and you accept a rare duplicate over a lost receipt.
+- **Say the choice out loud**: for a payment receipt, a rare duplicate is embarrassing; a missing one is a support ticket and possibly a regulator. Choose duplicates. For an SMS that costs money per send, weight it differently.
+- This is the resilience module's idempotency-key pattern applied to one concrete system — same mechanism, same tradeoff.`,
+    },
+    {
+      type: 'note',
+      md: `**Notification fatigue is a rate-limiting problem, and the limit belongs in the send path.** Beyond legal opt-outs, cap per user per category — say 3 pushes/hour, 10/day — and **collapse** rather than drop where you can ("5 new messages" instead of five notifications). Enforce it in the worker with the same token bucket you would use for an API, keyed by \`(user_id, category)\`. It is not a nicety: uninstall rate is the metric that punishes over-notifying, and once a user disables push at the OS level you have lost the channel permanently — there is no appeal. Quiet hours are the same mechanism on a clock: hold, do not drop, and deliver at the window's open (with a cap on how stale a held notification may be before it is pointless).`,
+    },
+    {
+      type: 'intuition',
+      title: 'Deep-dive 2: fan-out — a broadcast to 50 million people',
+      md: `*Attempt first: "send this announcement to all 50M users" arrives as one API call. What breaks?*
+
+- The naive version is **one job that loops over 50M rows**. At 500 sends/sec that job runs for 100,000 seconds — **27.7 hours**. Worse, it is a single point of failure: a worker crash at hour 20 leaves you with no idea what was sent.
+- The fix is **chunking**: a lightweight *fan-out job* pages the recipient list (keyset pagination on \`user_id\`, never \`OFFSET\`) and emits one **chunk job per 50,000 recipients** → 1,000 chunk jobs.
+- With 200 bulk workers: 1,000 jobs / 200 = 5 rounds × (50,000 / 500) 100 s ≈ **8.3 minutes**, and a crashed worker loses one 50k chunk that is simply redelivered.
+- Chunk jobs go to the **bulk lane** so transactional traffic overtakes them. Add a global send rate cap so the blast does not saturate your provider quota and get your transactional traffic throttled alongside it.
+- Precompute the recipient list into a materialized segment (a file in blob storage or a snapshotted table) before fan-out starts. Querying live user tables 1,000 times during a blast is how a notification feature takes the main database down.
+- Same shape as the Twitter feed fan-out: **big list + small unit of work + idempotent chunks**. Different domain, identical structure — say that in an interview.`,
+    },
+    {
+      type: 'note',
+      md: `**Be honest about delivery status.** Your pipeline has four states and only the first three are yours: *queued* → *sent* (you handed it to the provider) → *accepted* (the provider acked, e.g. APNs returned 200) → *delivered/opened* (a callback, if the channel even has one). What you never learn from push is whether a human saw it: APNs and FCM tell you the token was valid and the message was accepted, not that the device was online, not that the notification was displayed, and certainly not that it was read. Email gives you bounces and (unreliable) open-tracking pixels; SMS gives you carrier delivery receipts that some carriers fake. So: track per-channel status, alert on *accept-rate* drops, and never build a product feature that claims "delivered" from push data. The interview-grade phrasing is **"push delivery is best-effort; I get acknowledged-by-provider, not seen-by-human."**`,
+    },
+    {
+      type: 'intuition',
+      title: 'Part A — bottlenecks and tradeoffs',
+      md: `Where this design hurts, gathered in one place. Say these before the interviewer finds them.
+
+- **Your throughput ceiling is the vendor's, not your fleet's.** A Twilio long code meters at roughly **1 SMS/sec**; SES on a warmed domain does a few hundred/sec; APNs does tens of thousands/sec. Adding workers past the vendor quota buys nothing and earns you a 429. Failover doubles the integration surface — two receipt formats, two throttling behaviours — and only works if the secondary was warmed **weeks in advance** (an SMS sender ID or an email domain reputation is a lead time, not a config flag).
+- **Broadcast wall-clock is bounded by quota, not by workers.** 50M recipients at 500 sends/sec is 27.7 hours serial; 1,000 chunks of 50k across 200 workers is ~8.3 minutes. Doubling workers again does not halve that — the provider cap does, and a blast that saturates the quota gets your transactional traffic throttled alongside it.
+- **Fatigue caps trade a message today for the channel next month.** 3 pushes/hour and 10/day means some legitimate notification is collapsed or dropped. That is the right trade because an OS-level push disable is **permanent and has no appeal** — you lose the user forever, not for an hour.
+- **The sent-then-died window never closes.** At-least-once plus consumer idempotency is the ceiling; exactly-once across a third-party side effect does not exist. You choose which error to prefer, per notification type: duplicate over loss for a payment receipt, and the reverse for an SMS that costs money per send.
+- **Two preference checks cost a KV read per send** at ~20,000/sec peak. Worth it: the failure it prevents is regulatory (GDPR, TCPA, CAN-SPAM), not a latency regression, and a bulk chunk can sit in the queue for minutes while the user opts out.
+- **Delivery status is a number you cannot verify.** "Accepted by APNs" is the strongest claim available on push. Alert on accept-rate drops, and never ship a product feature that asserts "delivered" from provider data.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Part B — the rate limiter as a system (not as an algorithm)',
+      md: `The algorithms module covers token bucket, leaky bucket, fixed and sliding window — assume them and go straight to the part that is actually hard: **enforcing one limit from many machines.**
+
+*Attempt first: your API runs 10 instances behind a load balancer, and the limit is "100 requests/minute per API key". Each instance counts locally. What is the real limit?*
+
+- **1,000 requests/minute.** Each of the 10 instances happily allows 100. This is the entire problem in one number, and it gets worse as you autoscale — your limit silently changes with your instance count.
+- Requirements to state: limit per user / per API key / per endpoint; **added latency in single-digit milliseconds**; accurate enough that the backend is actually protected; and an explicit policy for what happens when the limiter's own store is down.
+- Note what is *not* required: perfect accuracy. Allowing 103 requests instead of 100 harms nobody. Allowing 1,000 does. Design for the right precision, not the maximum.`,
+    },
+    {
+      type: 'intuition',
+      title: 'The shared-counter solutions, cheapest to most exact',
+      md: `- **Centralized Redis + an atomic script.** All instances increment one counter keyed by \`(api_key, window)\`. It must be atomic: a read-then-write from 10 instances races and undercounts. Use a Lua script (or \`INCR\` + \`EXPIRE\` in one round trip) so check-and-consume is a single operation. Cost: **one network hop per request** — ~0.5–1 ms in-datacenter, added to every single request, plus Redis becomes a dependency of your entire API.
+- **Local token bucket + periodic sync.** Each instance keeps its own bucket holding \`limit / instance_count\` tokens and reconciles with the shared store every few hundred milliseconds. Cost: **approximate** — an instance can briefly overshoot, and uneven load balancing means one instance exhausts its share while another sits on unused tokens. Buys: zero added latency on the hot path. This is what you use at hundreds of thousands of QPS, and what CDN-edge limiters do by necessity.
+- **Sticky routing.** Hash the API key at the load balancer so all of one key's traffic lands on one instance, which can then count locally and exactly. Cost: it breaks on rebalancing and makes hot keys a hotspot — real, but niche.
+- The tradeoff sentence: **exactness costs a network hop; skipping the hop costs exactness.** Pick per endpoint — exact Redis counting for expensive endpoints (password reset, payment), local approximation for the high-volume cheap ones.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Where to enforce it, and what to send back',
+      md: `- **At the API gateway / edge**: one place to configure, and rejected traffic never reaches your services — the whole point is to *not* spend backend capacity on requests you will refuse. Blind spot: the gateway does not know per-tenant business context ("this customer's plan allows 10× on this endpoint").
+- **In the service**: full context, per-endpoint cost weighting (a search costs 10 tokens, a health check 1) — but the request already consumed a connection, a thread, and a trip through your mesh before being rejected.
+- Real systems do **both**: a coarse, cheap IP/key limit at the edge to absorb floods, and a business-aware limit in the service. Say "defence in depth" and mean it.
+- The response contract, and interviewers do check this: **HTTP 429 Too Many Requests**, plus \`Retry-After: 30\` (seconds, or an HTTP date) so a well-behaved client knows exactly when to come back.
+- Add the standard headers on **every** response, not just rejections, so clients can self-throttle before they get hit: \`X-RateLimit-Limit\`, \`X-RateLimit-Remaining\`, \`X-RateLimit-Reset\`. A limiter with no headers trains clients to hammer and hope.
+- Never return 503 for rate limiting. 429 means "you, slow down"; 503 means "we are broken" — clients and their retry logic treat them very differently.`,
+    },
+    {
+      type: 'note',
+      md: `**Fail open or fail closed? The best follow-up in this question.** Redis is down; your limiter cannot count. *Fail open* = allow everything. The product keeps working and nobody notices — until the unprotected backend gets a traffic spike or an abusive client and falls over too, turning a cache outage into a full outage. *Fail closed* = reject everything. Your backend is safe and your product is down; a limiter outage became a product outage, which is absurd for a component that exists to protect availability. There is no universally right answer — **it is a product decision, per endpoint**, and saying so is the senior signal. Sane default: fail **open** for ordinary read traffic (availability wins), fail **closed** for endpoints where an unlimited request is dangerous or expensive — login and password reset (credential stuffing), payments, anything that costs money per call, anything that fans out. Then add the mitigation that makes fail-open survivable: a conservative in-memory local limit that takes over when the shared store is unreachable, so you degrade to approximate limiting instead of to none.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Part B — bottlenecks and tradeoffs',
+      md: `- **The Redis hop is paid by every request, including the 99% you allow.** ~0.5–1 ms in-datacenter sounds free until you divide: on a 20 ms endpoint it is 5%, on a 2 ms cached endpoint it is **50%**. Always quote limiter overhead as a share of the endpoint it protects, never as an absolute.
+- **Fail open vs fail closed has no global answer.** Open keeps the product up and leaves the backend naked; closed protects the backend and takes the product down. Per-endpoint product decision — open for ordinary reads, closed for login, password reset and payments — with a conservative in-memory limiter as the degrade path so open means *approximate*, not *absent*.
+- **Sticky routing fights the load balancer.** Hashing the key gives exact local counting, and in exchange one hot key becomes one hot instance, and every deploy or autoscale event reshuffles keys and resets counters mid-window.
+- **Approximation overshoots under uneven load.** \`limit / instance_count\` assumes even distribution, which never holds: one instance burns its share while another sits on spare tokens, so you simultaneously under-enforce for some callers and under-serve others.
+- **You added a SPOF to protect availability.** Now every request depends on the limiter. Budget for it: replicate the store, keep the limiter client timeout **tighter** than the request budget (a limiter that hangs is strictly worse than one that is down), and rehearse the store-down path before it happens at peak.
+- **Precision is a cost, not a virtue.** 103 allowed instead of 100 harms nobody; 1,000 does. Buy the precision the endpoint actually needs and spend the savings on latency.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Part C — distributed ID generator: requirements',
+      md: `*Attempt first: 10,000 writes/sec across many services need primary keys. What must the id guarantee?*
+
+- **Unique** across the whole fleet, forever. No exceptions, no "rare" collisions.
+- **Roughly time-sortable**: sorting by id ≈ sorting by creation time. This buys cheap "newest first" feeds without a secondary index, and range queries by id.
+- **No coordination on the hot path**: generating an id must not require a network round trip. That rules out asking any central service per id.
+- **Small**: 64 bits, so it fits a \`BIGINT\` primary key and a Java \`long\`, and eight bytes are copied into every secondary index rather than sixteen.
+- **High throughput**: tens of thousands per second per node, millions cluster-wide, with no single bottleneck.
+- Note the tension you must resolve: *time-sortable* and *no coordination* and *unique* look incompatible — until you notice each node can contribute a field only it owns.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Why not auto-increment, and why not UUIDv4',
+      md: `- **Database auto-increment** gives you perfect ordering and tiny ids — and one machine that every insert in the company must talk to. That is a single point of **coordination** (the sequence must be serialized) and a single point of **failure**. It also cannot survive sharding: two shards both issuing "1" is a data-merge nightmare, and the usual patch (shard A does odd numbers, shard B even) collapses the day you add a third shard.
+- **UUIDv4** removes coordination completely — 122 random bits, collide never — and then hands you the bill: **128 bits** (double the storage in the table *and* in every secondary index, since indexes carry the primary key), and **no time ordering at all**.
+- The expensive part is what random ids do to a **clustered index** (the B+ tree that stores rows in primary-key order — see the DBMS indexing module). With sequential ids, every insert lands in the right-most leaf page: that page stays in memory, fills up, splits once cleanly, and moves on.
+- With random ids, each insert lands in a **random leaf page**. Two consequences: your buffer pool must hold the *whole* index to avoid a disk read per insert, and half-full pages split constantly.
+- A **page split** = the target leaf is full, so the database allocates a new page, moves half the rows across, and updates the parent — extra I/O, extra WAL, and permanent fragmentation. Pages end up ~50–70% full instead of ~95%, so the index is bigger, so less of it fits in memory, so more disk reads. It compounds.
+- Real measurements on MySQL/InnoDB routinely show random-UUID primary keys inserting several times slower than sequential ones, with a noticeably larger index. **This is the single most useful concrete fact in this whole part.**`,
+    },
+    {
+      type: 'intuition',
+      title: 'The Snowflake layout: 64 bits, four fields',
+      md: `Twitter's answer: **build the id locally from three things each node already knows.** No network call, and the fields are laid out so that the number sorts by time.
+
+1. **1 bit — unused sign bit**, always 0. Keeps the value positive in signed 64-bit types (Java \`long\`, Postgres \`BIGINT\`), which have no unsigned option. Cheap insurance against comparisons flipping.
+2. **41 bits — timestamp** in milliseconds since a **custom epoch** (your project's birthday, not 1970). Custom epoch matters: the clock starts at zero when your system launches, so you get the full span instead of donating decades to the past.
+3. **10 bits — machine id**: **1024** distinct id-generating nodes. This is the field that removes coordination — two nodes cannot collide because their ids differ in these bits no matter what.
+4. **12 bits — sequence**: **4096** ids per millisecond per node, reset every millisecond. This handles bursts within the same millisecond.
+
+- Total: 1 + 41 + 10 + 12 = **64 bits**. Sortability comes from the ordering: timestamp occupies the high bits, so comparing two ids as plain integers compares their timestamps first.
+- Honest caveat to volunteer: this is **roughly** sortable, not globally ordered. Two ids minted in the same millisecond on different nodes have an arbitrary relative order, and clocks across nodes differ by a few ms anyway. If you need a total order, you need consensus, not a bit layout.`,
+    },
+    {
+      type: 'math',
+      intro: 'Do this arithmetic out loud in the interview — it is where the design becomes credible.',
+      latex: [
+        '2^{41}\\ \\text{ms} = 2{,}199{,}023{,}255{,}552\\ \\text{ms} \\;\\approx\\; 69.7\\ \\text{years of custom epoch}',
+        '2^{10} = 1024\\ \\text{nodes} \\qquad 2^{12} = 4096\\ \\frac{\\text{ids}}{\\text{ms}} \\ \\text{per node}',
+        '4096 \\times 1000 = 4.096 \\times 10^{6}\\ \\text{ids/sec per node}',
+        '4.096 \\times 10^{6} \\times 1024 = 4.19 \\times 10^{9}\\ \\text{ids/sec cluster-wide}',
+      ],
+    },
+    {
+      type: 'visual',
+      component: 'PointerBoxDiagram',
+      props: {
+        title: 'Assembling a Snowflake id — and the millisecond it goes wrong',
+        notice: 'Real numbers from the code section below. Watch the three fields shift into place, then watch NTP break it.',
+        leftLabel: 'inputs on this node',
+        rightLabel: '64-bit id under construction',
+        frames: [
+          {
+            note: 'Start: 64 bits, all zero. Bit 63 is the sign bit and stays 0 forever, so the id is always a positive signed long. Three local facts will fill the rest — no network call, no lock, no coordinator.',
+            stack: [
+              { name: 'wall clock (ms)', value: '1787203652543' },
+              { name: 'machine id', value: '7' },
+              { name: 'sequence', value: '0' },
+            ],
+            heap: [
+              { id: 'id', value: '0', label: '[0 sign][41 timestamp][10 machine][12 sequence]' },
+            ],
+          },
+          {
+            note: 'Field 1 — timestamp. Subtract the custom epoch (2025-01-01 = 1735689600000) from the wall clock: 1787203652543 - 1735689600000 = 51514052543 ms. That is 36 bits used of the 41 available. Shift it left by 10 + 12 = 22 places to clear room for the fields underneath: 51514052543 << 22.',
+            stack: [
+              { name: 'now - EPOCH', value: '51514052543 ms' },
+              { name: 'shift', value: '<< 22' },
+            ],
+            heap: [
+              { id: 'id', value: '216065596637315072', label: 'timestamp placed; low 22 bits still zero' },
+            ],
+          },
+          {
+            note: 'Field 2 — machine id 7, shifted left 12 to sit above the sequence: 7 << 12 = 28672. OR it in. These 10 bits are the entire anti-collision mechanism: two nodes minting in the same millisecond differ here, guaranteed, because no two nodes are ever assigned the same id.',
+            stack: [
+              { name: 'machine id << 12', value: '28672' },
+            ],
+            heap: [
+              { id: 'id', value: '216065596637343744', label: 'timestamp + machine' },
+            ],
+          },
+          {
+            note: 'Field 3 — sequence 0 for the first id in this millisecond. Done: 216065596637343744. The next call in the SAME millisecond gets sequence 1 -> ...745, then ...746. Sequence is what lets one node emit 4096 ids inside a single millisecond without ever repeating.',
+            stack: [
+              { name: 'sequence', value: '0, then 1, then 2 …' },
+            ],
+            heap: [
+              { id: 'id', value: '216065596637343744', label: 'id #1 — complete' },
+              { id: 'id2', value: '216065596637343745', label: 'id #2 — same ms, seq 1' },
+              { id: 'id3', value: '216065596637343746', label: 'id #3 — same ms, seq 2' },
+            ],
+          },
+          {
+            note: 'DANGER: NTP decides this node drifted 3 ms fast and STEPS the clock backwards. The node is now re-living milliseconds it already used, and its sequence counter has reset to 0. It is about to mint 216065596637343744 for the second time. Nothing in the algorithm notices — the duplicate-key error surfaces in your database, at 3am, on the write path.',
+            stack: [
+              { name: 'wall clock (ms)', value: '1787203652540  (went BACK 3 ms)', danger: true },
+              { name: 'sequence', value: '0  (reset)', danger: true },
+            ],
+            heap: [
+              { id: 'id', value: '216065596637343744', label: 'already issued', danger: true },
+              { id: 'dup', value: '216065596637343744', label: 'about to be issued AGAIN — collision', danger: true },
+            ],
+          },
+          {
+            note: 'The fixes, in order of preference. (1) Prevention: run the clock in slew mode (chrony, or ntpd -x) so corrections speed the clock up or slow it down but NEVER step backwards. (2) Detection: keep last_ms; if now < last_ms, refuse to issue and throw — a few ms of 5xx is far cheaper than duplicate primary keys. (3) Borrow: keep issuing under last_ms and let the sequence carry you, valid while you stay under 4096 ids for that millisecond.',
+            stack: [
+              { name: 'guard: now < last_ms', value: 'raise / wait it out' },
+            ],
+            heap: [
+              { id: 'id', value: '216065596637343744', label: 'safe: no second issue' },
+              { id: 'clock', value: 'slew, never step', label: 'chrony / ntpd -x — the real fix' },
+            ],
+          },
+        ],
+      },
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'A working Snowflake generator — real output pasted below',
+      code: `import time
+
+EPOCH = 1735689600000            # 2025-01-01T00:00:00Z — our custom epoch, in ms
+NODE_BITS, SEQ_BITS = 10, 12     # 1024 nodes; 4096 ids per ms per node
+
+class Snowflake:
+    def __init__(self, node_id):
+        self.node, self.last_ms, self.seq = node_id, -1, 0
+
+    def next_id(self):
+        now = int(time.time() * 1000)
+        if now < self.last_ms:                   # clock stepped BACKWARDS
+            raise RuntimeError('clock skew: refusing to issue ids')
+        if now == self.last_ms:
+            self.seq = (self.seq + 1) & 0xFFF
+            if self.seq == 0:                    # 4096 burned this ms -> wait
+                while now <= self.last_ms:
+                    now = int(time.time() * 1000)
+        else:
+            self.seq = 0
+        self.last_ms = now
+        return ((now - EPOCH) << (NODE_BITS + SEQ_BITS)) | (self.node << SEQ_BITS) | self.seq
+
+def decode(sid):
+    return (sid >> 22) + EPOCH, (sid >> 12) & 0x3FF, sid & 0xFFF
+
+gen = Snowflake(node_id=7)
+ids = [gen.next_id() for _ in range(5)]
+print(ids)
+print('increasing:', all(b > a for a, b in zip(ids, ids[1:])), '| bits:', ids[0].bit_length())
+ms, node, seq = decode(ids[-1])
+print('decoded:', time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(ms / 1000)), 'node', node, 'seq', seq)
+
+# ---- actual output ----
+# [216065596637343744, 216065596637343745, 216065596637343746,
+#  216065596637343747, 216065596637343748]
+# increasing: True | bits: 58
+# decoded: 2026-08-20 05:27:32 node 7 seq 4`,
+      annotations: {
+        3: 'A custom epoch, not 1970. Starting the 41-bit clock at your launch date buys back the ~55 years already burned since the Unix epoch — the difference between running out in 14 years and running out in 69.',
+        12: 'The entire clock-skew defence is this comparison. Without it, an NTP step backwards silently re-issues ids you already handed out.',
+        15: '& 0xFFF wraps the sequence at 4096 — the 12-bit field. Wrapping to 0 is the signal that this millisecond is exhausted.',
+        22: 'The whole algorithm in one line: shift the timestamp above both other fields, drop the machine id above the sequence, OR them together. Timestamp in the high bits is exactly why the integers sort by time.',
+        25: 'Decoding is the same shifts reversed. Ids that carry their own creation time are a real operational gift — you can read a row age straight off the primary key, with no created_at column.',
+        37: '58 bits, not 64 — the top bits are still zero because only ~1.6 years have elapsed since our custom epoch. It grows one bit per doubling of elapsed time and will not reach 63 bits for ~69 years.',
+      },
+    },
+    {
+      type: 'note',
+      md: `**Part C data model: notice that there is not one — and that is the design.** Every other case study in this module answers "what tables?"; this one answers "why none?". There is **no shared table, no sequence, no counter, and no lock on the id path**. A node holds three values in its own memory — \`last_ms\`, \`seq\`, and its \`node_id\` — and that is the entire state, which is why an id costs a few nanoseconds instead of a network round trip. The only *persistent* state in the whole design is the **machine-id assignment**: which node owns which of the 1024 ten-bit slots, held in ZooKeeper or etcd as an ephemeral node, or handed out as a Kubernetes StatefulSet ordinal. It is written once at startup and never read again while the process runs. If you find yourself drawing a table on this whiteboard, you have re-invented the ticket server and thrown away the property you were asked for.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Machine ids, and the alternatives worth naming',
+      md: `- **Assigning the 10-bit machine id** is the one piece of coordination Snowflake cannot avoid — but it happens **once at startup**, not per id. Options: (a) a ZooKeeper/etcd ephemeral sequential node, which also releases the id when the process dies; (b) static config or the container's ordinal in a Kubernetes StatefulSet; (c) derive it from the private IP's low bits — easy, and it breaks the day two subnets collide.
+- The failure to name: a **duplicate machine id** silently produces duplicate ids across two nodes. Whatever the mechanism, it must fail loudly at startup rather than hand out a shared number.
+- **UUIDv7** — the modern answer. A standard UUID (RFC 9562) whose first 48 bits are a Unix-millisecond timestamp, so it is time-ordered like Snowflake but needs *zero* configuration. Still 128 bits, so still double the index cost — but it fixes the page-split problem, which was the expensive half. **If you would reach for a UUID today, reach for v7.**
+- **ULID** — 128 bits, same idea (48-bit time + 80 random), with a 26-character sortable base32 text form. Nice when the id must be readable in a URL or log line.
+- **Database ticket servers** (Flickr's design): dedicated MySQL boxes doing nothing but issuing ids, one on odd numbers and one on even. Simple and battle-tested; the coordination hop is back, and so is the machine you must keep alive.
+- **Instagram's shard-encoded ids**: 41 bits time + 13 bits **logical shard id** + 10 bits per-shard sequence, generated by a Postgres stored procedure. The trick is that the id *carries its shard*, so any service can route a lookup from the id alone with no directory lookup.
+- Choosing, in one line: **UUIDv7 unless you need 64 bits; Snowflake when you do; a ticket server only if you are already tiny and already on MySQL.**`,
+    },
+    {
+      type: 'intuition',
+      title: 'Part C — bottlenecks and tradeoffs',
+      md: `- **The clock is the whole risk.** A backwards NTP step makes a node re-live milliseconds it already used with a reset sequence, and nothing in the algorithm notices — you learn about it from duplicate-key errors on the write path at 3am. Slew mode (chrony, \`ntpd -x\`) is prevention; the \`now < last_ms\` guard is detection, and it costs you a few milliseconds of 5xx, which is the cheapest trade in this module.
+- **Machine-id collision fails silently.** Two nodes holding the same 10 bits emit duplicate ids with no error anywhere in the stack. Assignment must **fail loudly at startup** or not at all — deriving it from the private IP's low bits is the tempting version that breaks the first day two subnets overlap.
+- **4096 ids/ms/node is a stall, not a limit.** Burn the sequence and the generator blocks until the next millisecond. 4.096M ids/sec per node is far above any real single-node write rate, so in practice this only bites when the clock source is wrong (seconds mistaken for milliseconds), where it turns into a hang.
+- **Time-sortable means time-leaking.** The id carries its own creation time, so anyone holding one reads your timestamps; two ids sampled an hour apart give away your volume in that hour, sequence field included. Never expose Snowflake ids publicly for anything commercially sensitive — mint a separate opaque public id and keep the sortable one internal.
+- **Roughly sortable is not ordered.** Ids minted in the same millisecond on different nodes have arbitrary relative order. If a total order is a real requirement, you need consensus, not a bit layout — and that puts the network round trip straight back on the hot path you removed it from.
+- **The field widths are a one-way door.** 10 bits caps you at 1024 generating nodes and 41 bits at ~69.7 years; re-splitting them later is an id-format migration across every table and every cached id. Choose the split once, with headroom, and write down why.`,
+    },
+    {
+      type: 'note',
+      md: `**What all three designs share.** (1) *Do the slow thing off the request path* — the notification API returns 202 and lets workers talk to Twilio; the ID generator refuses to make a network call at all; the rate limiter is judged on the milliseconds it adds. (2) *Every guarantee has a named price* — exactly-once costs you a dedup store and a claim step; exact distributed counting costs a network hop; 64-bit sortable ids cost you a clock dependency and a machine-id registry. (3) *The interesting part is always the failure* — the provider outage, the limiter's store being down, the clock stepping backwards. When you run out of things to say in a design round, ask "what happens when this dependency is down?" and answer your own question. That is the move that reads as senior.`,
+    },
+  ],
+  quiz: [
+    {
+      question: 'Why give push, SMS, and email their own queues instead of one shared notification queue?',
+      options: [
+        { text: 'Because each channel needs a different message format', explanation: 'Formatting is the template service\'s job and would work fine with one queue. The reason is operational, not structural.' },
+        { text: 'Because one queue cannot hold enough messages', explanation: 'Capacity is not the constraint — Kafka or SQS will happily hold billions of messages across all channels.' },
+        { text: 'Different rate limits, latencies, and failure modes — and isolation, so a Twilio outage drains only the SMS queue', explanation: 'Correct. SES does hundreds/sec, a Twilio long code does ~1/sec, APNs does tens of thousands/sec; a shared consumer rate serves none of them, slow channels head-of-line block fast ones, and one vendor\'s retries would poison every channel.' },
+        { text: 'Because queues are cheaper than topics', explanation: 'Cost is irrelevant here, and it is not even true in general.' },
+      ],
+      correct: 2,
+    },
+    {
+      question: 'A worker sends a payment receipt, then crashes before acking the queue. The message is redelivered. What prevents a duplicate email?',
+      options: [
+        { text: 'A dedup key stored at the API plus an atomic state claim in the worker before sending', explanation: 'Correct. The caller\'s dedup_key makes the API idempotent, and an atomic "queued -> sending" transition means only one worker ever proceeds. The residual window (sent, then died before recording) is why you also pass a client message id to the provider.' },
+        { text: 'Exactly-once queue delivery', explanation: 'No queue delivers exactly-once end to end across a third-party side effect. At-least-once plus consumer idempotency is the only real answer.' },
+        { text: 'The retry backoff — by the time it retries, the first send has completed', explanation: 'Backoff changes the timing, not the fact that the job runs twice. It sends twice, just later.' },
+        { text: 'The dead-letter queue catches it', explanation: 'A DLQ collects jobs that exhausted their retries. This job succeeded — it never goes near the DLQ.' },
+      ],
+      correct: 0,
+    },
+    {
+      question: 'A broadcast to 50M users is enqueued as one job. At 500 sends/sec, why is chunking into 50,000-recipient jobs the fix?',
+      options: [
+        { text: 'It makes the sends faster per message', explanation: 'Per-message cost is unchanged. What changes is parallelism and the blast radius of a crash.' },
+        { text: 'One job runs ~27.7 hours and loses all progress on a crash; 1,000 chunks across 200 workers finish in ~8 minutes and a crash loses one chunk', explanation: 'Correct. 50M/500 = 100,000 s = 27.7 h serial. Chunked: 1,000 jobs / 200 workers = 5 rounds x 100 s ≈ 8.3 minutes, and redelivery of one idempotent 50k chunk is cheap.' },
+        { text: 'It bypasses the per-user rate limit', explanation: 'Backwards — per-user limits and quiet hours must still be enforced inside every chunk.' },
+        { text: 'It lets you skip the preference check', explanation: 'The opposite: because chunks run minutes later, the preference and opt-out check must be re-run in the worker, not just at enqueue time.' },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'APNs returns 200 for your push. What have you actually learned?',
+      options: [
+        { text: 'The user saw the notification', explanation: 'Push gives you nothing about display or attention. This claim is exactly what the design must avoid making.' },
+        { text: 'The notification was displayed on the device', explanation: 'Not knowable from the provider response. The device may be offline, in a doze state, or have notifications suppressed.' },
+        { text: 'The device was online at that moment', explanation: 'APNs accepts and stores for a period; acceptance says nothing about whether the device was reachable then.' },
+        { text: 'Only that the provider accepted the message and the token was valid', explanation: 'Correct. Your states are queued -> sent -> accepted -> (maybe) delivered. Push delivery is best-effort: you get "accepted by APNs", not "seen by human". Alert on accept-rate drops and never build a feature that claims "delivered" from this.' },
+      ],
+      correct: 3,
+    },
+    {
+      question: 'Ten API instances each enforce "100 requests/minute per key" using their own in-memory counter. What is the effective limit?',
+      options: [
+        { text: '100/min — the load balancer keeps it consistent', explanation: 'A round-robin balancer spreads one key\'s traffic across all instances; none of them sees the full picture.' },
+        { text: '1,000/min — every instance independently allows 100, and the number changes when you autoscale', explanation: 'Correct. This is the distributed counter problem in one number, and it is worse than it looks: the effective limit is a function of your instance count, so it silently drifts every time you scale.' },
+        { text: '10/min — the limit gets divided across instances', explanation: 'Nothing divides it — each instance was configured with the full 100 and enforces the full 100.' },
+        { text: 'Unbounded', explanation: 'Each instance does enforce something, so there is a ceiling. It is just 10x the intended one.' },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'Your rate limiter\'s Redis is down. What is the right stance?',
+      options: [
+        { text: 'Always fail closed — protecting the backend is the limiter\'s job', explanation: 'Then a cache outage becomes a total product outage, caused by the component meant to preserve availability. Too blunt as a global rule.' },
+        { text: 'Always fail open — availability beats protection', explanation: 'Reasonable for read traffic, dangerous for login or payment endpoints where unlimited requests enable credential stuffing or real financial cost.' },
+        { text: 'It is a per-endpoint product decision: open for ordinary reads, closed where an unlimited request is dangerous — plus a conservative local limiter as the fallback', explanation: 'Correct. Naming it as a product choice rather than a technical default is the senior signal, and the local in-memory fallback means you degrade to approximate limiting instead of to none.' },
+        { text: 'Return 503 until Redis recovers', explanation: 'That is fail-closed with the wrong status code. 503 tells clients you are broken; 429 tells them to slow down — their retry logic treats these very differently.' },
+      ],
+      correct: 2,
+    },
+    {
+      question: 'Why is a random UUIDv4 a poor clustered-index primary key?',
+      options: [
+        { text: 'Each insert lands on a random leaf page, so pages split constantly and the whole index must stay in memory to avoid a disk read per insert', explanation: 'Correct. Sequential keys always append to the right-most leaf (hot in cache, one clean split). Random keys scatter, leaving pages ~50-70% full instead of ~95% — a bigger index, less of it cached, more disk reads. It compounds.' },
+        { text: 'UUIDv4 values can collide', explanation: 'With 122 random bits, collision is not a practical concern. Storage layout is the problem, not uniqueness.' },
+        { text: 'Databases cannot index 128-bit values', explanation: 'They index them fine. The cost is that 16 bytes get copied into every secondary index, plus the page-split behaviour.' },
+        { text: 'UUIDs cannot be primary keys without an extra unique constraint', explanation: 'They can be primary keys directly. Nothing structural forbids it — it is a performance argument.' },
+      ],
+      correct: 0,
+    },
+    {
+      question: 'A Snowflake node\'s clock is stepped backwards 3 ms by NTP. What is the failure, and the standard response?',
+      options: [
+        { text: 'Ids become non-monotonic but stay unique; nothing needs doing', explanation: 'Non-monotonic would be survivable. The real problem is worse: uniqueness itself breaks.' },
+        { text: 'The node re-lives milliseconds it already used with a reset sequence, so it re-issues ids it already handed out — respond by refusing to issue until the clock passes last_ms, or by continuing under last_ms and letting the sequence carry you', explanation: 'Correct, and the prevention beats both cures: run the clock in slew mode (chrony, ntpd -x) so corrections never step time backwards. A few milliseconds of 5xx is far cheaper than duplicate primary keys.' },
+        { text: 'The 41-bit timestamp field overflows', explanation: 'Overflow is a ~69-year concern from the custom epoch, entirely unrelated to a 3 ms step.' },
+        { text: 'The machine id must be reassigned', explanation: 'The machine id is fine — it is the timestamp field that went backwards. Reassigning ids at runtime would create new collisions, not fix any.' },
+      ],
+      correct: 1,
+    },
+  ],
+  interviewQuestions: [
+    {
+      question: 'Design a notification system for 100M users. Start with requirements and the API, then give me the architecture.',
+      answer:
+        'Functional: four channels (push, SMS, email, in-app), two traffic classes (transactional and bulk), user preferences with per-category opt-out and quiet hours, and templates so copy changes without a deploy. Non-functional: a payment receipt must not be lost, nothing may send twice, survive a third-party provider outage, and two different latency SLAs (transactional in seconds, bulk in minutes). Numbers: 200M/day is ~2,300/sec average, ~20,000/sec at peak — modest, so this is a reliability problem, not a scale problem. API: POST /v1/notifications {user_id, template_id, channels, params, priority, dedup_key} returning 202 Accepted plus a notification_id — 202 because the API only validates and enqueues; a Twilio timeout must never become my caller\'s timeout. Architecture: API -> preference/opt-out store consulted BEFORE enqueue -> template service -> one queue per channel, each with a high and a bulk lane -> per-channel worker pools -> provider adapters (APNs/FCM, Twilio/Vonage, SES/SendGrid) behind one interface -> delivery log. The two things I would deep-dive unprompted: idempotency, and the fan-out for a mass broadcast.',
+      isCaseBased: true,
+    },
+    {
+      question: 'Why one queue per channel? Convince me it is not premature complexity.',
+      answer:
+        'Three concrete divergences make a shared queue actively wrong. Rate limits: SES does hundreds/sec on a warmed domain, a Twilio long code does about one SMS/sec, APNs does tens of thousands/sec — one queue means one consumer rate, so you either starve push or get throttled by SMS. Latency: a push round trip is ~50 ms, an SMS submit ~500 ms, an email with attachments seconds — shared workers means slow channels head-of-line block fast ones. Failure semantics: APNs BadDeviceToken is permanent (delete the token, never retry), Twilio 429 is retryable, an SES hard bounce is permanent and retrying damages your sender reputation — retry policy is per channel, so the queue is per channel. Plus isolation: Twilio going down should drain the SMS queue and nothing else. On top of that I would put a priority lane in each channel — a 2FA code must never queue behind a 50M-recipient marketing blast. If asked to simplify for a small startup: one queue, one worker pool, and a documented plan to split when a second channel gets real volume.',
+      isCaseBased: false,
+    },
+    {
+      question: 'How do you guarantee a payment receipt is sent exactly once?',
+      answer:
+        'You do not — you get at-least-once delivery plus consumer idempotency, and you say that plainly. Three layers. (1) The caller supplies a dedup_key like payment:8891:receipt; the API atomically inserts it, and a key that already exists returns the existing notification_id and enqueues nothing — so client retries are free. (2) The worker atomically claims the job before sending (UPDATE ... SET state=\'sending\' WHERE state=\'queued\'; zero rows means another worker owns it), so a redelivered message does not double-send. (3) Pass a client-supplied message id to the provider — APNs takes apns-collapse-id, most vendors de-duplicate on a supplied id — as a last line of defence. The window you cannot close: the worker sends, then dies before recording it; on retry it cannot distinguish "sent" from "not sent". So you choose which error to prefer, and for a receipt I prefer a rare duplicate over a loss — a duplicate receipt is embarrassing, a missing one is a support ticket and possibly a regulatory issue. For a paid SMS, I would weight that differently and accept the occasional loss.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Case: marketing wants to push an announcement to all 50M users. Your current system takes one API call and one worker. Fix it.',
+      answer:
+        'The naive job loops 50M rows; at 500 sends/sec that is 100,000 seconds — 27.7 hours — and a crash at hour 20 leaves you with no reliable record of what was sent. Fix: a lightweight fan-out job that pages the recipient list with keyset pagination (never OFFSET, which degrades quadratically) and emits one chunk job per 50,000 recipients — 1,000 chunk jobs. With 200 bulk workers that is 5 rounds of 100 seconds each, about 8.3 minutes, and a crashed worker loses exactly one idempotent chunk that gets redelivered. Four details I would add unprompted: chunks go to the bulk lane so transactional traffic overtakes them; a global send-rate cap so the blast does not exhaust the provider quota and get transactional pushes throttled alongside it; the recipient list is precomputed into a materialized segment (a blob-storage file or snapshot table) before fan-out, because hitting live user tables 1,000 times during a blast is how a notification feature takes down the main database; and preferences plus quiet hours are re-checked in the worker, since a user can opt out during the minutes a chunk waits. Structurally this is the same shape as Twitter feed fan-out: big list, small unit of work, idempotent chunks.',
+      isCaseBased: true,
+    },
+    {
+      question: 'A third-party provider starts failing. Walk me through what your system does.',
+      answer:
+        'Layered response. Timeouts first — every provider call has a hard timeout (a few seconds), because a hung call holds a worker and the real damage is worker starvation, not the one failed send. Then retries with exponential backoff and jitter (1s, 2s, 4s, 8s), and the classification matters: retry 429 and 5xx, never retry a permanent error like BadDeviceToken or a hard bounce — instead delete the dead token, because retrying it wastes quota and hurts reputation. In parallel, a health checker tracks rolling error rate and latency per provider; N consecutive failures opens a circuit breaker and routes new sends to the pre-warmed secondary, with a trickle of probe traffic to detect recovery. Jobs that exhaust their retries land in a dead-letter queue — parked for a human and alerting, not lost; a filling DLQ is your best early signal that a provider or a template broke. Two costs I would volunteer: both vendors must be warmed and pre-registered in advance (an SMS sender ID or warmed email domain takes weeks, so failover only works if you set it up months earlier), and two vendors means two receipt formats and double the integration surface. For a low-volume product, "retry harder and wait" is the correct boring answer.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Your API runs on 10 instances, each enforcing 100 req/min per key locally. What is wrong, and what are your options?',
+      answer:
+        'The effective limit is 1,000/min, and worse, it is a function of your instance count — it silently changes every time you autoscale. Options, cheapest to most exact. (1) Centralized Redis with an atomic operation: all instances increment one counter keyed by (api_key, window), and it must be atomic — a read-then-write from 10 instances races and undercounts — so a Lua script or INCR+EXPIRE in one round trip. Cost: a network hop of ~0.5-1 ms on every single request, and Redis becomes a hard dependency of your entire API. (2) Local token bucket with periodic sync: each instance holds limit/instance_count tokens and reconciles every few hundred ms — zero hot-path latency, but approximate, and uneven load balancing means one instance exhausts its share while another sits on spare tokens. This is what you use at hundreds of thousands of QPS and what edge limiters do by necessity. (3) Sticky routing: hash the key at the load balancer so one key always lands on one instance and can count exactly — breaks on rebalancing and turns hot keys into hotspots. The framing sentence: exactness costs a network hop, skipping the hop costs exactness. I would use exact Redis counting on expensive endpoints (password reset, payments) and local approximation on high-volume cheap ones.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Case: your rate limiter\'s Redis cluster goes down at peak traffic. Fail open or fail closed?',
+      answer:
+        'It is a product decision, per endpoint, and saying that is more important than the answer. Fail open — allow everything — keeps the product working and nobody notices, until an abusive client or an organic spike hits the now-unprotected backend and you turn a cache outage into a full outage. Fail closed — reject everything — protects the backend and takes your product down, which is absurd for a component whose purpose is availability. My default split: fail open for ordinary read traffic where availability wins, and fail closed for endpoints where an unlimited request is genuinely dangerous or expensive — login and password reset (credential stuffing), payments, anything that costs money per call, anything that fans out. Then the mitigation that makes fail-open survivable: a conservative in-memory local limiter that takes over when the shared store is unreachable, so you degrade to approximate limiting rather than to none. And I would make the choice a config flag per route with a documented default, not a hardcoded behaviour buried in a library, so it can be changed during an incident.',
+      isCaseBased: true,
+    },
+    {
+      question: 'Where do you enforce rate limiting — gateway or service? And what exactly do you return to the client?',
+      answer:
+        'Both, for different reasons. At the gateway or edge: one place to configure, and rejected traffic never consumes backend capacity — which is the entire point, since spending a service thread to reject a request defeats the purpose. Its blind spot is business context: the gateway does not know that this customer\'s plan allows 10x on this endpoint. In the service: full context and per-endpoint cost weighting (a search costs 10 tokens, a health check 1) — but the request already consumed a connection and a trip through the mesh before rejection. So: a coarse cheap IP/key limit at the edge to absorb floods, a business-aware limit in the service. Defence in depth. The response contract: HTTP 429 Too Many Requests with Retry-After (seconds or an HTTP date) so a well-behaved client knows exactly when to return, plus X-RateLimit-Limit, X-RateLimit-Remaining and X-RateLimit-Reset on every response — not just rejections — so clients can self-throttle before they get hit. Never 503 for rate limiting: 429 means "you, slow down", 503 means "we are broken", and client retry logic treats them completely differently.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Design a distributed unique ID generator. Requirements first, then the layout.',
+      answer:
+        'Requirements: unique across the fleet forever; roughly time-sortable so "newest first" needs no secondary index; no coordination on the hot path, meaning no network round trip per id; 64 bits so it fits a BIGINT and a Java long — eight bytes copied into every secondary index instead of sixteen; and tens of thousands per second per node. Rejected alternatives with reasons: database auto-increment is a single point of coordination and failure and cannot survive sharding (two shards both issuing "1"; the odd/even patch collapses when you add a third shard); UUIDv4 removes coordination but is 128 bits with no time ordering, which wrecks a clustered index. Snowflake resolves the apparent contradiction by giving each node a field only it owns: 1 unused sign bit (keeps the value positive in signed 64-bit types) + 41 bits of milliseconds since a custom epoch + 10 bits of machine id + 12 bits of sequence. Arithmetic: 2^41 ms is about 69.7 years from your custom epoch; 2^10 is 1024 nodes; 2^12 is 4096 ids per millisecond per node, so 4.096 million/sec per node and about 4.19 billion/sec cluster-wide. The timestamp sits in the high bits, which is why plain integer comparison sorts by time. Honest caveat: it is roughly sortable, not globally ordered — same-millisecond ids on different nodes have arbitrary relative order, and a total order would need consensus, not a bit layout.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Why is UUIDv4 bad as a primary key, in database terms? Be specific.',
+      answer:
+        'Two costs. Size: 128 bits versus 64, and because secondary indexes carry the primary key, you pay that doubling in every index on the table, not just once. The expensive one is layout in the clustered index — the B+ tree that stores rows in primary-key order. With sequential ids every insert lands in the right-most leaf page: that page is hot in the buffer pool, fills up, splits once cleanly, and moves on. With random ids each insert targets a random leaf, so (a) you need the whole index resident in memory or you take a disk read per insert, and (b) pages split constantly — a split allocates a new page, moves half the rows across, and updates the parent, costing extra I/O and WAL and leaving permanent fragmentation. Pages settle at roughly 50-70% full instead of ~95%, so the index is larger, so less of it fits in cache, so more disk reads: it compounds. Benchmarks on InnoDB routinely show random-UUID primary keys inserting several times slower with a noticeably larger index. The modern fix if you want a UUID: UUIDv7, whose leading 48 bits are a Unix-millisecond timestamp — still 128 bits, but the inserts are sequential again, which was the expensive half of the problem.',
+      isCaseBased: false,
+    },
+    {
+      question: 'What is the failure mode of a Snowflake generator, and how do you handle it?',
+      answer:
+        'Clock skew — specifically an NTP correction that steps the clock backwards. The node then re-lives milliseconds it has already used, and since the sequence resets on a timestamp change, it re-issues ids it already handed out. Nothing in the algorithm notices; you find out from duplicate-key errors on the write path. Responses, best first: (1) prevention — run the clock in slew mode (chrony, or ntpd -x) so corrections speed the clock up or slow it down but never step it backwards, which removes the failure rather than handling it; (2) detection — keep last_ms and refuse to issue while now < last_ms, throwing or blocking until the clock catches up: a few milliseconds of 5xx is far cheaper than duplicate primary keys, and this is what Twitter\'s original implementation does; (3) borrow — keep issuing under last_ms and let the sequence carry you, valid as long as you stay under 4096 ids for that millisecond. Related operational item: the 10-bit machine id must be assigned uniquely at startup — ZooKeeper or etcd ephemeral sequential nodes (which also release the id when the process dies), a StatefulSet ordinal, or static config. Deriving it from IP bits is tempting and breaks the day two subnets collide, and a duplicate machine id silently produces duplicate ids, so assignment must fail loudly at startup rather than share a number.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Case: you are the tech lead on a new service. Pick an ID scheme and defend it when I push back that Snowflake is what the big companies use.',
+      answer:
+        'I would start with UUIDv7 and I would name the exact condition that changes my mind. UUIDv7 gives me the property that actually matters — time-ordered inserts, so the clustered index appends instead of scattering and I avoid the page-split penalty — with zero operational surface: no machine-id registry, no ZooKeeper dependency, no clock-skew guard to get wrong, and it is a standard (RFC 9562) with library support everywhere. Snowflake buys me one real thing: 64 bits instead of 128. That halves the primary key in the table and in every secondary index, which starts to matter at the point where index memory is a constraint — think billions of rows or very high write rates. It costs me a machine-id assignment mechanism that must fail loudly on duplicates, a clock-skew guard, and an ops requirement that every node runs slewed NTP. That is three ways to page someone at 3am in exchange for eight bytes per row. So: UUIDv7 now, and I would move to Snowflake when index size or write throughput is a measured constraint, not a predicted one. If we know today that the id must encode routing — Instagram\'s trick of putting the logical shard in the id so any service can route from the id alone with no directory lookup — then I skip straight to the 64-bit custom layout, because that is a design requirement rather than an optimization.',
+      isCaseBased: true,
+    },
+  ],
+  flashcards: [
+    { front: 'Notification pipeline shape, and why 202 not 200', back: 'API validates + checks preferences + enqueues, returns 202 — it never calls APNs/Twilio on the request path, so a vendor timeout is never your caller\'s timeout. Then: one queue per channel (different rate limits, latencies, retry semantics, isolation), each with high and bulk lanes so a 2FA code never queues behind a 50M marketing blast.' },
+    { front: 'Notification idempotency: the three layers', back: '(1) caller dedup_key inserted atomically at the API; (2) worker atomically claims the job (queued -> sending) before sending; (3) client-supplied message id passed to the provider. Residual gap: sent-then-died — prefer a rare duplicate over a lost receipt.' },
+    { front: 'Broadcast fan-out arithmetic', back: '50M recipients at 500/sec serial = 100,000 s = 27.7 hours. Chunk into 1,000 jobs of 50k; 200 workers = 5 rounds x 100 s ≈ 8.3 min, and a crash loses one redeliverable chunk.' },
+    { front: 'What does "delivered" mean for push?', back: 'Nothing you can prove. States: queued -> sent -> accepted by provider -> maybe delivered. You get "accepted by APNs", never "seen by human" — alert on accept-rate drops, never claim delivery in the product.' },
+    { front: 'The distributed rate-limiter problem, and the two answers', back: 'N instances each enforcing the full local limit = N x the intended limit (10 x 100/min = 1,000/min), drifting with autoscaling. Redis + atomic script = exact, costs a ~0.5-1 ms hop on every request. Local bucket + periodic sync = zero hot-path latency, approximate, overshoots under uneven load.' },
+    { front: 'Rate-limit response contract', back: 'HTTP 429 (never 503) + Retry-After, plus X-RateLimit-Limit / -Remaining / -Reset on EVERY response so clients self-throttle before being rejected. Enforce coarsely at the gateway and with business context in the service.' },
+    { front: 'Fail open vs fail closed', back: 'Store down: fail open = product works, backend unprotected (outage risk); fail closed = backend safe, product down. A per-endpoint product decision — open for reads, closed for login/payments — with a conservative local limiter as fallback.' },
+    { front: 'Snowflake bit layout + numbers', back: '1 sign + 41 timestamp (ms since custom epoch ≈ 69.7 years) + 10 machine id (1024 nodes) + 12 sequence (4096/ms/node) = 64 bits. 4.096M ids/sec per node, ~4.19B cluster-wide. Timestamp in high bits = integer sort is time sort.' },
+    { front: 'Snowflake\'s failure mode', back: 'Clock stepped backwards by NTP: the node re-lives used milliseconds with a reset sequence and re-issues ids. Fixes: slew the clock (chrony/ntpd -x), refuse to issue while now < last_ms, or keep issuing under last_ms via the sequence.' },
+    { front: 'Why not UUIDv4 as a primary key — and what to use instead', back: '128 bits (doubled in every secondary index) and random, so inserts hit random clustered-index leaf pages: constant page splits, pages ~50-70% full, whole index must stay cached. Use UUIDv7 (48-bit time prefix, sequential inserts) or Snowflake if you need 64 bits.' },
+  ],
+  mindmapMarkdown: `- Case Studies: Notification, Rate Limiter & ID Generator
+  - Shared method
+    - Requirements to estimation/API to HLD to deep-dive to tradeoffs
+    - Cores: do not send twice / one counter many machines / the clock lies
+  - A. Notification system
+    - Requirements: 4 channels, transactional vs bulk, preferences + quiet hours, templates
+    - Estimation: 200M/day = 2.3k/s avg, ~20k/s peak, 100 GB/day of records
+    - API validates + enqueues, returns 202 (never call APNs on the request path)
+    - Queue per channel: different rate limits, latencies, failure modes, isolation
+    - Priority lanes: 2FA must not wait behind a 50M blast
+    - Idempotency: dedup_key at API + atomic claim in worker; backoff retries, then DLQ
+    - Provider failover: pre-warmed secondary, health checks, circuit breaker
+    - Fan-out: 50M serial = 27.7 h; 1000 chunks of 50k = ~8 min
+    - Tracking: accepted by APNs, NOT seen by human
+  - B. Rate limiter as a system
+    - Algorithms live in the rate-limiting module
+    - Distributed counter: 10 instances x 100 = 1000, drifts with autoscaling
+    - Redis + atomic script: exact, costs a network hop per request
+    - Local bucket + periodic sync: zero latency, approximate
+    - Enforce at gateway AND service (defence in depth)
+    - Contract: 429 + Retry-After + X-RateLimit headers
+    - Fail open vs fail closed = per-endpoint product call
+  - C. Distributed ID generator
+    - Requirements: unique, time-sortable, no hot-path coordination, 64 bits
+    - Not auto-increment: one coordination point, dies on sharding
+    - Not UUIDv4: 128 bits, random, clustered-index page splits
+    - Layout: 1 sign + 41 time + 10 machine + 12 seq = 69.7 yrs, 1024 nodes, 4.19B ids/s
+    - Clock skew: slew not step, refuse until caught up, or borrow sequence
+    - Machine id via ZooKeeper/etcd, StatefulSet ordinal, or config
+    - Alternatives: UUIDv7, ULID, ticket servers, Instagram shard ids`,
+}
+
+export default m

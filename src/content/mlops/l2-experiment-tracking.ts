@@ -1,0 +1,514 @@
+import type { Module } from '../types'
+
+const m: Module = {
+  id: 'mlops-l2-experiment-tracking',
+  subjectId: 'mlops',
+  level: 2,
+  title: 'Experiment Tracking & the Model Registry (MLflow)',
+  whyItMatters:
+    '"Which config produced the best model, and can you reproduce it?" is the question that ends most ML interviews and most ML projects. Tracking is how you answer it in ten seconds instead of two days. The registry is the other half: it turns "which file do we ship" into a name the serving code resolves, so promoting a model and rolling one back stop being deploys.',
+  estMinutes: 50,
+  sections: [
+    {
+      type: 'intuition',
+      title: 'Twenty runs, a spreadsheet, and no answer',
+      md: `You have been tuning for three days. The state of your project right now:
+
+- Twenty training runs. Results typed by hand into a spreadsheet, two of them missing because you forgot.
+- A folder containing \`model_final.pkl\`, \`model_final_v2.pkl\`, and \`model_final_v2_actually_final.pkl\`.
+- The best number in the sheet is 0.94 AUC. You cannot remember which script produced it, on which data, with which learning rate.
+- The code has moved on eleven commits since. The preprocessing changed on Tuesday.
+
+Then your lead asks the only question that matters: **"which config produced the best model, and can you reproduce it?"**
+
+- You cannot. Not because you are careless — because *memory is not a system*.
+- Experiment tracking is the fix, and it is boring: **an automatic, queryable log of every run**. Params in, metrics out, artifacts attached, all keyed to a run id.
+- The shift in habit is the whole lesson: **the record is written by the code, not by you.** Anything you have to remember to write down, you will eventually not write down.`,
+    },
+    {
+      type: 'intuition',
+      title: 'The five buckets you log for every run',
+      md: `One rule decides what goes in: **log enough that a stranger can reproduce this run six months from now.** You are that stranger.
+
+- **Parameters** — hyperparameters, model type, feature set name, the seed. Anything you *chose*. These are the knobs you will later sort and filter by.
+- **Metrics** — train and validation curves logged per step (so you can *see* overfitting), plus the final test numbers. Metrics are numbers that came *out*.
+- **Artifacts** — the trained model file, the confusion matrix plot, feature importances, the eval report, the sample of misclassified rows. Anything you would want to look at again.
+- **Tags** — git commit, data version, who ran it, and *why*. Tags are the human context: they are what makes a run findable next quarter.
+- **Environment** — the \`requirements.txt\` or conda spec, and the Python version. Same code plus different scikit-learn equals different model.
+
+The distinction worth internalizing: **a param is an input you chose, a metric is an output you measured, a tag is context about the run itself.** MLflow lets you filter and sort on all three, so putting a thing in the wrong bucket costs you searchability later.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'A tracked training run — the whole pattern',
+      code: `import subprocess
+import mlflow
+import mlflow.sklearn
+from mlflow.models import infer_signature
+
+mlflow.set_tracking_uri('http://mlflow.internal:5000')
+mlflow.set_experiment('fraud-detection')
+
+params = {'n_estimators': 400, 'max_depth': 12, 'class_weight': 'balanced'}
+
+with mlflow.start_run(run_name='rf-d12-balanced-smote') as run:
+    mlflow.set_tags({
+        'git_commit': subprocess.run(['git', 'rev-parse', 'HEAD'],
+                                     capture_output=True, text=True).stdout.strip(),
+        'git_dirty': str(bool(subprocess.run(['git', 'status', '--porcelain'],
+                                             capture_output=True, text=True).stdout)),
+        'data_version': 'dvc:9f3a1c2',
+        'owner': 'raunak',
+        'why': 'depth 8 underfit the minority class',
+    })
+    mlflow.log_params(params)
+    mlflow.log_artifact('requirements.txt')
+
+    model = RandomForestClassifier(**params)
+    for epoch, (tr_auc, val_auc) in enumerate(fit_with_curve(model, X_tr, y_tr)):
+        mlflow.log_metric('train_auc', tr_auc, step=epoch)
+        mlflow.log_metric('val_auc', val_auc, step=epoch)
+
+    mlflow.log_metric('test_auc', score(model, X_te, y_te))
+    mlflow.log_artifact('plots/confusion_matrix.png')
+    mlflow.log_artifact('plots/feature_importances.png')
+
+    mlflow.sklearn.log_model(
+        model,
+        artifact_path='model',
+        signature=infer_signature(X_tr, model.predict(X_tr)),
+        input_example=X_tr.head(3),
+    )
+    print(run.info.run_id)`,
+      annotations: {
+        6: 'Where the record goes. Set it from an env var in real life so the same script logs locally on your laptop and to the team server in CI.',
+        11: 'start_run as a context manager: on exit the run is closed and marked FINISHED — or FAILED if the block raised. A crashed run still leaves a record, which is the point.',
+        13: 'The single most valuable tag. Without the commit, "the config" is only half the story — the code that read the config is the other half.',
+        15: 'Honest bookkeeping: were there uncommitted changes? A run from a dirty tree is NOT reproducible, and this tag says so out loud instead of pretending.',
+        17: 'The data version, from the DVC module. Params + commit + data version is the triple that makes a run re-runnable.',
+        19: 'Why you ran it, in a sentence. Six months later this is the difference between a searchable history and 300 anonymous rows.',
+        22: 'The environment, verbatim. Same code with a different scikit-learn version is a different model — this file is what makes that debuggable.',
+        25: 'A stand-in for your training loop yielding (train, val) each epoch. The shape matters more than the helper.',
+        27: 'Same metric key, many steps. This is what turns a number into a CURVE in the UI — and overfitting is a shape, not a scalar.',
+        29: 'The final held-out number. Log it once, under a name you will never rename, because this is the column you sort the whole experiment by.',
+        36: 'The signature: input column names and dtypes, inferred from real data. Serving uses it to reject wrong-shaped input at load time instead of scoring garbage.',
+        39: 'The run id. Everything downstream — registering, lineage, the audit answer — hangs off this string.',
+      },
+    },
+    {
+      type: 'note',
+      md: 'Autologging is the lazy 80%: one line, `mlflow.autolog()` (or `mlflow.sklearn.autolog()`, `mlflow.pytorch.autolog()`, and the same for XGBoost, LightGBM, Keras, transformers), and MLflow patches the library so every `fit()` logs hyperparameters, training metrics, and the model artifact for free. Turn it on first — it costs one line and removes most of the excuse for not tracking. But be clear about what it *cannot* know: **your data version, your git commit, and why you ran this**. Autolog gives you the library facts; you still write the tags that give the run meaning.',
+    },
+    {
+      type: 'code',
+      lang: 'bash',
+      title: 'Tracking URI: a folder on your laptop, or a real server',
+      code: `# Dev: no server at all. Runs land in ./mlruns as plain files.
+mlflow ui                      # UI on http://127.0.0.1:5000, reading ./mlruns
+
+# Team: one server, a DATABASE for metadata, OBJECT STORAGE for artifacts.
+mlflow server \\
+  --backend-store-uri postgresql://mlflow:pw@db:5432/mlflow \\
+  --default-artifact-root s3://acme-mlflow/artifacts \\
+  --host 0.0.0.0 --port 5000
+
+# Every client - laptop, CI job, Airflow task - just points at it.
+export MLFLOW_TRACKING_URI=http://mlflow.internal:5000
+python train.py                # no code change; the URI comes from the env`,
+      annotations: {
+        1: 'The local file store. Zero setup, perfect for learning, and useless for a team: the runs live on one laptop and nobody else can sort them.',
+        5: 'The same binary, run as a service. This is the only real difference between "I track my experiments" and "we track our experiments".',
+        6: 'Metadata (params, metrics, tags, run ids) goes in a database, because that is what you query and sort. SQLite works; Postgres survives concurrency.',
+        7: 'Artifacts (model files, plots, 200 MB of them) go to object storage, because a database is the wrong place for blobs. The DB stores the URI, not the bytes.',
+        11: 'The indirection that keeps training code portable. Same train.py runs on your laptop against ./mlruns and in CI against the server.',
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'The UI is not a dashboard. It is a sort button.',
+      md: `People install MLflow, look at the UI, and shrug. They are looking at the wrong thing. The value is not the pretty run page — it is **the table**.
+
+- **Sort** by \`test_auc\` descending. The best run is row one, with its params right there in the same row. That is the answer to "which config won", and it took two seconds.
+- **Compare** two or three runs side by side: MLflow diffs their params and overlays their metric curves. The parameter that differs *is* your explanation.
+- **Filter** by tag: only runs on this data version, only runs from this branch, only runs by this person.
+- The comparison view is where you catch the classic lie: two runs with the same params and different scores means something unlogged is varying — a seed, a data snapshot, a library version.
+- And the same table is available as a query, which is what turns tracking into automation: CI can ask "give me the best run on the current data version" without a human opening a browser.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'The table, as a query',
+      code: `import mlflow
+
+best = mlflow.search_runs(
+    experiment_names=['fraud-detection'],
+    filter_string="metrics.test_auc > 0.90 and tags.data_version = 'dvc:9f3a1c2'",
+    order_by=['metrics.test_auc DESC'],
+    max_results=5,
+)
+print(best[['run_id', 'params.max_depth', 'metrics.test_auc', 'tags.why']])`,
+      annotations: {
+        3: 'Returns a pandas DataFrame - one row per run, columns namespaced as params.*, metrics.* and tags.*.',
+        5: 'Filter on metrics AND tags together. "Best model trained on the data we actually ship" is one string, not an afternoon.',
+        6: 'The sort that answers the interview question. Note it is a query, so a CI job can run it - no human, no browser.',
+        9: 'The four columns that matter: the handle, the knob that differed, the score, and the human reason. Screenshot-able evidence.',
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'The registry: stop shipping paths, ship a name',
+      md: `Tracking answers "what did we try". The registry answers "what are we running". They are different questions and it is worth keeping them separate in your head.
+
+- **Registering** a model takes one run's model artifact and gives it a **name** (\`fraud\`) and a **version number** (3, 4, 5…). Versions are assigned, never chosen — no more \`_v2_actually_final\`.
+- Each version carries a **stage**: None → Staging → Production → Archived. Moving between them is a **lightweight approval workflow** — a human (or a passing eval job) says yes, and the transition is recorded with who and when.
+- The payoff is one line of serving code: \`mlflow.pyfunc.load_model('models:/fraud/Production')\`.
+- Read that carefully. It names a *role*, not a file. The registry resolves the role to whichever version currently holds it.
+- So promoting version 4 changes **nothing** in the serving code, the image, or the config. And rolling back to version 3 is a pointer move that takes seconds, not a rebuild-and-redeploy that takes twenty minutes while the model is misbehaving in production.
+- **This indirection is the core idea of the module.** Everything else is bookkeeping around it.`,
+    },
+    {
+      type: 'visual',
+      component: 'PointerBoxDiagram',
+      props: {
+        title: 'The registry as an indirection layer',
+        notice: 'The left column is your serving code — one line, unchanged in every frame. Watch only the arrow. The last frame shows the alternative.',
+        leftLabel: 'serving code',
+        rightLabel: 'registry: name -> versions',
+        frames: [
+          {
+            note: 'Serving asks for a ROLE, not a file: models:/fraud/Production. The registry resolves it to version 3. Versions 1 and 2 still exist, archived — nothing was deleted or overwritten.',
+            stack: [{ name: "load('models:/fraud/Production')", to: 'v3' }],
+            heap: [
+              { id: 'v1', value: 'fraud  v1', label: 'Archived' },
+              { id: 'v2', value: 'fraud  v2', label: 'Archived' },
+              { id: 'v3', value: 'fraud  v3', label: 'Production' },
+            ],
+          },
+          {
+            note: 'A new training run scores better. You register it: it becomes version 4 in Staging. Production traffic is untouched — a registered model is a candidate, not a deployment. This is where the eval job and the human approval sit.',
+            stack: [{ name: "load('models:/fraud/Production')", to: 'v3' }],
+            heap: [
+              { id: 'v2', value: 'fraud  v2', label: 'Archived' },
+              { id: 'v3', value: 'fraud  v3', label: 'Production' },
+              { id: 'v4', value: 'fraud  v4', label: 'Staging' },
+            ],
+          },
+          {
+            note: 'Approved. Version 4 transitions to Production and 3 is archived in the same call. THE ARROW MOVED AND THE SERVING CODE DID NOT CHANGE — same string, same image, same config. That is the whole idea of this module.',
+            stack: [{ name: "load('models:/fraud/Production')", to: 'v4' }],
+            heap: [
+              { id: 'v2', value: 'fraud  v2', label: 'Archived' },
+              { id: 'v3', value: 'fraud  v3', label: 'Archived' },
+              { id: 'v4', value: 'fraud  v4', label: 'Production' },
+            ],
+          },
+          {
+            note: 'Bad day: v4 fails on a segment nobody evaluated. Rollback is one transition call putting v3 back in Production. Seconds, no rebuild, no redeploy, and v4 is kept for the post-mortem rather than deleted.',
+            stack: [{ name: "load('models:/fraud/Production')", to: 'v3' }],
+            heap: [
+              { id: 'v3', value: 'fraud  v3', label: 'Production' },
+              { id: 'v4', value: 'fraud  v4', label: 'Archived (kept)' },
+            ],
+          },
+          {
+            note: 'The alternative, for contrast: the path is hardcoded in the serving code. Now shipping v4 means editing source, rebuilding the image, and a full redeploy — and so does rolling back, at exactly the moment you are least calm. The model became a code change.',
+            stack: [{ name: "load('/models/fraud_v3.pkl')", to: 'f3', danger: true }],
+            heap: [
+              { id: 'f3', value: '/models/fraud_v3.pkl', label: 'hardcoded', danger: true },
+              { id: 'f4', value: '/models/fraud_v4.pkl', label: 'needs a redeploy' },
+            ],
+          },
+        ],
+      },
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Register, promote, load by stage, roll back',
+      code: `import mlflow
+from mlflow import MlflowClient
+
+client = MlflowClient()
+
+# 1. Register: give a run's model artifact a NAME. Version is assigned, not chosen.
+mv = mlflow.register_model(model_uri=f'runs:/{RUN_ID}/model', name='fraud')
+print(mv.version)
+
+# 2. Promote: the approval workflow, in two steps.
+client.transition_model_version_stage(name='fraud', version=mv.version,
+                                      stage='Staging')
+
+# ... shadow traffic, eval report, a human (or a CI gate) says yes ...
+
+client.transition_model_version_stage(name='fraud', version=mv.version,
+                                      stage='Production',
+                                      archive_existing_versions=True)
+
+# 3. The serving side. This line never changes again.
+model = mlflow.pyfunc.load_model('models:/fraud/Production')
+preds = model.predict(df)
+
+# 4. Rollback: a pointer move, not a deploy.
+client.transition_model_version_stage(name='fraud', version=3,
+                                      stage='Production',
+                                      archive_existing_versions=True)`,
+      annotations: {
+        7: 'runs:/<run_id>/model is the URI of the artifact logged inside that run. Registering does not copy your training code - it copies the LINK, which is why lineage survives.',
+        8: 'Prints 4 on the fourth registration. You never pick the number; that is the point. Sequential, immutable versions kill the _final_v2 folder forever.',
+        11: 'Staging means "a candidate exists". Nothing about production traffic changed. Separating "trained" from "approved" is the whole value of stages.',
+        14: 'The gap where your quality bar lives: a threshold check against the current Production version, a shadow deployment, a fairness report, a human click.',
+        18: 'archive_existing_versions moves the old Production version to Archived in the same call, so there is exactly one Production version at any moment.',
+        21: 'pyfunc is the generic flavour: whatever framework trained it, this loads it as something with .predict(). The serving code does not need to know it is sklearn.',
+        25: 'Rollback in one call. Compare with the hardcoded-path world: edit, review, build, push, deploy - fifteen minutes while a bad model scores real traffic.',
+      },
+    },
+    {
+      type: 'note',
+      md: 'Currency check, because interviewers ask: MLflow 2.9+ **deprecated named stages** in favour of **aliases** — `client.set_registered_model_alias("fraud", "champion", 4)` and `models:/fraud@champion` — plus free-form tags for approval state. It is the same indirection with a better shape: aliases are arbitrary (`champion`, `challenger`, `eu-prod`), several can coexist, and they are the only option in Databricks Unity Catalog. Learn the stage vocabulary anyway, because it is what every existing pipeline and interview question uses. The idea being tested is *the pointer*, not the spelling.',
+    },
+    {
+      type: 'note',
+      md: 'Two small things that prevent a whole class of 3 a.m. incidents. A **model signature** records the input schema (column names, dtypes, shape) and the output schema; `infer_signature(X_train, preds)` builds it from real data. An **input example** stores a few real rows next to the model. Together they mean serving **fails loudly at load or first predict** — "expected 31 columns, got 30", "expected double, got string" — instead of silently scoring a mis-ordered DataFrame and returning confident nonsense for a week. Unsigned models are how a column-order change becomes a quality regression nobody can explain.',
+    },
+    {
+      type: 'intuition',
+      title: 'Lineage: answering "why did this model deny that loan?"',
+      md: `A regulator, an angry customer, or your own post-mortem asks about one specific prediction from March. Lineage is the chain that lets you answer instead of shrugging.
+
+- The chain: **prediction → model version → run → code commit + data version + environment.** Each link is one lookup, and every link was recorded automatically at training time.
+- Link one is on you: **log the model name and version in every prediction response and every serving log line.** Without it the chain starts nowhere. (The serving module makes the same point about \`model_version\` in the response body.)
+- Registering from \`runs:/<run_id>/model\` is what welds version to run — MLflow stores the source run id on the model version, so the UI links straight back.
+- The run carries \`git_commit\` and \`data_version\` as tags, so you can \`git checkout\` the exact code and \`dvc checkout\` the exact training data (cross-ref the data-versioning module).
+- The environment artifact closes the last gap: same code, same data, same library versions.
+- Said as a sentence in an interview: **"I can name the code commit, the dataset hash, and the hyperparameters behind any prediction we have ever served, because the serving log carries the model version and every version points back at its run."** That sentence is worth more than any tool name.`,
+    },
+    {
+      type: 'note',
+      md: 'What good looks like, as habits rather than theory. **Name runs meaningfully** — `rf-d12-balanced-smote` beats `run_47`, and the name is the first thing you scan in the table. **Log the whole config, not just scalars** — dump the config file as an artifact so you can *diff* two runs, because nested things like a preprocessing spec do not flatten into params. **Never trust an untracked run**: if a number came from a notebook nobody logged, it does not exist, and it certainly does not get promoted — rerun it tracked first. **Record negative results**: the run where the fancy feature made things worse is information, it stops the next person (usually you, in April) from spending three days rediscovering it. Tag failures with why they failed rather than deleting them.',
+    },
+    {
+      type: 'note',
+      md: 'The tool landscape, honestly, once. **MLflow** is the open-source default: free, self-hostable, framework-agnostic, and the registry is genuinely good — its UI is the weakest part. **Weights & Biases** has a much better UI, richer collaboration, reports, and sweeps, and is hosted (which means a bill and your metrics off-premises; self-hosting is enterprise). **Neptune** and **Comet** are close competitors, each with real strengths. And every cloud bundles its own — SageMaker Experiments, Vertex AI Experiments, Azure ML — which are convenient if you already live there and sticky if you ever leave. The advice that actually matters: **pick one and be consistent.** A team where half the runs are in MLflow and half are in a spreadsheet has zero tracking, not fifty percent tracking.',
+    },
+    {
+      type: 'intuition',
+      title: 'The registry is the handoff point to CI/CD',
+      md: `The last idea, and the one that makes tracking an *engineering* topic instead of a data-science convenience.
+
+- A registry transition is an **event**. A model version entering Production can fire a webhook — and that webhook triggers a deployment pipeline exactly like a git tag does.
+- So the deploy pipeline stops being "someone copies a pickle into the repo" and becomes: *promotion approved → CI builds/refreshes the serving image or restarts the service → the new version is live*.
+- Because serving resolves \`models:/fraud/Production\`, plenty of setups do not even rebuild: the service re-resolves the name on a schedule or on a webhook and swaps the loaded model in place.
+- This makes the registry the **contract between the two halves of the org**: data science owns everything left of it (experiments, training, evaluation, registering a candidate), the platform side owns everything right of it (promotion gates, serving, monitoring, rollback).
+- That boundary is why the interview question is worth answering well. "Where does the data scientist's job end?" — *at a registered model version with a signature, a lineage trail, and an eval report attached.*
+- Forward refs: the **orchestration** module makes the ingest → train → evaluate → register DAG run on a schedule, and the **serving** module consumes what the registry points at. Monitoring closes the loop by triggering a retrain that produces the next version.`,
+    },
+  ],
+  quiz: [
+    {
+      question: 'You already log every hyperparameter and every metric. What still has to be recorded before a run is genuinely reproducible six months later?',
+      options: [
+        { text: 'More metrics — precision, recall, F1 as well as AUC', explanation: 'More outputs describe the run better but reproduce nothing. Metrics are results, not inputs.' },
+        {
+          text: 'The git commit, the data version, and the environment spec',
+          explanation: 'Correct. Params are only the knobs; the code that read them, the data it read, and the libraries it ran against are the other three inputs. Miss any one and "same config" produces a different model.',
+        },
+        { text: 'A longer, more descriptive run name', explanation: 'Good names make runs findable, which is worth doing — but a name is not an input to training.' },
+      ],
+      correct: 1,
+    },
+    {
+      question: "Serving does `mlflow.pyfunc.load_model('models:/fraud/Production')`. You promote version 5 to Production. What must change on the serving side?",
+      options: [
+        { text: 'Update the model path in the code and redeploy', explanation: 'That is the hardcoded-path world this indirection exists to eliminate. The string names a role, not a file.' },
+        { text: 'Set MODEL_VERSION=5 in the config and restart', explanation: 'Still coupling the deployment to a version number. The registry already knows which version holds the role — asking it is the point.' },
+        {
+          text: 'Nothing — the registry now resolves that name to version 5',
+          explanation: 'Correct. The URI names a role; promotion moves the pointer. The service reloads and picks up version 5 with no code, image, or config change. Rollback is the same move in reverse.',
+        },
+      ],
+      correct: 2,
+    },
+    {
+      question: "Why log `mlflow.log_metric('val_auc', v, step=epoch)` instead of only the final validation score?",
+      options: [
+        {
+          text: 'You get a curve, and overfitting is a shape: val turns down while train keeps rising',
+          explanation: 'Correct. A single final number cannot tell you whether the model peaked at epoch 8 and then degraded. The step argument is what makes the UI draw a line instead of a dot.',
+        },
+        { text: 'Step-wise logging is faster than one write', explanation: 'It is strictly more writes, not fewer. Performance is not the reason.' },
+        { text: 'MLflow rejects metrics logged without a step', explanation: 'Step defaults to 0 and single-value metrics are completely normal — that is exactly how you log the final test number.' },
+      ],
+      correct: 0,
+    },
+    {
+      question: 'You add `mlflow.autolog()` at the top of your training script. What does it still not give you?',
+      options: [
+        { text: "The model's hyperparameters", explanation: 'Autolog reads these straight off the estimator when fit() is called — this is its main job.' },
+        {
+          text: 'The data version, the git commit, and why you ran this experiment',
+          explanation: 'Correct. Autolog knows what the library did; it cannot know which dataset snapshot you pointed at, which commit you were on, or your reason. Those tags stay your job.',
+        },
+        { text: 'The fitted model artifact', explanation: 'Autolog logs the model for the supported flavours, which is a large part of why it is worth one line.' },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'A stage transition (Staging → Production) in the model registry is best described as…',
+      options: [
+        {
+          text: 'A lightweight approval workflow plus a stable name that serving resolves',
+          explanation: 'Correct, and both halves matter: it records who approved what and when, and it moves the pointer that serving code already asks for.',
+        },
+        { text: 'A redeploy of the serving service', explanation: 'It can trigger one via a webhook, but the transition itself is a metadata change — and with stage-based loading no redeploy is needed at all.' },
+        { text: 'A copy of the model file into the production bucket', explanation: 'Nothing is copied or moved. The artifact stays where it was logged; only the pointer changes, which is why rollback is instant.' },
+      ],
+      correct: 0,
+    },
+    {
+      question: 'Your model was trained on 31 feature columns. A refactor upstream reorders the DataFrame and drops one. What does a logged model signature buy you?',
+      options: [
+        { text: 'It reorders and back-fills the columns automatically', explanation: 'It enforces and can coerce dtypes, but it will not invent a missing feature. Silent repair would be worse than failing anyway.' },
+        { text: 'Nothing at serving time — it is documentation for humans', explanation: 'It is enforced, not decorative. Treating it as documentation is how the mistake in the correct option ships.' },
+        {
+          text: 'It fails loudly with a schema mismatch instead of scoring a mis-shaped frame',
+          explanation: 'Correct. Loud failure at load or first predict beats a week of confidently wrong predictions that nobody notices until a business metric moves.',
+        },
+      ],
+      correct: 2,
+    },
+    {
+      question: 'The best number in your spreadsheet came from a notebook run nobody tracked. What do you do with it?',
+      options: [
+        { text: 'Ship it — the number is the number', explanation: 'You cannot reproduce it, cannot say which code or data made it, and cannot roll back to something equivalent. That is not a model, it is a rumour.' },
+        {
+          text: 'Treat it as non-existent and rerun it as a tracked run before it can be promoted',
+          explanation: 'Correct. "Never trust an untracked run" is the habit. If the number is real the rerun confirms it in an hour; if it is not, you just avoided shipping a fluke.',
+        },
+        { text: 'Type the metrics into MLflow by hand so it appears in the table', explanation: 'That produces a run entry with no artifacts, no commit and no environment — the appearance of tracking, which is more dangerous than none.' },
+      ],
+      correct: 1,
+    },
+  ],
+  interviewQuestions: [
+    {
+      question: 'What do you log for every training run, and why that particular list?',
+      answer:
+        'Five buckets. Parameters: hyperparameters, model type, feature-set name, the seed — everything I chose. Metrics: train and validation logged per step so I get curves, plus final held-out numbers under stable names. Artifacts: the model file, confusion matrix, feature importances, the eval report, a sample of misclassified rows — anything I would want to look at again. Tags: git commit (plus a dirty-tree flag), data version, owner, and a one-line why. Environment: requirements or conda spec, and the Python version. The list is derived from one rule — log enough that a stranger can reproduce this run six months from now — and the buckets are not cosmetic: MLflow lets me filter and sort on params, metrics and tags, so putting something in the wrong bucket costs me searchability later. I would also mention autologging as the cheap start: one line gets the library facts, and I still write the tags that give the run meaning.',
+      isCaseBased: false,
+    },
+    {
+      question: 'What reproducibility guarantees can you actually give, and where do they break?',
+      answer:
+        'I would give it as a ladder, because "reproducible" is not one thing. Level one, re-findable: I can tell you the exact params and metrics of any run — that is tracking alone. Level two, re-runnable: params plus git commit plus data version plus the pinned environment, so you can check out the code, check out the data with DVC, install the spec, and run it again. Level three, bit-identical: the same weights byte for byte, which additionally needs a fixed seed for every RNG (Python, NumPy, the framework), deterministic data ordering, and single-threaded or determinism-forced kernels. Where it breaks, honestly: GPU non-determinism from atomic reduction order and cuDNN autotuning; unpinned transitive dependencies, which is why I log a lockfile rather than a loose requirements.txt; a data source that mutates in place, which is exactly what DVC or immutable partitioned snapshots fix; hardware differences; and any wall-clock or "latest" reference inside the pipeline. So the honest claim in production is level two — same inputs, statistically equivalent model — and I would say that rather than promise bit-identical unless determinism was an explicit requirement, because forcing it costs real training throughput. I also tag runs from a dirty git tree so I never accidentally claim level two for a run that cannot deliver it.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Case: a regulator asks why your model denied a specific loan application back in March. Walk me through how you answer.',
+      answer:
+        'I follow the lineage chain, and every link was recorded automatically at the time. First, the serving log: every prediction response carries the model name and version, so I find the request id and get "fraud, version 3". Second, the registry: version 3 stores the run id it was registered from, so one click goes to the run. Third, the run: its tags give the git commit and the data version, and its artifacts give the environment spec, the eval report, and the confusion matrix at approval time. Now I can check out that exact commit, dvc checkout that exact dataset, rebuild the environment and re-score the application to confirm the same decision — and I can show what the model was evaluated on before it was approved, plus who approved the Staging-to-Production transition and when. For the actual "why" of that one decision, I load version 3 and run SHAP or the model\'s own feature attributions on the stored feature vector — which is why logging the feature vector, not just the raw request, matters. The part that fails without preparation is link one: if the serving log does not record the model version, the whole chain has no starting point and the honest answer becomes "we do not know". That single field is the cheapest audit insurance there is.',
+      isCaseBased: true,
+    },
+    {
+      question: 'Case: two engineers report different test AUC — 0.94 and 0.91 — for what they both insist is the same configuration. Debug it.',
+      answer:
+        'The claim "same config" is the hypothesis to attack, and the tracking table is the tool. I open both runs in the compare view: MLflow diffs the params and overlays the curves, so if any logged param differs the argument ends immediately. If the params match, something unlogged is varying, and there are five usual suspects. Seed — if it is not a logged param, it is not controlled; a 0.03 AUC gap is well within seed variance on an imbalanced dataset. Data version — the tag settles whether they trained on the same snapshot, and a table that was appended to overnight is the single most common cause. Git commit — same config read by different preprocessing code is a different experiment; the dirty-tree flag matters here too, because uncommitted local changes make the commit tag a lie. Environment — a different scikit-learn or XGBoost version genuinely changes defaults and results, which is why the requirements artifact is logged. Split — if the train/test split is generated at runtime without a fixed seed they are literally scoring different test sets, which is my top suspect for a gap this size. The fix afterwards is structural, not social: log the seed as a param, log the data version and commit as tags, freeze the split as a versioned artifact, and require both to rerun through the same tracked entry point instead of a notebook. The takeaway I would state: a metric that cannot be reproduced was never a result, it was an anecdote.',
+      isCaseBased: true,
+    },
+    {
+      question: 'Explain the model registry to a backend engineer who already has a good CI/CD pipeline.',
+      answer:
+        'It is the same thing your artifact repository plus environment tags already do for services, applied to model files. Registering gives an artifact a name and an auto-incremented, immutable version — that is your container registry with tags. A stage or alias (Production, champion) is the mutable pointer that says which version currently holds the role — that is your "prod" tag or your Kubernetes deployment referencing an image tag. Loading by `models:/fraud/Production` is dereferencing that pointer at runtime instead of baking a path into the binary. What is genuinely different, and worth saying: models are big binary blobs that are not diffable, so the metadata around them carries the meaning — the registry links each version back to the training run, so you get code commit, dataset version, hyperparameters and eval metrics attached to the artifact, which a container registry has no notion of. The second difference is that promotion is gated on a statistical judgement, not a green test suite: "does it beat the current Production version on held-out data and on the slices we care about" is fuzzier than "do the tests pass", which is exactly why the approval step is explicit and recorded.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Why is loading by stage worth running a whole extra service, compared to just reading a path from config?',
+      answer:
+        'Because of what happens on a bad day. With a hardcoded path or a version in config, changing the live model is a code or config change: edit, review, build, push, roll out — fifteen to thirty minutes, executed by whoever is on call, at the exact moment they are least calm. With stage-based loading the model in production is a pointer the registry owns, so promotion and rollback are one API call and take seconds, and the serving image is bit-identical before and after — which means a rollback cannot introduce a second bug. Three more things fall out of it. The approval becomes auditable: the transition records who and when, which is not true of a config edit. Multiple consumers stay consistent: the batch scorer, the online API and the monitoring job all resolve the same name instead of drifting to different pinned paths. And the deploy pipeline gets an event to hang off — a promotion webhook triggers whatever needs to happen. The honest cost: another stateful service (database plus object storage) to run, back up and secure, and a hard dependency on it at model-load time — so serving should cache the resolved artifact locally and be able to start from that cache if the registry is briefly down. If you have one model and one consumer, config genuinely is fine; the registry earns its keep at several models and several consumers.',
+      isCaseBased: false,
+    },
+    {
+      question: 'What is a model signature, and what class of bug does it prevent?',
+      answer:
+        'A signature is the recorded input and output schema of the model: column names, dtypes and shapes, inferred from real training data with infer_signature and stored alongside the model. An input example is a few real rows saved with it. Together they let the serving layer validate at load and at first predict, so a mismatch fails loudly — "expected 31 columns, got 30", "expected double, got string" — instead of proceeding. The bug class it prevents is the nastiest one in ML serving: silent shape and order errors. A pandas DataFrame will happily accept columns in a different order and a model will happily produce confident numbers from them; nothing crashes, no error rate moves, and you find out weeks later when a business metric drifts. Type coercion has the same character — an int column arriving as string, or a categorical that was one-hot encoded with a different vocabulary. The signature also doubles as documentation for whoever builds the client, and it is why the input example matters: it is an executable contract you can curl against. The general principle is the same one as validation at any trust boundary — fail at the edge, loudly, rather than degrade quietly in the middle.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Case: your team ships a model that has been in Production for two weeks. Precision on one customer segment has collapsed. Describe the response, and what tracking gives you that you would otherwise lack.',
+      answer:
+        'Immediate action first: roll back. Because serving resolves models:/fraud/Production, that is one transition call putting the previous version back — seconds, no rebuild, and crucially I archive rather than delete the bad version so it survives for the post-mortem. Then diagnose using the record. Compare the two versions in the tracking UI: the params diff tells me what changed in the config, and the run tags tell me whether the data version changed — a new training snapshot with different segment proportions is the most common cause of a segment-specific regression. Pull the eval artifacts of both runs and check whether the new one was ever evaluated on that segment; usually the answer is no, and the real bug is the gate, not the model. Check the git commit diff between the runs for a preprocessing change that affects that segment specifically, such as a category that started mapping to unknown. Then close the loop structurally: add per-segment metrics to the eval job so the Staging-to-Production gate fails on a segment regression, not just on aggregate AUC, and add a shadow or canary step so the next version sees real traffic before it owns it. Without tracking, every one of those steps is guesswork about which pickle was running and what it was trained on; with it, the post-mortem is a query.',
+      isCaseBased: true,
+    },
+    {
+      question: 'MLflow, Weights & Biases, Neptune, or the cloud provider\'s built-in — how do you choose?',
+      answer:
+        'By constraints, and then I stop arguing. MLflow is the open default: free, self-hostable, framework-agnostic, and its registry is genuinely good — the UI is its weak point. Weights & Biases has a much better UI, real collaboration and reports, and excellent sweeps for hyperparameter search; the costs are a bill that scales with the team and metrics leaving your infrastructure unless you pay for self-hosting, which matters in regulated settings. Neptune and Comet occupy the same space with their own strengths. Cloud-native options — SageMaker Experiments, Vertex AI Experiments, Azure ML — are the pragmatic answer when the team already lives entirely in one cloud, at the cost of portability if that ever changes. My defaults: MLflow when self-hosting or portability is a requirement or the budget is zero; W&B when the team is deep-learning-heavy and collaboration and sweep ergonomics dominate; the cloud one when everything else already runs there and nobody wants another service to operate. The point I would actually press is that the choice matters far less than consistency — a team where half the runs are tracked and half live in a spreadsheet has no tracking at all, not partial tracking.',
+      isCaseBased: false,
+    },
+    {
+      question: 'How does a promoted model version trigger a deployment? Sketch the wiring, and say where the org boundary sits.',
+      answer:
+        'The registry emits a transition event, and that event plays the role a git tag plays for services. Concretely: the training DAG finishes and registers a candidate as version N; an automated evaluation job compares version N against the current Production version on a held-out set and on the slices that matter, and either fails or moves it to Staging; a human or a policy approves the Staging-to-Production transition; the registry fires a webhook; CI reacts. What CI does has two flavours — either rebuild and roll out the serving image (predictable, auditable, slower, and it lets you bake the model into the image so serving has no runtime dependency on the registry), or leave the image alone and have the running service re-resolve models:/fraud/Production on a webhook or a short poll and hot-swap the loaded model (seconds, no rollout, at the cost of a live dependency on the registry and a warmup on the new weights). I would gate either one on a readiness probe that only passes after the model is loaded and warm, and keep the previous version archived so rollback stays a single transition. The org boundary sits exactly at the registry: data science owns everything left of it — experiments, training, evaluation, registering a candidate — and the platform side owns everything right of it — promotion gates, serving, monitoring, rollback. That is why the answer to "where does the data scientist\'s job end" is: at a registered model version with a signature, a lineage trail and an eval report attached.',
+      isCaseBased: false,
+    },
+  ],
+  flashcards: [
+    { front: 'The one rule for what to log', back: 'Log enough that a stranger can reproduce this run six months from now. You are that stranger.' },
+    { front: 'The five buckets', back: 'Params (what you chose) · Metrics (what you measured, step-wise for curves) · Artifacts (model, plots, reports) · Tags (git commit, data version, owner, why) · Environment (requirements/conda).' },
+    { front: 'Param vs metric vs tag', back: 'Param = an input you chose. Metric = an output you measured. Tag = context about the run. All three are filterable and sortable — wrong bucket, lost searchability.' },
+    { front: 'What autologging does NOT capture', back: 'Your data version, your git commit, and why you ran it. Autolog gives library facts; tags give meaning.' },
+    { front: 'Tracking URI: local vs remote', back: 'Local file store (./mlruns) for one laptop. Remote server = database for metadata (queryable) + object storage for artifacts (blobs). Set it from an env var so code is portable.' },
+    { front: 'The registry in one line', back: 'Registering gives a run\'s model a NAME and an auto-assigned VERSION; a stage (or alias) is the mutable pointer saying which version currently holds the Production role.' },
+    { front: 'Why load by stage, not by path', back: 'models:/fraud/Production names a role, not a file. Promotion and rollback move the pointer — serving code, image and config are unchanged, and rollback takes seconds instead of a redeploy.' },
+    { front: 'Model signature + input example', back: 'Recorded input/output schema (names, dtypes, shape) plus a few real rows. Serving fails LOUDLY on a mismatch instead of silently scoring a mis-ordered frame for a week.' },
+    { front: 'The lineage chain', back: 'prediction → model version → run → git commit + data version + environment. Link one is logging model_version in every prediction; without it the chain starts nowhere.' },
+    { front: 'Reproducibility, three levels', back: 'Re-findable (params + metrics) → re-runnable (+ commit, data version, pinned env) → bit-identical (+ seeds, deterministic kernels). Promise level two in production; level three costs throughput.' },
+  ],
+  mindmapMarkdown: `- Experiment Tracking & the Model Registry
+  - The problem
+    - 20 runs, a spreadsheet, model_final_v2_actually_final.pkl
+    - "Which config won, and can you reproduce it?"
+    - The record must be written by CODE, not memory
+  - What to log
+    - Params: hyperparameters, model type, seed
+    - Metrics: step-wise curves + final test numbers
+    - Artifacts: model, confusion matrix, feature importances
+    - Tags: git commit, data version, owner, WHY
+    - Environment: requirements / conda spec
+    - Rule: a stranger reproduces it in 6 months
+  - MLflow concretely
+    - start_run / log_param / log_metric(step=) / log_artifact
+    - autolog: library facts free, tags still yours
+    - Tracking URI: ./mlruns vs server (DB + object store)
+    - UI value = SORT and COMPARE, and search_runs as a query
+  - The registry
+    - Register: a NAME + auto-assigned versions
+    - Stages: None to Staging to Production to Archived
+    - Load by stage: models:/fraud/Production
+    - Indirection: promotion moves the pointer, code unchanged
+    - Rollback = one transition call, seconds
+    - MLflow 2.9+: aliases (@champion) replace stages
+  - Signatures
+    - Input/output schema + input example
+    - Fails loudly at load, not silently at inference
+  - Lineage
+    - prediction to version to run to commit + data + env
+    - Log model_version in EVERY prediction
+    - Answers the audit question
+  - Habits
+    - Name runs meaningfully
+    - Log the diff-able config, not just scalars
+    - Never trust an untracked run
+    - Record NEGATIVE results
+  - Tool landscape
+    - MLflow: open default, weak UI
+    - W&B: better UI + sweeps, hosted bill
+    - Neptune / Comet; clouds bundle their own
+    - Pick one, be consistent
+  - Into CI/CD
+    - Promotion fires a webhook, triggers deployment
+    - Registry = handoff: DS left of it, platform right of it
+    - Forward: orchestration DAG, serving, drift retraining`,
+}
+
+export default m

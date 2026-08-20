@@ -1,0 +1,630 @@
+import type { Module } from '../types'
+
+const m: Module = {
+  id: 'dsa-l3-dp-bitmask-partition',
+  subjectId: 'dsa',
+  level: 3,
+  title: 'DP IV: Bitmask & Partition (MCM)',
+  whyItMatters:
+    'The two final bosses of the DP ladder. "n ≤ 20, visit/assign ALL of them" and "cheapest way to split a range" are instant-recognition patterns — the constraint line literally hands you the state. MCM and Burst Balloons alone have dozens of LeetCode re-skins, and dp[mask][last] is the classic onsite escalation: "your brute force is n! — make it 2ⁿ."',
+  estMinutes: 55,
+  sections: [
+    {
+      type: 'intuition',
+      title: 'The last two shapes on the DP ladder',
+      md: `Every DP so far walked left to right: dp[i] built from smaller i. Two interview families refuse that shape:
+
+- **"Visit/assign ALL n things"** — progress is not *how far you are*, it is *which ones are done*. The state is a **set** → encode it as a bitmask.
+- **"Best way to split/combine a range"** — the answer for a chunk is built from two smaller chunks. The state is an **interval** → \`dp[i][j]\` with a split point.
+- This module is both: bitmask DP (TSP, assignment) and partition/interval DP (MCM, Burst Balloons, palindrome cuts).
+- At level 3, recognition beats derivation. By the end you should smell each pattern from the constraint line alone.`,
+    },
+    {
+      type: 'intuition',
+      title: 'A whole set inside one int',
+      md: `You need to remember which of n cities are visited. A \`vector<bool>\` cannot index a DP table. A number can.
+
+- Picture a row of n light switches. Switch i ON = "thing i is used".
+- Read the row as a binary number: switches 0, 2, 3 ON → \`0b01101\` → the int 13.
+- Every subset of n things = exactly one integer in [0, 2ⁿ). Subsets become array indexes.
+- That single move unlocks \`dp[mask]\` — a table indexed by *which things are done*.
+- The toolkit is three operators: \`&\` to test, \`|\` to add, \`& ~\` to remove.`,
+    },
+    {
+      type: 'hinglish',
+      md: `n cheezein track karni hain? n batti wala switchboard socho. Har batti ek cheez ki hai — ON matlab woh use ho chuki, OFF matlab abhi baaki. Ab poora switchboard ek saath padho: 01101 — yeh khud ek binary number hai, value 13. Matlab "kaunsi cheezein ho chuki" jaisi poori list ek chhote se int mein samaa gayi. Aur jo cheez int hai, woh array ka index ban sakti hai — isliye dp[mask] likhna possible ho jaata hai. Switchboard = state. Bas, yehi bitmask DP ka poora secret hai.`,
+    },
+    {
+      type: 'code',
+      lang: 'cpp',
+      title: 'The bit toolkit — five moves you must type blind',
+      code: `int mask = 0b01101;                    // the set {0, 2, 3}, as one int
+bool has2 = mask & (1 << 2);           // test: is 2 in the set? (yes)
+int add4  = mask | (1 << 4);           // add 4    -> 0b11101
+int drop0 = mask & ~(1 << 0);          // remove 0 -> 0b01100
+int size  = __builtin_popcount(mask);  // how many members? 3
+for (int i = 0; i < 5; i++)            // iterate the members
+    if (mask & (1 << i))
+        cout << i << ' ';              // prints: 0 2 3`,
+      annotations: {
+        1: 'Read right to left: bit 0 ON, bit 1 OFF, bit 2 ON, bit 3 ON → {0, 2, 3}. One int holds any subset of {0..30}.',
+        2: '1 << 2 builds 0b00100 — a set containing only 2. AND keeps the overlap: nonzero means present.',
+        5: 'GCC/Clang builtin, O(1). C++20 spelling: std::popcount from <bit>. Set size without a loop.',
+        8: 'The iterate-members idiom: scan all n bit positions, act on the ON ones. O(n) per mask.',
+      },
+    },
+    {
+      type: 'note',
+      md: 'The trigger, printed right in the constraints: **n ≤ ~20**. 2²⁰ ≈ 1 million masks — a table that fits. At n = 30, 2³⁰ ≈ 10⁹ — dead. So when a problem says "visit all", "assign all", or "every subset" AND n ≤ 20, the setter is handing you bitmask DP. (Same wording with n ≈ 40 usually means meet-in-the-middle: split into two 2²⁰ halves.)',
+    },
+    {
+      type: 'intuition',
+      title: 'TSP: dp[mask][last]',
+      md: `Classic: start at city 0, visit all n cities, minimize total distance. Brute force tries every order: O(n!) — dead at n = 13.
+
+- Key collapse: two routes through the **same set** of cities, ending at the **same city**, have identical futures. Only (set, current city) matters — not the order taken to get there.
+- State: \`dp[mask][last]\` = cheapest way to have visited exactly the cities in \`mask\`, currently standing at \`last\`.
+- Why keep \`last\`? The next hop's price depends on where you stand. Drop it and the DP is *wrong*, not just slow.
+- Transition: pick an unvisited \`nxt\`, pay \`dist[last][nxt]\`, switch its bit ON.
+- 2ⁿ·n states × n transitions → **O(2ⁿ·n²)** time, O(2ⁿ·n) memory. At n = 15: 1.3·10¹² orders collapse to ~7 million operations.`,
+    },
+    {
+      type: 'visual',
+      component: 'PointerBoxDiagram',
+      props: {
+        title: 'A 3-city TSP walk — the mask IS the visited set',
+        notice: 'Distances: 0↔1 = 10, 0↔2 = 15, 1↔2 = 20. Watch the three bit cells: read together they are the mask.',
+        leftLabel: 'walk state',
+        rightLabel: 'mask bits',
+        frames: [
+          {
+            note: 'Start at city 0. Its switch flips ON: mask = 001. dp[001][0] = 0.',
+            stack: [
+              { name: 'at (last)', to: 'b0' },
+              { name: 'mask', value: '001' },
+              { name: 'dp[mask][last]', value: '0' },
+            ],
+            heap: [
+              { id: 'b0', value: '1', label: 'bit 0 — city 0' },
+              { id: 'b1', value: '0', label: 'bit 1 — city 1' },
+              { id: 'b2', value: '0', label: 'bit 2 — city 2' },
+            ],
+          },
+          {
+            note: 'Hop 0 → 1, pay 10. mask = 001 | 010 = 011. dp[011][1] = 0 + 10 = 10.',
+            stack: [
+              { name: 'at (last)', to: 'b1' },
+              { name: 'mask', value: '011' },
+              { name: 'dp[mask][last]', value: '10' },
+            ],
+            heap: [
+              { id: 'b0', value: '1', label: 'bit 0 — city 0' },
+              { id: 'b1', value: '1', label: 'bit 1 — city 1' },
+              { id: 'b2', value: '0', label: 'bit 2 — city 2' },
+            ],
+          },
+          {
+            note: 'Hop 1 → 2, pay 20. mask = 111 — all switches ON, tour complete. dp[111][2] = 10 + 20 = 30.',
+            stack: [
+              { name: 'at (last)', to: 'b2' },
+              { name: 'mask', value: '111' },
+              { name: 'dp[mask][last]', value: '30' },
+            ],
+            heap: [
+              { id: 'b0', value: '1', label: 'bit 0 — city 0' },
+              { id: 'b1', value: '1', label: 'bit 1 — city 1' },
+              { id: 'b2', value: '1', label: 'bit 2 — city 2' },
+            ],
+          },
+          {
+            note: 'Rewind — the other branch: hop 0 → 2 first, pay 15. mask = 101. dp[101][2] = 15. Any path reaching the same (mask, last) collapses into ONE state — that collapse is the whole memoization win.',
+            stack: [
+              { name: 'at (last)', to: 'b2' },
+              { name: 'mask', value: '101' },
+              { name: 'dp[mask][last]', value: '15' },
+            ],
+            heap: [
+              { id: 'b0', value: '1', label: 'bit 0 — city 0' },
+              { id: 'b1', value: '0', label: 'bit 1 — city 1' },
+              { id: 'b2', value: '1', label: 'bit 2 — city 2' },
+            ],
+          },
+          {
+            note: 'Hop 2 → 1, pay 20: dp[111][1] = 15 + 20 = 35. Answer = min over last of dp[111][*] = min(35, 30) = 30 — the 0→1→2 tour wins.',
+            stack: [
+              { name: 'at (last)', to: 'b1' },
+              { name: 'mask', value: '111' },
+              { name: 'dp[mask][last]', value: '35' },
+            ],
+            heap: [
+              { id: 'b0', value: '1', label: 'bit 0 — city 0' },
+              { id: 'b1', value: '1', label: 'bit 1 — city 1' },
+              { id: 'b2', value: '1', label: 'bit 2 — city 2' },
+            ],
+          },
+        ],
+      },
+    },
+    {
+      type: 'code',
+      lang: 'cpp',
+      title: 'TSP-style shortest path through all nodes — O(2ⁿ·n²)',
+      code: `int tsp(const vector<vector<int>>& dist) {
+    int n = (int)dist.size(), FULL = (1 << n) - 1;
+    vector<vector<int>> dp(1 << n, vector<int>(n, INT_MAX));
+    dp[1][0] = 0;                          // visited {0}, standing at city 0
+    for (int mask = 1; mask <= FULL; mask++)
+        for (int last = 0; last < n; last++) {
+            if (!(mask & (1 << last)) || dp[mask][last] == INT_MAX)
+                continue;                  // invalid or unreachable -- skip
+            for (int nxt = 0; nxt < n; nxt++) {
+                if (mask & (1 << nxt)) continue;    // already visited
+                int nm = mask | (1 << nxt);
+                dp[nm][nxt] = min(dp[nm][nxt],
+                                  dp[mask][last] + dist[last][nxt]);
+            }
+        }
+    return *min_element(dp[FULL].begin(), dp[FULL].end());
+}`,
+      annotations: {
+        3: '2ⁿ·n cells. At n = 20 that is 2²⁰ × 20 ints ≈ 84 MB — know this number; it is the first thing that breaks.',
+        4: 'Base: mask 1 = binary 00…001 — only city 0 visited, cost 0. Free choice of start? Seed dp[1<<s][s] = 0 for every s.',
+        5: 'Masks ascend numerically, and a successor mask | bit is always LARGER — so every state is final before anyone reads it. No recursion needed.',
+        12: 'The transition: extend the tour by one unvisited city. Push-style DP: current state improves its successors.',
+        16: 'Path version: best tour may end anywhere. Round-trip TSP instead: min over last of dp[FULL][last] + dist[last][0].',
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'Assignment: when popcount deletes a dimension',
+      md: `n jobs, n people, \`cost[p][j]\`, everyone gets exactly one job, minimize total cost.
+
+- Naive state: dp[mask][person]. But look closer: if \`mask\` has k bits ON, then k jobs are taken — so people 0..k−1 are already served and person k is ALWAYS next in line.
+- The second dimension is **derivable**: person = popcount(mask). Store only \`dp[mask]\`.
+- Transition: hand person popcount(mask) each still-free job. **O(2ⁿ·n)** time, O(2ⁿ) memory — a full n× cheaper than TSP, because no cost depends on "where you stand".
+- Name the move in interviews: *"a derivable dimension is never stored"*. It generalizes far beyond this problem.`,
+    },
+    {
+      type: 'code',
+      lang: 'cpp',
+      title: 'Min-cost assignment — dp[mask] alone',
+      code: `int minAssignCost(const vector<vector<int>>& cost) {  // cost[person][job]
+    int n = (int)cost.size();
+    vector<int> dp(1 << n, INT_MAX);
+    dp[0] = 0;                                  // nobody assigned anything
+    for (int mask = 0; mask < (1 << n); mask++) {
+        if (dp[mask] == INT_MAX) continue;      // unreachable
+        int person = __builtin_popcount(mask);  // next person in line
+        if (person == n) continue;              // everyone served
+        for (int job = 0; job < n; job++) {
+            if (mask & (1 << job)) continue;    // job taken
+            int nm = mask | (1 << job);
+            dp[nm] = min(dp[nm], dp[mask] + cost[person][job]);
+        }
+    }
+    return dp[(1 << n) - 1];                    // all jobs assigned
+}`,
+      annotations: {
+        3: 'One dimension: 2ⁿ ints, not 2ⁿ·n. The popcount trick paid for itself before the loop even started.',
+        7: 'THE trick: k jobs assigned ⇒ people 0..k−1 served ⇒ person k is next. Derived, not stored.',
+        12: 'Give person their job, flip its bit. n transitions per mask → O(2ⁿ·n) total.',
+      },
+    },
+    {
+      type: 'note',
+      md: 'Submask iteration — the one-liner to file away: `for (int sub = mask; sub; sub = (sub - 1) & mask)` visits every non-empty submask of `mask`, descending. You need it when one transition consumes a whole GROUP at once ("split people into teams", "partition into k subsets"). Summed over all masks, the total work is O(3ⁿ): each element is either out of mask, in mask but not in sub, or in both — three choices.',
+    },
+    {
+      type: 'intuition',
+      title: 'Partition DP: the dp[i][j] split shape',
+      md: `Second family. The question is no longer *which items* — it is *where to cut a contiguous range*.
+
+- Shape: \`dp[i][j]\` = best answer for the chunk from i to j.
+- Recurrence: try every split point k strictly inside — \`dp[i][j]\` = best over k of combine(\`dp[i][k]\`, \`dp[k+1][j]\`) + the cost of joining at k.
+- The fill-order trap: \`dp[i][j]\` needs strictly SHORTER intervals ready first. Iterate by **length**, then left end i, then split k.
+- The template skeleton: \`for len … for i … { j = i + len − 1; for k … }\`. Three nested loops → typically O(n³).
+- Memorize the skeleton once; the problems only ever change the cost term.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Matrix Chain Multiplication: order is money',
+      md: `Multiplying an a×b matrix by a b×c matrix costs a·b·c scalar multiplications. Matrix multiplication is associative — the RESULT never changes — but the parenthesization changes the bill.
+
+- A(10×30) · B(30×5) · C(5×60):
+- (AB)C → 10·30·5 + 10·5·60 = 1500 + 3000 = **4500**.
+- A(BC) → 30·5·60 + 10·30·60 = 9000 + 18000 = **27000**. Six times the work, same matrix out.
+- Why: (AB) squeezes everything through B's narrow 5-wide waist early; A(BC) drags a 60-wide product around.
+- MCM asks the cheapest order for a chain of n matrices. The LAST multiplication splits the chain at some k: (i..k)·(k+1..j) — exactly the partition shape.`,
+    },
+    {
+      type: 'code',
+      lang: 'cpp',
+      title: 'MCM — the interval-DP template in the flesh, O(n³)',
+      code: `long long mcm(const vector<int>& dims) {   // matrix i is dims[i-1] x dims[i]
+    int n = (int)dims.size() - 1;          // n matrices in the chain
+    vector<vector<long long>> dp(n + 1, vector<long long>(n + 1, 0));
+    for (int len = 2; len <= n; len++)             // 1. interval LENGTH
+        for (int i = 1; i + len - 1 <= n; i++) {   // 2. left end
+            int j = i + len - 1;                   //    right end
+            dp[i][j] = LLONG_MAX;
+            for (int k = i; k < j; k++)            // 3. split (i..k)(k+1..j)
+                dp[i][j] = min(dp[i][j], dp[i][k] + dp[k + 1][j]
+                    + (long long)dims[i - 1] * dims[k] * dims[j]);
+        }
+    return dp[1][n];                       // dims {10,30,5,60} -> 4500
+}`,
+      annotations: {
+        3: 'Zero-init doubles as the base case: a single matrix (length-1 interval) needs no multiplication.',
+        4: 'THE template line. Length first guarantees every shorter interval inside is already final. Recite: len → i → k.',
+        10: 'Cost of the FINAL multiply: (i..k) is dims[i−1]×dims[k], (k+1..j) is dims[k]×dims[j] → dims[i−1]·dims[k]·dims[j]. Cast first — three 500s already pass 10⁸.',
+        12: 'Desk-check with the story above: dp[1][2] = 1500, dp[2][3] = 9000, dp[1][3] = min(27000, 4500) = 4500.',
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'Burst Balloons: decide the LAST, not the first',
+      md: `LeetCode 312: bursting balloon k earns \`nums[left] · nums[k] · nums[right]\` where left/right are the *current* neighbors. Maximize total coins.
+
+- The natural DP — "which balloon bursts FIRST in this range?" — breaks. Once k is gone, its two sides become adjacent and keep interacting. The halves are not independent → not a legal DP split.
+- The inversion: decide which balloon bursts **LAST** in the open interval (i, j).
+- If k is last, then at its burst the neighbors are exactly the borders a[i] and a[j] — untouched by definition. Payout known: a[i]·a[k]·a[j].
+- And while k still stands, it is a wall: (i, k) and (k, j) can never see each other. Independent subproblems — DP is legal again.
+- Pad both ends with virtual 1-balloons so the borders always exist. Then it is the same len → i → k template, O(n³).`,
+    },
+    {
+      type: 'code',
+      lang: 'cpp',
+      title: 'Burst Balloons — the inversion coded, O(n³)',
+      code: `int maxCoins(const vector<int>& nums) {
+    int n = (int)nums.size();
+    vector<int> a(n + 2, 1);               // virtual 1-balloons at both ends
+    for (int i = 0; i < n; i++) a[i + 1] = nums[i];
+    vector<vector<int>> dp(n + 2, vector<int>(n + 2, 0));
+    for (int len = 2; len <= n + 1; len++)         // window width j - i
+        for (int i = 0; i + len <= n + 1; i++) {
+            int j = i + len;               // dp[i][j]: OPEN interval (i, j)
+            for (int k = i + 1; k < j; k++)        // k bursts LAST in (i, j)
+                dp[i][j] = max(dp[i][j],
+                    dp[i][k] + dp[k][j] + a[i] * a[k] * a[j]);
+        }
+    return dp[0][n + 1];                   // [3,1,5,8] -> 167
+}`,
+      annotations: {
+        3: 'The padding kills every edge case: the first and last real balloons always have live neighbors to multiply with.',
+        8: 'Open interval: borders i and j stay alive; only what is strictly between them bursts. Note dp[i][k] and dp[k][j] share borders with the parent — no +1/−1 offsets.',
+        11: 'Three coins terms: left side fully burst (k as its right wall), right side fully burst (k as its left wall), then k itself against the fixed borders.',
+        13: 'The classic check: [3,1,5,8] → 167 (burst 1, then 5, then 3, then 8: 15 + 120 + 24 + 8).',
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'Palindrome Partitioning II: partition DP in 1D',
+      md: `Min cuts so every piece of s is a palindrome. "aab" → 1 cut: "aa" | "b".
+
+- Splitting a string into valid pieces is partition DP's 1D form: \`cuts[j]\` = fewest cuts for the prefix s[0..j].
+- Recurrence: if the LAST piece s[i..j] is a palindrome, \`cuts[j]\` can be \`cuts[i−1] + 1\`. Take the min over every valid i.
+- "Is s[i..j] a palindrome?" is itself a tiny interval DP: \`pal[i][j]\` = ends match AND \`pal[i+1][j−1]\`. Precompute the whole table in O(n²).
+- Two stacked DPs, O(n²) total — the combo move interviewers love to probe.`,
+    },
+    {
+      type: 'code',
+      lang: 'cpp',
+      title: 'Palindrome Partitioning II — interval table + 1D cuts, O(n²)',
+      code: `int minCut(const string& s) {
+    int n = (int)s.size();
+    vector<vector<bool>> pal(n, vector<bool>(n, false));
+    for (int len = 1; len <= n; len++)     // pass 1: palindrome table
+        for (int i = 0; i + len - 1 < n; i++) {
+            int j = i + len - 1;
+            pal[i][j] = s[i] == s[j] && (len <= 2 || pal[i + 1][j - 1]);
+        }
+    vector<int> cuts(n);
+    for (int j = 0; j < n; j++) {          // pass 2: fewest cuts for s[0..j]
+        if (pal[0][j]) { cuts[j] = 0; continue; }
+        cuts[j] = j;                       // worst case: cut after every char
+        for (int i = 1; i <= j; i++)
+            if (pal[i][j])
+                cuts[j] = min(cuts[j], cuts[i - 1] + 1);
+    }
+    return cuts[n - 1];                    // "aab" -> 1  ("aa" | "b")
+}`,
+      annotations: {
+        7: 'Ends equal + inside is a palindrome. len <= 2 short-circuits the base cases: "a" and "aa" have no inside to check.',
+        15: 'The partition step: last piece s[i..j] is a palindrome → one cut after the prefix s[0..i−1]. Same "choose the last piece" thinking as MCM chooses the last multiply.',
+        17: 'Desk-check "aab": pal[0][1] ("aa") true → cuts[1] = 0; pal[2][2] ("b") true → cuts[2] = cuts[1] + 1 = 1.',
+      },
+    },
+    {
+      type: 'note',
+      md: 'Recognition cheatsheet — the phrases that name the pattern: "visit all / try every subset, n ≤ 20" → `dp[mask]`; "…and the next cost depends on where you are" → `dp[mask][last]`; "assign n to n" → `dp[mask]` + popcount; "cost of combining neighbors depends on the order" → interval `dp[i][j]` over split k (MCM, Minimum Cost to Merge Stones, Stone Game family); "neighbors change as elements disappear" → Burst Balloons inversion (fix the LAST move); "split into valid pieces, minimize" → 1D partition (Palindrome Partitioning II, Word Break).',
+    },
+  ],
+  quiz: [
+    {
+      question: 'A problem says "find the minimum cost route visiting ALL checkpoints" and the constraints say n ≤ 18. What is the setter telling you?',
+      options: [
+        {
+          text: 'Bitmask DP: 2¹⁸ ≈ 262k subsets fit in a table — the visited-set becomes the state',
+          explanation: 'Correct. "Visit all" + tiny n is the bitmask signature: the exponential-in-subsets table is affordable, so (mask, last) is the intended state.',
+        },
+        {
+          text: 'Brute force all n! orders is intended',
+          explanation: '18! ≈ 6.4·10¹⁵ — hopeless. Small n licenses exponential-in-SUBSETS (2ⁿ), not factorial-in-orders.',
+        },
+        {
+          text: 'Greedy nearest-neighbor works',
+          explanation: 'Nearest-neighbor is a heuristic that fails TSP-style problems on easy counterexamples. Small n signals exact DP, not greedy.',
+        },
+      ],
+      correct: 0,
+    },
+    {
+      question: 'Which expression ADDS element i to the set mask — and which lookalike is the trap?',
+      options: [
+        {
+          text: 'mask & (1 << i) adds it',
+          explanation: 'AND tests membership — it returns 0 or the lone bit; it never produces the enlarged set.',
+        },
+        {
+          text: 'mask | (1 << i) adds it; the trap is ^, which REMOVES i if it was already present',
+          explanation: 'Correct. OR is idempotent — safe to add twice. XOR toggles: it adds when absent but silently deletes when present.',
+        },
+        {
+          text: 'mask ^ (1 << i) is the safe way to add',
+          explanation: 'XOR toggles the bit. If i was already in the set, you just removed it — the classic silent bitmask bug.',
+        },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'Why does TSP need dp[mask][last] instead of just dp[mask]?',
+      options: [
+        {
+          text: 'To save memory',
+          explanation: 'It costs n× MORE memory than dp[mask]. The extra dimension is for correctness, not economy.',
+        },
+        {
+          text: 'Because mask alone overflows an int',
+          explanation: 'A mask for n ≤ 31 fits comfortably in an int. Overflow is not the issue.',
+        },
+        {
+          text: 'The next hop\'s price depends on the current city — same set, different ending city, different future',
+          explanation: 'Correct. dp[mask] alone forgets where you stand, and dist[last][nxt] needs exactly that. Drop last and the recurrence cannot be evaluated.',
+        },
+      ],
+      correct: 2,
+    },
+    {
+      question: 'In the job-assignment DP, dp[mask] has no "person" dimension. Why is that legal?',
+      options: [
+        {
+          text: 'Because people are interchangeable',
+          explanation: 'They are not — cost[p][j] differs per person. What is fixed is the ORDER we serve them in, which is a different thing.',
+        },
+        {
+          text: 'popcount(mask) = jobs assigned so far = index of the next person, so the dimension is derivable from the mask',
+          explanation: 'Correct. Serving people in index order makes "whose turn" a function of the mask itself. Derivable dimensions are never stored.',
+        },
+        {
+          text: 'Because n ≤ 20',
+          explanation: 'Small n makes 2ⁿ affordable — it does not delete a state dimension. The popcount argument does that.',
+        },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'A is 10×30, B is 30×5, C is 5×60. Scalar-multiplication cost of (AB)C versus A(BC)?',
+      options: [
+        {
+          text: 'Identical — matrix multiplication is associative',
+          explanation: 'Associativity fixes the RESULT, not the work. The intermediate shapes differ, and cost follows shape.',
+        },
+        {
+          text: '(AB)C = 4500, A(BC) = 27000 — six times apart',
+          explanation: 'Correct. (AB)C: 10·30·5 + 10·5·60 = 4500. A(BC): 30·5·60 + 10·30·60 = 27000. Squeezing through B\'s 5-wide waist early is what saves.',
+        },
+        {
+          text: '(AB)C = 27000, A(BC) = 4500',
+          explanation: 'Backwards. (AB) shrinks the data to 10×5 immediately; (BC) balloons to 30×60 and drags it through A.',
+        },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'Why does Burst Balloons fix the LAST balloon to burst in (i, j) rather than the first?',
+      options: [
+        {
+          text: 'Bursting first is ambiguous when values tie',
+          explanation: 'Ties are irrelevant — the issue is subproblem independence, not tie-breaking.',
+        },
+        {
+          text: 'With k last, its payout uses the fixed borders a[i]·a[k]·a[j], and the two sides never interact — independent subproblems',
+          explanation: 'Correct. k standing until the end walls (i,k) off from (k,j), and its final neighbors are known in advance. That independence is what makes the recurrence legal.',
+        },
+        {
+          text: 'It reduces complexity from O(2ⁿ) to O(n³)',
+          explanation: 'The first-burst version is not slower — it is WRONG as an interval DP, because after the first burst the halves become adjacent and entangled.',
+        },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'Your interval DP fills the table with for (i = 0..n) for (j = i..n) and some answers come out as garbage. Why?',
+      options: [
+        {
+          text: 'dp[k+1][j] lives in a LATER row (k+1 > i) that has not been filled yet — fix by iterating by interval length (or i descending)',
+          explanation: 'Correct. Row i reads rows i+1..j for the right-hand pieces. Length-order (or i from n down, j up) guarantees every shorter interval is final before use.',
+        },
+        {
+          text: 'j should start at 0',
+          explanation: 'j < i would be an empty/invalid interval. The bug is dependency ORDER, not where j starts.',
+        },
+        {
+          text: 'The recurrence itself is wrong',
+          explanation: 'The same recurrence is correct once shorter intervals are ready. Only the fill order is broken — a very common and very fixable bug.',
+        },
+      ],
+      correct: 0,
+    },
+    {
+      question: 'What does for (int sub = mask; sub; sub = (sub - 1) & mask) enumerate, and what is the total cost summed over ALL masks?',
+      options: [
+        {
+          text: 'All subsets of every size — total O(4ⁿ)',
+          explanation: 'The loop only visits submasks of ONE mask. And the grand total is 3ⁿ, not 4ⁿ — see the correct option\'s counting argument.',
+        },
+        {
+          text: 'Every non-empty submask of mask, descending; total over all masks O(3ⁿ) — each element is out, in mask only, or in both',
+          explanation: 'Correct. (sub−1) & mask drops to the next smaller submask. The 3-choices-per-element argument gives Σ 2^popcount(mask) = 3ⁿ.',
+        },
+        {
+          text: 'The supersets of mask',
+          explanation: '(sub − 1) & mask can only clear bits inside mask — it never turns on a bit outside it. Supersets need a different trick.',
+        },
+      ],
+      correct: 1,
+    },
+  ],
+  interviewQuestions: [
+    {
+      question: 'Walk me through bitmask DP for TSP: state, transition, complexity — and why it beats trying all orders.',
+      answer:
+        'State: dp[mask][last] = minimum cost having visited exactly the set mask, standing at city last. Base: dp[1][0] = 0. Transition: for each unvisited nxt, dp[mask | 1<<nxt][nxt] = min(itself, dp[mask][last] + dist[last][nxt]). Answer: min over dp[FULL][*] (add dist back to 0 for a round trip). Why it wins: all orderings that visit the same set and end at the same city have identical futures, so n! permutations collapse into 2ⁿ·n states — optimal substructure doing its job. Complexity: O(2ⁿ·n²) time, O(2ⁿ·n) memory. At n = 15: 1.3·10¹² orders versus ~7·10⁶ DP operations.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Case: your O(n!) permutation brute force for "minimum cost to visit all n warehouses" passes n = 10 but TLEs at n = 16. The interviewer asks you to fix it.',
+      answer:
+        'Name the collapse first: countless permutations share (visited set, current warehouse) — memoize on that pair, not the order. dp[mask][last] with the standard transition gives O(2ⁿ·n²) = 2¹⁶ · 256 ≈ 1.7·10⁷ operations — instant. Memory: 2¹⁶ × 16 ints ≈ 4 MB — fine. Then state the ceiling unprompted: this approach lives to n ≈ 20 (time ~4·10⁸ and 84 MB of ints — may need uint16_t cells or n ≤ 18); past that it is meet-in-the-middle or heuristics, not more optimization of the same DP. Knowing where your fix dies is what separates the answer from a memorized trick.',
+      isCaseBased: true,
+    },
+    {
+      question: 'n workers, n tasks, cost[w][t] — minimize total assignment cost. Give the DP and the state-compression trick.',
+      answer:
+        'Serve workers in index order. dp[mask] = min cost where the tasks in mask are taken and the first popcount(mask) workers are served. Transition: worker popcount(mask) tries every free task: dp[mask | 1<<t] = min(…, dp[mask] + cost[person][t]). O(2ⁿ·n) time, O(2ⁿ) memory. The trick to name: the worker index is popcount(mask) — a derivable dimension, so it is never stored; that is why this is 2ⁿ and not 2ⁿ·n states. Senior flex: the Hungarian algorithm solves this in O(n³) for any n — but for n ≤ 20, the 12-line bitmask DP is the right interview tool.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Why does greedy fail on Matrix Chain Multiplication, and what is the DP?',
+      answer:
+        'Greedy ("do the cheapest multiplication first") is short-sighted: each multiply changes the dimensions available to later steps, and a locally cheap step can force a hugely wide intermediate later — easy to counterexample with three matrices. DP: dp[i][j] = min over k of dp[i][k] + dp[k+1][j] + d[i−1]·d[k]·d[j], i.e., decide the LAST multiplication, which splits the chain into two independent sub-chains. Fill by increasing interval length. O(n³) time, O(n²) space. Then name the family: the same skeleton solves Minimum Cost to Merge Stones, boolean parenthesization, and the Stone Game variants — only the cost term changes.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Explain the Burst Balloons inversion. Why does "choose the FIRST balloon to burst" fail as a DP?',
+      answer:
+        'First-burst fails on independence: after k bursts, its left and right sides become adjacent — coins earned later on the left depend on what still lives on the right, so the two halves cannot be solved separately; a correct memo key would need the whole remaining configuration. Inversion: in the open interval (i, j), choose the balloon k that bursts LAST. While k lives it is a wall — (i,k) and (k,j) never interact; and when k finally bursts, its neighbors are the interval borders a[i], a[j], so its payout a[i]·a[k]·a[j] is known in advance. dp[i][j] = max over k of dp[i][k] + dp[k][j] + a[i]·a[k]·a[j]. O(n³) time, O(n²) space. Transferable trick: when "what is adjacent" mutates as elements disappear, fix the LAST decision, not the first.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Palindrome Partitioning II — minimum cuts so every piece is a palindrome. Approach and complexity?',
+      answer:
+        'Two stacked DPs. Pass 1: pal[i][j] interval table — pal[i][j] = (s[i] == s[j]) and (length ≤ 2 or pal[i+1][j−1]) — filled by increasing length, O(n²). Pass 2: cuts[j] = 0 if s[0..j] is itself a palindrome, else min over i of cuts[i−1] + 1 where pal[i][j] — "choose the last piece", the 1D partition move. Total O(n²) time and space. Worth adding: sibling problem Palindrome Partitioning I (enumerate all partitions) is backtracking, not DP — saying which tool fits which variant scores points. Space can drop via expand-around-center for the palindrome check.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Case: a candidate writes the MCM loops as for (i = 1..n) for (j = i+1..n) and gets wrong answers — but only on chains of 3+ matrices. Diagnose.',
+      answer:
+        'Dependency-order bug. Computing dp[1][3] at row i = 1 reads dp[2][3] — a row-2 entry that has not been written yet, so it still holds the 0 from initialization. Length-2 intervals only read base cases (dp[i][i] = 0), which is why short chains pass — the bug hides until a split needs a real sub-interval from a later row. Fixes, best first: iterate by interval length (the canonical template), or i descending with j ascending, or top-down memoized recursion, which makes fill order a non-issue. Second lesson: initializing unfilled cells to 0 MASKED the bug as a plausible small answer — initialize to a sentinel (LLONG_MAX / −1) so order bugs fail loudly instead of silently.',
+      isCaseBased: true,
+    },
+    {
+      question: 'You must split n ≤ 16 people into any number of teams; each possible team has a precomputed score[sub]; maximize the total. Sketch the DP.',
+      answer:
+        'dp[mask] = best total score partitioning exactly the people in mask; dp[0] = 0. Transition: peel off one whole team at a time. To avoid counting each partition many times, force the team to contain a fixed member — the lowest set bit of mask: dp[mask] = max over submasks sub of mask containing that bit of score[sub] + dp[mask ^ sub]. Enumerate teams with the idiom for (int sub = mask; sub; sub = (sub−1) & mask), filtering for the fixed bit. Total complexity O(3ⁿ) — each element is out / in mask only / in sub — which at n = 16 is ~43M operations, fine. This submask-DP shape also powers "partition into k subsets" and "minimum incompatibility" problems.',
+      isCaseBased: false,
+    },
+    {
+      question: 'How do you decide, from the statement alone, between bitmask DP and interval DP?',
+      answer:
+        'Two checks: constraints, then adjacency. Constraints: n ≤ ~20 points at 2ⁿ states (bitmask); n up to a few hundred points at n² intervals with an O(n³) fill (interval). Adjacency is the deeper tell: if the process can jump to ANY remaining element next (cities, jobs, subsets), the state must be a set → bitmask. If only NEIGHBORS ever combine — matrices multiply adjacent partners, stones merge adjacent piles, string pieces are contiguous — then a contiguous range fully describes a subproblem, and dp[i][j] suffices. Sanity-check with memory: 2ⁿ·n versus n² tells you instantly which family the setter budgeted for.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Case: your dp[mask][last] TSP is correct, but the judge has a 64 MB memory limit and n = 20 — your table is 2²⁰ × 20 ints ≈ 84 MB. Options?',
+      answer:
+        'Three, in order of effort. (1) Shrink the cell: path costs fit 16 bits here → uint16_t halves the table to 42 MB; watch the sentinel (0xFFFF instead of INT_MAX) and overflow on add. (2) Layer by popcount: transitions only go from k-bit masks to (k+1)-bit masks, so keep just two layers; the biggest layer is C(20,10) ≈ 185k masks × 20 — a few MB — at the cost of generating masks by popcount (more code, same asymptotics). (3) If the problem needs only the optimal VALUE, do not store parent pointers — reconstruct the path afterwards by walking transitions backwards from the argmin end state. Naming the tradeoff of each — code risk versus memory saved — is what the interviewer is actually testing.',
+      isCaseBased: true,
+    },
+    {
+      question: 'Where does bitmask DP die, and what replaces it at n = 25–40?',
+      answer:
+        'The cliff is sharp: 2²⁵ · 25² ≈ 2·10¹⁰ operations and 2²⁵ · 25 states — both dead, and no constant-factor tuning saves an exponential. Replacements: meet-in-the-middle — split the n elements into halves, solve 2^(n/2) states per half, join on complementary masks (turns 2⁴⁰ into two 2²⁰ problems plus a merge); branch-and-bound with a good lower bound for exact TSP; or accept approximation (nearest neighbor + 2-opt) when the problem allows. The interview one-liner: know that exponential-state DP has a hard edge near n = 20–22, and name the next tool instead of pushing past it.',
+      isCaseBased: false,
+    },
+  ],
+  flashcards: [
+    {
+      front: 'Bit toolkit: test / add / remove / count',
+      back: 'test: mask & (1<<i) · add: mask | (1<<i) · remove: mask & ~(1<<i) · count: __builtin_popcount(mask) (C++20: std::popcount).',
+    },
+    {
+      front: 'Bitmask DP trigger',
+      back: '"Visit all / assign all / every subset" + n ≤ ~20 → 2ⁿ states fit (2²⁰ ≈ 1M). Same wording at n ≈ 40 → meet-in-the-middle.',
+    },
+    {
+      front: 'TSP state & transition',
+      back: 'dp[mask][last] = min cost, visited = mask, standing at last. dp[mask|1<<nxt][nxt] = min(…, dp[mask][last] + dist[last][nxt]). O(2ⁿ·n²) time, O(2ⁿ·n) space.',
+    },
+    {
+      front: 'Assignment-problem compression',
+      back: 'dp[mask] only: the next person = popcount(mask). A derivable dimension is never stored. O(2ⁿ·n) time, O(2ⁿ) space.',
+    },
+    {
+      front: 'Submask iteration idiom',
+      back: 'for (int sub = mask; sub; sub = (sub−1) & mask) — every non-empty submask, descending. Summed over all masks: O(3ⁿ) (out / in mask / in sub).',
+    },
+    {
+      front: 'Interval-DP fill order',
+      back: 'By LENGTH, then left end i, then split k. dp[i][j] needs strictly shorter intervals finished first. Typical cost O(n³).',
+    },
+    {
+      front: 'MCM recurrence',
+      back: 'dp[i][j] = min over k of dp[i][k] + dp[k+1][j] + d[i−1]·d[k]·d[j] — decide the LAST multiply. Order changes cost, never the result.',
+    },
+    {
+      front: 'Burst Balloons inversion',
+      back: 'Pick the LAST balloon k in open (i, j): payout a[i]·a[k]·a[j] against fixed borders; the two sides stay independent. "First" entangles the halves.',
+    },
+    {
+      front: 'Palindrome Partitioning II',
+      back: 'cuts[j] = min over palindromic last pieces s[i..j] of cuts[i−1] + 1; pal[i][j] precomputed by interval DP. O(n²) total.',
+    },
+    {
+      front: 'Bitmask vs interval — the smell test',
+      back: 'Can jump to ANY remaining element → set state (bitmask, n ≤ 20). Only NEIGHBORS ever combine → interval dp[i][j] (n up to a few hundred).',
+    },
+  ],
+  mindmapMarkdown: `- DP IV: Bitmask & Partition (MCM)
+  - Bitmask = set in an int
+    - test & · add | · remove & ~
+    - popcount = set size
+    - subset ↔ integer in [0, 2ⁿ)
+  - Trigger: n ≤ ~20
+    - 2²⁰ ≈ 1M states fit
+    - n ≈ 40 → meet-in-the-middle
+  - TSP dp[mask][last]
+    - keep last: next hop needs it
+    - O(2ⁿ·n²) · memory O(2ⁿ·n)
+  - Assignment dp[mask]
+    - person = popcount(mask)
+    - derivable dimension → drop it
+  - Submasks
+    - sub = (sub−1) & mask
+    - all masks total: O(3ⁿ)
+  - Interval DP template
+    - dp[i][j] over split k
+    - fill: len → i → k
+    - typically O(n³)
+  - MCM
+    - order changes cost, not result
+    - cost term d[i−1]·d[k]·d[j]
+  - Burst Balloons
+    - decide the LAST balloon
+    - fixed borders → independent halves
+  - Palindrome Partitioning II
+    - pal[i][j] interval table
+    - cuts[j] 1D partition · O(n²)`,
+}
+
+export default m

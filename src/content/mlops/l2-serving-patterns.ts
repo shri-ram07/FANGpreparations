@@ -1,0 +1,607 @@
+import type { Module } from '../types'
+
+const m: Module = {
+  id: 'mlops-l2-serving-patterns',
+  subjectId: 'mlops',
+  level: 2,
+  title: 'Serving Patterns, Feature Stores & Testing ML Code',
+  whyItMatters:
+    'Two of the most common ML-engineer mistakes live here. One: building a real-time API for a prediction that could have been a nightly table — a service, an on-call rotation and a p99 alert bought for nothing. Two: shipping a model whose offline AUC was 0.91 and whose production AUC is 0.78, because the feature was computed one way in training and another way in serving. This module is how you avoid both, and how you test a model before it can embarrass you.',
+  estMinutes: 55,
+  sections: [
+    {
+      type: 'intuition',
+      title: 'Three serving modes — the real question is when the input exists',
+      md: `A bakery. Bake overnight and stack the shelf. Or make the sandwich when the customer orders. Or watch the conveyor and top each item as it rolls past.
+
+- **Batch (offline)** — a scheduled job scores every row and writes the answers to a table. The application just does a \`SELECT\`. No model server exists.
+- Correct whenever the prediction can be hours old: churn scores, lead scoring, daily recommendation refresh, next-best-offer, credit-limit review.
+- **Online (real-time)** — an HTTP API called once per request, answering in milliseconds. Needed when the input **does not exist until the request happens**.
+- Fraud on the card swipe happening right now, ranking for the query this user just typed, ad bidding, dynamic pricing.
+- **Streaming** — a consumer reads events off a queue (Kafka), scores each one as it arrives and writes the result somewhere. Seconds of lag, and nobody is holding an HTTP connection open.
+- Near-real-time pipelines: scoring every click, IoT anomaly alerts, keeping a session feature fresh for a downstream online model.`,
+    },
+    {
+      type: 'note',
+      md: 'Decide in this order, and stop at the first answer. **1. Freshness** — how stale may the prediction be? Hours is fine → batch. Seconds → streaming. It must be computed from the request itself → online. **2. Does the input exist before the request?** This is the question that actually settles it: a churn score depends on last month, so you can precompute it; a fraud score depends on the ₹40,000 being charged *right now*, so you cannot. **3. Cost and blast radius** — a batch table costs one job and one query; an online model costs a service, autoscaling, warm caches, latency budgets and a pager. Batch breaking at 3am means yesterday\'s scores are served. Online breaking at 3am means checkout is down.',
+    },
+    {
+      type: 'note',
+      md: 'The honest part nobody says out loud: **teams reach for online serving far more often than they need to.** "Real-time" sounds serious in a design doc, and a REST endpoint feels like real engineering while a cron job feels like cheating. Before you build a service, ask what actually changes if the number is six hours old. If the answer is "nothing measurable", you have just deleted a deployment, an autoscaler, a cache and an on-call rotation. Start batch; upgrade to online when a product requirement — not a preference — forces it.',
+    },
+    {
+      type: 'note',
+      md: 'Boundary with the Backend track: the *mechanics* of an online service — WSGI vs ASGI, worker counts, loading the model once at startup, dynamic batching, and the "serve a model at 1000 req/s" arithmetic — are covered in **Backend Level 3, Production Serving**. Do not rebuild them here. This module is the MLOps side of the same wall: which mode to pick, how to roll a *model* out safely, where the feature values come from, and what you test before any of it ships.',
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Batch serving, in full — there is not much to it',
+      code: `# nightly_score.py — the entire "batch serving" pattern, minus the ceremony
+import pandas as pd, mlflow
+from sqlalchemy import text
+
+model = mlflow.pyfunc.load_model('models:/churn/Production')
+
+users = pd.read_sql('SELECT * FROM features_daily WHERE ds = CURRENT_DATE', engine)
+users['score'] = model.predict(users.drop(columns=['user_id', 'ds']))
+users['model_version'] = model.metadata.run_id
+
+with engine.begin() as tx:
+    tx.execute(text('DELETE FROM churn_scores WHERE ds = CURRENT_DATE'))
+    users[['user_id', 'ds', 'score', 'model_version']].to_sql(
+        'churn_scores', tx, if_exists='append', index=False)
+
+# the app never calls a model. It calls:
+#   SELECT score FROM churn_scores WHERE user_id = %s AND ds = CURRENT_DATE`,
+      annotations: {
+        5: 'The registry alias, not a file path. Promoting a new model in MLflow changes what tonight\'s job loads — no code change, no redeploy.',
+        7: 'One query, one pass. Notice there is no latency budget, no warm-up, no autoscaler and no p99 to defend.',
+        9: 'Stamp the run id on every row. Six weeks later, "which model produced this score?" is a column, not an investigation.',
+        11: 'Delete-then-insert inside ONE transaction, so a crash mid-write cannot leave half of today scored. This also makes the job re-runnable — the property that makes batch so easy to operate.',
+        17: 'The whole serving layer. The failure mode is "yesterday\'s scores", which is usually survivable; an online service\'s failure mode is an outage.',
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'Shadow, canary, A/B — three different questions people merge into one',
+      md: `A new pilot. First they fly the simulator alongside a real flight. Then a short hop with a light load. Only much later does anyone ask whether the airline sells more tickets.
+
+- **Shadow deployment (dark launch)** — every production request goes to *both* models. The old model's answer is returned to the user; the new model's answer is only **logged**. Users cannot be harmed, because they never see it.
+- It is the only way to measure a new model on real traffic before that traffic is at risk. It catches: a broken feature pipeline, latency you did not budget for, crashes on inputs your test set never had, and a prediction distribution nothing like the offline one.
+- What it costs: 2× inference. What it cannot tell you: whether the new model is *better*, because nobody acted on its predictions.
+- **Canary** — route a real percentage of traffic to the new model: 1% → 5% → 25% → 100%, watching error rate, latency, and any fast guardrail metric, with automatic rollback if one trips.
+- **A/B test** — a proper experiment: randomize by **user** (not by request), fix the metric and the horizon before you start, run until it is powered, then read it once.
+- The line to say in an interview: **shadow answers "does it work", canary answers "is it safe", A/B answers "is it better".** Run them in that order.`,
+    },
+    {
+      type: 'note',
+      md: 'Two traps. **A canary is not an experiment.** 1% of traffic for an hour is not randomized by user, is confounded with time of day, and is nowhere near powered — it can tell you the new model is not crashing, never that it earns more money. **A shadow that writes is not a shadow.** If the challenger can insert into the same table, send the same email, decline the same card or update the same feature values, you have quietly deployed it. Shadow paths must be read-only, logged to a separate sink, wrapped in their own timeout, and never able to fail the real request.',
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Shadow deployment inside the serving app',
+      code: `import asyncio, logging
+
+log = logging.getLogger('shadow')
+_bg: set[asyncio.Task] = set()
+
+@app.post('/v1/score')
+async def score(body: TxnIn):
+    live = await run_in_threadpool(champion.predict, [body.features()])
+    t = asyncio.create_task(shadow(body, live[0]))
+    _bg.add(t)
+    t.add_done_callback(_bg.discard)
+    return {'score': live[0], 'model_version': CHAMPION}
+
+async def shadow(body: TxnIn, live_score: float) -> None:
+    try:
+        async with asyncio.timeout(0.150):
+            new = await run_in_threadpool(challenger.predict, [body.features()])
+    except Exception:
+        log.warning('shadow failed', exc_info=True)
+        return
+    log.info('shadow', extra={'txn': body.txn_id, 'live': live_score,
+                              'shadow': new[0], 'model': CHALLENGER})`,
+      annotations: {
+        4: 'A task with no reference can be garbage-collected mid-flight — the event loop only holds a weak reference. Keep the set, discard on completion. Fire-and-forget bugs are silent by construction.',
+        8: 'The champion runs first and its result is what the caller waits on. The shadow must never be in the critical path.',
+        9: 'create_task, not await. The response returns while the challenger is still thinking.',
+        12: 'The OLD model is served. That is the entire safety property — the new model has zero user impact today.',
+        16: 'Its own hard timeout. A challenger that hangs must cost you a log line, not a request.',
+        19: 'Bare except plus return: a shadow that dies is an operational curiosity, never a customer-facing error.',
+        21: 'Log both scores against the transaction id. Tomorrow you join this to outcomes and compare disagreement rate, score distribution and latency — offline, safely.',
+      },
+    },
+    {
+      type: 'note',
+      md: 'Rollback is a **pointer move, not a rebuild**. The CI/CD module covered blue-green and canary for *code*; a model adds one twist — the artifact usually is not in the image. Two options, pick deliberately: bake the weights into the image (fully immutable, but a 4 GB image rebuilt per model), or load from the registry at boot (small image, faster iteration, but the running container is no longer reproducible from the image alone). If you pick the second, **pin an explicit version in production, never a moving alias**, or a promotion in MLflow silently changes what your pods load on the next restart. Then rollback is: point the deployment back at version 40, restart, done — one command, under five minutes, no CI run. Keep the artifact immutable and the pointer mutable. The registry mechanics are in the experiment-tracking module.',
+    },
+    {
+      type: 'intuition',
+      title: 'Training-serving skew: the same feature, computed twice',
+      md: `Two chefs cook one recipe from memory. Same dish name on the menu, different amount of salt. Nobody is lying and nobody notices — until the reviews come in.
+
+- The feature \`orders_30d\` is computed by a pandas job for training, and by a Go service for serving. Two code paths, one name.
+- They drift apart for boring reasons: a calendar-day window versus a rolling 720 hours, UTC versus local time, \`fillna(0)\` on one side and a null passed through on the other, a category the encoder never saw, ₹ versus paise, a different rounding rule.
+- **Nothing errors.** No exception, no alert, no failed test. The service returns a number, the model returns a score, everything is 200 OK.
+- The symptom is only ever a metric: offline AUC 0.91, production AUC 0.78, and the model itself is byte-for-byte the same file you evaluated.
+- This is **training-serving skew**, and it is the single most common reason a good model performs badly in production.`,
+    },
+    {
+      type: 'visual',
+      component: 'PointerBoxDiagram',
+      props: {
+        title: 'One feature name, two code paths — and the fix',
+        notice: 'Step through it. Nothing here throws an exception; that is exactly why it survives to production.',
+        leftLabel: 'code path',
+        rightLabel: 'the value the model actually sees',
+        frames: [
+          {
+            note: 'Training. The pandas job computes orders_30d over the last 30 calendar days in UTC, and fills missing users with 0. Offline evaluation looks excellent.',
+            stack: [{ name: 'train.py (pandas)', to: 'ft' }],
+            heap: [{ id: 'ft', value: 'orders_30d = 7', label: '30 calendar days, UTC, fillna(0)' }],
+          },
+          {
+            note: 'Serving. A different service, written by a different team six months later, computes "the same" feature: a rolling 720-hour window in local time that excludes today. Same name, same column, different number.',
+            stack: [
+              { name: 'train.py (pandas)', to: 'ft' },
+              { name: 'api/features.go', to: 'fs', danger: true },
+            ],
+            heap: [
+              { id: 'ft', value: 'orders_30d = 7', label: 'training path' },
+              { id: 'fs', value: 'orders_30d = 5', label: '720 h, local time, excludes today', danger: true },
+            ],
+          },
+          {
+            note: 'The damage, and the diagnosis. Offline AUC 0.91, production 0.78 — the model is fine, the features are not. The weights are identical to the ones you evaluated; nothing threw; drift monitors on the raw data are clean, because the raw data never changed. Only the computation did.',
+            stack: [
+              { name: 'offline eval', value: 'AUC 0.91' },
+              { name: 'production', value: 'AUC 0.78', danger: true },
+            ],
+            heap: [
+              { id: 'ft', value: 'orders_30d = 7', label: 'what the model was trained on' },
+              { id: 'fs', value: 'orders_30d = 5', label: 'what the model is fed', danger: true },
+              { id: 'w', value: 'model weights: unchanged', label: 'the model is not the bug' },
+            ],
+          },
+          {
+            note: 'The feature store. The feature is defined ONCE, as versioned code. Both paths read that definition. The offline store rebuilds history for training with point-in-time correct joins; the online store holds the latest value per key for a millisecond lookup. Same definition, same materialization job, so the two numbers cannot disagree.',
+            stack: [
+              { name: 'train.py', to: 'def' },
+              { name: 'api/features.go', to: 'def' },
+            ],
+            heap: [
+              { id: 'def', value: 'feature: orders_30d', label: 'ONE definition, versioned' },
+              { id: 'off', value: 'offline store -> 7', label: 'history, point-in-time joins, training' },
+              { id: 'on', value: 'online store -> 7', label: 'latest per key, ~2 ms lookup' },
+            ],
+          },
+        ],
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'What a feature store actually is',
+      md: `Strip the marketing and it is three things: one definition, two stores, one job that fills them.
+
+- **The definition.** A feature has a name, an owner, an entity key (user_id), a transformation and a version. It is code in one repo, not a snippet copied into two.
+- **The offline store** — the warehouse or parquet on object storage. Full history, used to build training sets. Its hard requirement is **point-in-time correct joins**.
+- **The online store** — Redis, DynamoDB, Cassandra. Only the latest value per entity key, read by the serving path in single-digit milliseconds. A feature that needs a 30-day aggregate is *looked up*, never computed, at request time.
+- **One materialization job** computes from the definition and writes both stores. That is the whole trick, and it is where the guarantee comes from.
+- Bonus you get for free: discovery ("does a churn feature already exist?"), reuse across models, and a lineage trail from a prediction back to a feature version.
+- **Feast** is the common open-source one — definitions in Python, offline in your warehouse, online in Redis; Tecton, Vertex AI Feature Store and SageMaker Feature Store are managed equivalents.`,
+    },
+    {
+      type: 'note',
+      md: 'Point-in-time correctness, stated once: a training row must contain the feature value **as of the moment the label event happened**, not the value today. Join today\'s `orders_30d` onto a churn label from March and you have trained on information from the future — including, quite often, the consequence of the very thing you are predicting. The offline metric goes *up*, which is why nobody catches it. The classic tell is a feature that is suspiciously predictive: if one column takes AUC to 0.97, assume leakage before you assume genius.',
+    },
+    {
+      type: 'code',
+      lang: 'sql',
+      title: 'The join that leaks, and the join that does not',
+      code: `-- WRONG: attaches TODAY's feature value to a label from three months ago.
+SELECT l.user_id, l.churned, f.orders_30d
+FROM labels l
+JOIN user_features f ON f.user_id = l.user_id;
+
+-- RIGHT: the feature value as of the label's own event time.
+SELECT l.user_id, l.churned, f.orders_30d
+FROM labels l
+JOIN LATERAL (
+    SELECT orders_30d
+    FROM user_features
+    WHERE user_id = l.user_id
+      AND valid_from <= l.event_ts
+    ORDER BY valid_from DESC
+    LIMIT 1
+) f ON TRUE;`,
+      annotations: {
+        4: 'No time condition at all. This is the bug: every training row gets the newest value, which for old labels is information from after the outcome.',
+        9: 'LATERAL lets the subquery reference the outer row (l.event_ts) — that is what makes a per-row "as of" lookup possible.',
+        13: 'The whole point-in-time guarantee lives on this line: only feature rows that were already true when the label event happened.',
+        15: 'Newest surviving row = the value the serving path would have returned at that instant. Training now matches serving by construction.',
+      },
+    },
+    {
+      type: 'note',
+      md: '**When you genuinely need a feature store:** many models sharing features, several teams that would otherwise each write their own `orders_30d`, a real-time requirement where the serving path cannot run a pandas aggregation, or features derived from streams. **When it is overkill:** one model, batch scoring, one team. There, a shared Python module — `features.py`, imported by both the training job and the scoring job, with unit tests — gives you the identical guarantee for zero infrastructure. Say this in the interview: *the guarantee is one definition and one code path; the feature store is one way to buy it, not the only one.* Installing Feast for a single nightly churn job is how a two-week project becomes a quarter.',
+    },
+    {
+      type: 'intuition',
+      title: 'Testing ML code: three different kinds, in this order',
+      md: `"We tested it — the AUC was 0.91" is not testing. That is one number from one dataset, and it hides every failure that matters.
+
+- **Code tests.** Ordinary pytest on your transforms: the outlier clipper, the encoder, the window aggregation, the date parser. Deterministic, milliseconds, no model required. Do these **first** — they catch most real bugs, and they are the only tests you can run on every commit in seconds.
+- **Data tests.** The input contract: schema, dtypes, ranges, nullability, allowed category values, primary-key uniqueness, row-count deltas versus yesterday. Run as a **gate before training**, so bad data fails loudly. A model trained on bad data does not fail at all — it just gets quietly worse, and you find out a month later.
+- **Model tests.** Tests on the trained artifact: does it beat a baseline, does it hold on the slices that matter, is it invariant to fields it should ignore, does it move the right direction, and does the file even load and predict.
+- Named tools: **Great Expectations** and **Pandera** for data tests; plain pytest for the other two.
+- The mental model: code tests protect the transform, data tests protect the training set, model tests protect the users.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'The data-validation gate — this runs before training, and it fails the pipeline',
+      code: `# validate.py — bad data must fail HERE, not silently inside the model.
+import pandera as pa
+from pandera import Check, Column
+
+schema = pa.DataFrameSchema(
+    {
+        'user_id':    Column(int, unique=True),
+        'age':        Column(int, Check.in_range(13, 120), nullable=False),
+        'country':    Column(str, Check.isin(['IN', 'US', 'DE', 'BR'])),
+        'orders_30d': Column(float, Check.ge(0)),
+        'churned':    Column(int, Check.isin([0, 1])),
+    },
+    strict=True,
+)
+
+def gate(df, yesterday_rows: int):
+    if abs(len(df) - yesterday_rows) > 0.20 * yesterday_rows:
+        raise ValueError(f'{len(df)} rows today vs {yesterday_rows} yesterday')
+    if df['churned'].mean() > 0.30:
+        raise ValueError('label rate tripled - check the upstream join')
+    return schema.validate(df, lazy=True)`,
+      annotations: {
+        7: 'Uniqueness on the entity key. A duplicated user_id usually means an upstream join fanned out — and a fanned-out join is also a leakage risk.',
+        8: 'A range, not just a type. age = 0 and age = 999 are both valid ints and both poison; nullable=False is the check people forget until the day a column is all NaN.',
+        9: 'The allowed category set. A new country appearing is not an error in pandas — it is a silently unseen one-hot at serving time.',
+        13: 'strict=True means an UNEXPECTED column also fails. An upstream schema change should stop the pipeline, not slip through.',
+        17: 'Volume check. Schema tests all pass on an empty file and on a file with ten times the rows; only a row-count delta catches a half-written partition.',
+        20: 'A distribution check on the label itself. The most expensive data bugs look perfectly typed.',
+        21: 'lazy=True collects every failure and raises SchemaErrors with a failure_cases table naming column, check and offending values. Without it you fix one column per pipeline run.',
+      },
+    },
+    {
+      type: 'note',
+      md: 'Wire the gate as its own **task in the DAG, upstream of training** (or as a CI job on the training PR), and make it *fail* rather than warn — a warning in a log nobody reads is not a gate. The payoff is the error message: instead of "AUC dropped to 0.61 this week" you get, at 02:14, `SchemaErrors: column "country" failed isin([IN, US, DE, BR]), 4,102 failures, example value "in"` — a lowercase country code from an upstream change, named, five minutes after it happened, before a single GPU-hour was spent.',
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Model tests: baseline, slices, invariance, direction, golden fixture',
+      code: `# test_model.py - pytest, run in CI on every candidate BEFORE it can deploy.
+import numpy as np, pandas as pd, pytest, mlflow
+from sklearn.metrics import roc_auc_score
+
+@pytest.fixture(scope='session')
+def model():
+    return mlflow.pyfunc.load_model('models:/churn/Staging')
+
+def test_beats_baseline(model, holdout):
+    auc = roc_auc_score(holdout['churned'], model.predict(holdout.drop(columns=['churned'])))
+    assert auc > 0.70, f'candidate AUC {auc:.3f} is below the shipped model'
+
+@pytest.mark.parametrize('col,val', [
+    ('country', 'IN'), ('country', 'BR'), ('plan', 'free'), ('tenure', 'new'),
+])
+def test_slice_not_broken(model, holdout, col, val):
+    sub = holdout[holdout[col] == val]
+    assert len(sub) >= 200, 'slice too small to judge - widen it or drop the test'
+    auc = roc_auc_score(sub['churned'], model.predict(sub.drop(columns=['churned'])))
+    assert auc > 0.65, f'{col}={val} collapsed to {auc:.3f} while the average looked fine'
+
+def test_invariance(model, holdout):
+    a = holdout.head(500)
+    b = a.copy()
+    b['signup_referrer'] = 'noise'
+    assert np.allclose(model.predict(a), model.predict(b))
+
+def test_direction(model, holdout):
+    a = holdout.head(500)
+    b = a.copy()
+    b['days_since_last_order'] += 90
+    assert (model.predict(b) >= model.predict(a) - 1e-6).mean() > 0.95
+
+def test_golden_fixture(model):
+    x = pd.read_parquet('tests/fixtures/golden_20.parquet')
+    expected = np.load('tests/fixtures/golden_20_preds.npy')
+    assert np.array_equal(model.predict(x).round(6), expected.round(6))`,
+      annotations: {
+        7: 'The smoke test hiding as a fixture: if the artifact does not load, every test below fails immediately and loudly. Cheapest test in the file.',
+        11: 'Beat a BASELINE, not zero. Majority-class, last week\'s model, or a logistic regression on three features — a "great" model that cannot beat three features is a signal, not a launch.',
+        13: 'The slice list is the important part. Pick slices that matter commercially or ethically: geography, plan, tenure, device, language. Average metrics are an average of the people you serve well and the people you fail.',
+        18: 'Guard against a slice so small that its AUC is noise. Without this line the test flakes and someone deletes it.',
+        20: 'The failure this test exists for: overall AUC 0.91, new-user AUC 0.58. Nothing in an aggregate number would ever have told you.',
+        25: 'Invariance test: change a field the model must not care about, and the prediction must not move. Catches an accidental id or timestamp leaking into the features.',
+        26: 'Exact equality via allclose. If this fails, some column you believed was ignored is doing real work.',
+        31: 'Directional expectation: 90 more days since the last order must not DECREASE churn risk. Domain knowledge, turned into an assertion.',
+        32: 'Not 100% - tree models are locally non-monotone. Pick a threshold you can defend and alert on the trend rather than demanding perfection.',
+        37: 'Determinism check: the same 20 rows must produce the predictions saved at training time. This is what catches a library upgrade, a changed default, or a preprocessing step that quietly moved. Round to 6 dp so a BLAS version bump is not a failure; use exact equality if you fully control the runtime.',
+      },
+    },
+    {
+      type: 'note',
+      md: 'That last group is **behavioural testing** — the CheckList framing from NLP: test *capabilities* (minimum functionality, invariance, directional expectation) instead of one aggregate score, exactly as you would unit-test a function rather than measure its average correctness.',
+    },
+    {
+      type: 'note',
+      md: 'The pre-deploy checklist, concrete, all of it mechanical: (1) **the artifact loads** in a clean container with only the pinned production requirements; (2) **the signature matches** — input column names, order and dtypes, and the output shape the caller expects; (3) **latency is under budget on a warm instance**, measured after warm-up at the real batch size, at p99 not p50; (4) **memory fits** the container limit with the model loaded, times the number of worker processes; (5) **a fixed fixture reproduces training-time output** — the same 20 rows, the same predictions, byte-for-byte; (6) **monitoring is wired up before traffic**, not after: prediction distribution, input drift, latency, error rate, and `model_version` on every logged prediction. Six lines, and each one has ended somebody\'s week.',
+    },
+  ],
+  quiz: [
+    {
+      question: 'Churn scores are shown on an internal dashboard and used for a weekly email campaign. Which serving mode?',
+      options: [
+        {
+          text: 'Online — an API so the score is always current',
+          explanation: 'The score depends on last month of behaviour, not on anything happening at request time. You would be buying a service, autoscaling and a pager for a number nobody needs fresher than a day.',
+        },
+        {
+          text: 'Batch — score everyone nightly into a table the dashboard reads',
+          explanation: 'Correct. Hours of staleness are irrelevant here, the inputs all exist beforehand, and the failure mode is "yesterday\'s scores" instead of an outage.',
+        },
+        {
+          text: 'Streaming — score off a Kafka topic as events arrive',
+          explanation: 'Streaming buys seconds of freshness for the cost of a consumer, a topic and its lag monitoring. Nothing in a weekly email campaign can use that.',
+        },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'You run a new fraud model in shadow for two weeks. What can you conclude?',
+      options: [
+        {
+          text: 'That the new model catches more fraud than the old one',
+          explanation: 'No. Nobody acted on the shadow predictions, so no transaction was blocked and no outcome changed. You have predictions, not consequences.',
+        },
+        {
+          text: 'That it is safe to send it 100% of traffic immediately',
+          explanation: 'Shadow proves it runs and its outputs look sane. Real traffic still needs a graduated rollout with guardrails — shadow never exercised the code path that actually declines a card.',
+        },
+        {
+          text: 'That it runs on real traffic without crashing, within latency budget, with a sane score distribution',
+          explanation: 'Correct — that is exactly the "does it work" question. Shadow is the only way to learn it on production inputs before anyone can be harmed.',
+        },
+      ],
+      correct: 2,
+    },
+    {
+      question: 'Offline AUC 0.91, production AUC 0.78. The model file is unchanged and input drift monitors are clean. First suspect?',
+      options: [
+        {
+          text: 'Training-serving skew — the feature is computed differently in the two paths',
+          explanation: 'Correct. Raw-data drift monitors stay clean because the raw data did not change; only the computation did. Compare a feature vector logged at serving with the same row recomputed by the training job.',
+        },
+        {
+          text: 'The model is overfitting',
+          explanation: 'Overfitting shows up as a train/holdout gap offline. The offline holdout number was fine here, so the gap opened somewhere between offline and production.',
+        },
+        {
+          text: 'Concept drift — user behaviour changed',
+          explanation: 'Possible in general, but it decays gradually rather than appearing as a step at deploy time, and it would usually move the input distributions your monitors are watching.',
+        },
+      ],
+      correct: 0,
+    },
+    {
+      question: 'Why must a training set be built with a point-in-time correct join?',
+      options: [
+        {
+          text: 'To make the query faster on large feature tables',
+          explanation: 'A LATERAL per-row lookup is usually slower, not faster. Correctness is the reason you pay for it.',
+        },
+        {
+          text: 'Otherwise a row gets today\'s feature value against an old label — training on the future',
+          explanation: 'Correct. The offline metric goes UP, which is why leakage survives review. In production the model never gets that future information and quietly underperforms.',
+        },
+        {
+          text: 'Because the online store only keeps the latest value per key',
+          explanation: 'True of the online store, but that is a storage detail. Point-in-time correctness is about which value was true when the label event happened.',
+        },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'What is the difference between a canary rollout and an A/B test?',
+      options: [
+        {
+          text: 'They are the same thing at different traffic percentages',
+          explanation: 'Percentage is the only thing they share. Their questions, their randomization and their reading are all different.',
+        },
+        {
+          text: 'A canary is for code and an A/B test is for models',
+          explanation: 'Both apply to models. Canary is how you release one; A/B is how you evaluate one.',
+        },
+        {
+          text: 'Canary asks "is it safe" from technical guardrails; A/B asks "is it better" from a powered, user-randomized experiment',
+          explanation: 'Correct. A canary at 1% for an hour is confounded with time, not randomized by user and nowhere near powered — it can only tell you nothing is on fire.',
+        },
+      ],
+      correct: 2,
+    },
+    {
+      question: 'Where does a schema/range/category check on the training data belong?',
+      options: [
+        {
+          text: 'As a pipeline gate that runs before training and fails the DAG',
+          explanation: 'Correct. A model trained on bad data throws no exception — it just gets worse. The gate turns a silent quality loss into a loud, timestamped failure before any GPU-hours are spent.',
+        },
+        {
+          text: 'After training, comparing the new metrics with last week\'s',
+          explanation: 'That detects the damage a week late and cannot tell you which column caused it. By then the bad model may already be serving.',
+        },
+        {
+          text: 'In the serving API, validating each request',
+          explanation: 'Request validation is necessary too, but it protects one prediction. It does nothing about a training set poisoned by an upstream job.',
+        },
+      ],
+      correct: 0,
+    },
+    {
+      question: 'A test asserts that changing `signup_referrer` does not change the prediction. What kind of test is it, and what does it catch?',
+      options: [
+        {
+          text: 'A data test catching a missing column',
+          explanation: 'A missing column is a schema failure caught by the data gate. This test runs against the trained model with fully valid data.',
+        },
+        {
+          text: 'A slice test catching poor performance on referred users',
+          explanation: 'A slice test measures a metric on a subgroup. This one compares two predictions on the same rows and never touches a label.',
+        },
+        {
+          text: 'A directional-expectation test',
+          explanation: 'Directional tests assert the prediction moves a specific way when a feature moves. This one asserts it does not move at all.',
+        },
+        {
+          text: 'An invariance test catching a field leaking into the features that should have been ignored',
+          explanation: 'Correct. It is the CheckList-style invariance behaviour: perturb something irrelevant, the output must hold. It catches ids, timestamps and join artefacts doing hidden work.',
+        },
+      ],
+      correct: 3,
+    },
+    {
+      question: 'One model, one team, nightly batch scoring. Someone proposes deploying Feast. Best response?',
+      options: [
+        {
+          text: 'Yes — a feature store is the only way to prevent training-serving skew',
+          explanation: 'The guarantee is one definition and one code path. A feature store is one way to buy that guarantee, not the only one.',
+        },
+        {
+          text: 'Yes — you will need it eventually, so build it now',
+          explanation: 'That is the argument that turns a two-week project into a quarter. Adopt it when a second model or a real-time path forces the issue.',
+        },
+        {
+          text: 'No — a shared, tested features.py imported by both the training and scoring jobs gives the same guarantee for zero infrastructure',
+          explanation: 'Correct. With one batch path there is no online store to keep consistent; a shared module plus unit tests is the honest answer. Revisit when several models share features or a real-time requirement appears.',
+        },
+      ],
+      correct: 2,
+    },
+  ],
+  interviewQuestions: [
+    {
+      question: 'Batch, online or streaming — how do you choose a serving mode?',
+      answer:
+        'Three questions in order. (1) Freshness: how stale may the prediction be? Hours is fine, so batch — a scheduled job scores everything into a table the app SELECTs from. Seconds, so streaming — a consumer scores events off Kafka. Milliseconds and computed from the request, so online. (2) Does the input exist before the request? This is the deciding question: a churn score depends on last month and can be precomputed, while a fraud score depends on the transaction being authorised right now and cannot. (3) Cost and blast radius: batch is one job plus one query and its worst day means yesterday\'s scores; online is a service, autoscaling, warm-up, a latency budget and a pager, and its worst day is an outage. I would add the honest bias: teams pick online far more often than they need to. I start batch and upgrade only when a product requirement, not a preference, forces it.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Explain shadow deployment, canary, and A/B testing, and say when you use each.',
+      answer:
+        'Shadow sends production traffic to both models, returns the old model\'s answer and only logs the new one — zero user risk, and the only way to measure a candidate on real traffic before it can hurt anyone. It catches broken feature pipelines, latency you did not budget for, crashes on real inputs, and a prediction distribution unlike your offline test set. It cannot tell you the model is better, because nobody acted on those predictions. Canary routes a real percentage — 1, 5, 25, 100 — while watching error rate, latency and fast guardrails, with automatic rollback. A/B is a proper experiment: randomize by user, fix metric and horizon up front, run until powered, read once. The compressed version: shadow answers "does it work", canary answers "is it safe", A/B answers "is it better" — and you run them in that order. The mistake I watch for is treating a 1% canary as an experiment: it is confounded with time, not randomized by user, and hopelessly underpowered.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Case: your new fraud model shows a large offline AUC improvement. Walk me through getting it into production.',
+      answer:
+        'I would not ship on an offline number for a model that can decline real payments. First, gates in CI: the artifact loads in a clean container, the input signature matches, it beats the shipped model on a holdout, it holds on slices — geography, card type, merchant category, new versus tenured customers — and a golden fixture reproduces training-time predictions. Then shadow for one to two weeks: both models score every transaction, the champion is served, the challenger is logged with a hard 150 ms timeout and a fire-and-forget task so it can never slow or fail the real request. From the shadow logs I check p99 latency, error rate, score distribution, and the disagreement rate against the champion, and I inspect a sample of disagreements by hand. Then a canary: 1% of traffic, watching decline rate, false-positive complaints, latency and downstream approval rate, with automatic rollback if a guardrail trips; then 5, 25, 100 over days rather than minutes. Whether it is genuinely better is an A/B question — randomized by user, powered on fraud loss and false-positive rate, and read at the end. Rollback throughout must be a registry pointer move back to the previous version plus a restart: one command, under five minutes, no CI run. And the shadow path must be read-only — a challenger that can write to the same tables or decline the same card is not a shadow, it is an undeclared deploy.',
+      isCaseBased: true,
+    },
+    {
+      question: 'What is training-serving skew, and how do you prevent it without buying a feature store?',
+      answer:
+        'It is the same feature computed by two different code paths that silently disagree: a pandas job for training, a service call for serving. The causes are all boring — calendar days versus a rolling 720 hours, UTC versus local time, fillna(0) on one side and a null on the other, an unseen category, rupees versus paise, a different rounding rule. Nothing throws; the only symptom is a metric, typically offline AUC 0.91 and production 0.78 with an unchanged model. Prevention without a feature store: one shared, versioned, unit-tested module imported by both the training job and the serving path so there is literally one implementation; log the exact feature vector used at serving time and run a nightly job that recomputes those same rows with the training code and alerts on any mismatch above a tolerance; and keep a golden fixture whose predictions must match training-time output. The guarantee I care about is one definition and one code path — a feature store is one way to buy it, not the only way.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Case: production AUC dropped from 0.91 to 0.78 the day you deployed. The model file is unchanged and drift monitors on the raw inputs are clean. Debug it.',
+      answer:
+        'Clean raw-data monitors plus a step change at deploy time points away from concept drift and toward skew or a wiring bug. My order: (1) Log the exact feature vector the serving path built for a sample of requests, then recompute those same entity ids with the training code and diff column by column — this alone finds most of these. (2) Check column order and dtypes: many models accept a positional array, so two swapped columns produce plausible garbage with no error. (3) Check the null and unseen-category handling on each side, and the encoder version — a category absent at training time becomes an all-zero one-hot at serving, which is silent. (4) Check the join and the timestamps: if the serving path reads a feature table that is populated by a job which is now late, every request is being scored on yesterday\'s values. (5) Confirm which artifact is actually loaded — the deployment may point at a moving registry alias that promoted a different run than the one you evaluated. (6) Only then look at the label pipeline: if the "production AUC" itself is computed from delayed labels, part of the drop may be a measurement artefact. Fix forward is a registry pointer move back to the previous version while I investigate; the permanent fix is a single shared feature definition plus the nightly recompute-and-compare job so this class of bug is caught by an alert rather than by a metric.',
+      isCaseBased: true,
+    },
+    {
+      question: 'What is a point-in-time correct join, and what breaks without one?',
+      answer:
+        'It is a join that attaches each training row the feature value that was true at that row\'s event time, not the value today. In SQL it is a lateral subquery: for each label, select the feature row with the greatest valid_from that is less than or equal to the label\'s event timestamp. Without it you join the current value onto a three-month-old label, so the model trains on information from after the outcome — often on the consequence of the very thing it is predicting. The dangerous part is the direction of the error: offline metrics go up, so leakage passes review and gets celebrated. In production the model never receives that future information and underperforms badly. The tell I look for is a single feature that takes AUC from 0.78 to 0.97; I assume leakage before I assume genius. This is also the main thing an offline feature store buys you: point-in-time joins by construction rather than by everyone remembering.',
+      isCaseBased: false,
+    },
+    {
+      question: 'When is a feature store worth it, and when is it overkill?',
+      answer:
+        'Worth it when several models share features, when multiple teams would otherwise each write their own version of orders_30d, when there is a real-time requirement so the serving path cannot run a pandas aggregation and needs a millisecond key-value lookup instead, or when features come off streams. What you get: one versioned definition, an offline store with point-in-time joins for training, an online store with the latest value per key, one materialization job feeding both, plus discovery and lineage. Overkill when it is one model, one team and batch scoring — there is no online path to keep consistent, so a shared tested features.py used by both jobs gives the same guarantee for zero infrastructure. Feast is the usual open-source choice; Tecton, Vertex and SageMaker are the managed ones. The cost is real: another store, a materialization job, freshness monitoring on it, and a new failure mode where a stale online store silently serves old values.',
+      isCaseBased: false,
+    },
+    {
+      question: 'How do you test ML code? Be specific about the kinds of tests.',
+      answer:
+        'Three kinds, in order of cost. Code tests: plain pytest on the transforms — the encoder, the window aggregation, the outlier clipper, the date parser. Deterministic, milliseconds, no model needed, and they catch most real bugs, so they run on every commit. Data tests: the input contract enforced as a pipeline gate before training — schema, dtypes, ranges, nullability, allowed category sets, primary-key uniqueness, and row-count deltas versus yesterday, with Great Expectations or Pandera. They must fail the DAG, not warn, because a model trained on bad data throws nothing and just gets quietly worse. Model tests: on the trained artifact — beats a baseline rather than beating zero, holds on commercially and ethically important slices instead of only on the average, invariance (changing an irrelevant field must not change the prediction), directional expectation (90 more days since the last order must not reduce churn risk), and a smoke test that loads the artifact and predicts on a fixed fixture. That last group is behavioural testing in the CheckList sense: test capabilities, not one aggregate number. The line I use: code tests protect the transform, data tests protect the training set, model tests protect the users.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Case: a model has been degrading for two weeks. You find an upstream job started writing nulls into one column, and everything downstream accepted it. What do you change?',
+      answer:
+        'Immediate: identify the first bad partition, roll the serving model back to the last version trained on clean data — a registry pointer move plus a restart, not a rebuild — backfill the column, and retrain once the data is repaired. Then the systemic changes, because the bug is that nothing failed. (1) A validation gate upstream of training that asserts nullability, ranges, category sets and row-count deltas and fails the DAG; a null-rate jump from 0% to 40% should have stopped the run at 02:14 with the column named. (2) The same checks on the serving side as a monitor, since the online path was presumably being fed the same nulls. (3) A data contract with the upstream team: their job also validates on write, so the failure surfaces at the producer instead of three systems later. (4) Freshness and completeness checks on the source table, not only correctness. (5) Alert on the training data profile between runs, not just on the model metric — the metric is the slowest possible detector. (6) Keep the reproducibility trail — data version, feature version and code version logged per run — so "which runs are contaminated" is a query rather than an archaeology project. The framing I want the interviewer to hear: this was not a modelling failure, it was a missing gate, and the fix belongs in the pipeline.',
+      isCaseBased: true,
+    },
+    {
+      question: 'What is on your checklist before a model goes to production?',
+      answer:
+        'Six mechanical items. (1) The artifact loads in a clean container with only the pinned production requirements — this catches the dependency that only exists in the training image. (2) The signature matches: input column names, order and dtypes, and the output shape the caller expects, because many models take a positional array and swapped columns produce plausible garbage. (3) Latency is under budget on a warm instance, measured after warm-up, at the real batch size, at p99 rather than p50. (4) Memory fits the container limit with the model loaded, multiplied by the number of worker processes. (5) A fixed fixture reproduces the predictions saved at training time, which is what catches a library upgrade or a preprocessing step that quietly moved. (6) Monitoring is wired before traffic, not after: prediction distribution, input drift, latency, error rate, and model_version stamped on every logged prediction so any score is traceable to a specific run. I would add: the rollback path has been tested at least once, because a rollback plan nobody has run is a hope.',
+      isCaseBased: false,
+    },
+    {
+      question: 'How do you roll a model back, and how long should it take?',
+      answer:
+        'Rollback is a pointer move, not a rebuild and not a git revert. Artifacts are immutable and versioned in the registry; the deployment holds a pointer to a version. Rolling back means pointing at the previous version and restarting or hot-reloading — one command, under five minutes, no CI run and no image build. Two design choices make that possible. First, decide deliberately whether weights are baked into the image (fully immutable, but a multi-gigabyte rebuild per model) or loaded from the registry at boot (small image, faster iteration, but the running container is no longer reproducible from the image alone). Second, if you load at boot, pin an explicit version in production and never a moving alias like "Production" — otherwise a promotion silently changes what your pods load on the next restart, and your rollback target moves under you. I also keep the previous version warm during a canary so rollback is a traffic switch rather than a cold start, and I make sure any state the new model wrote — cached features, a new column — is either backward compatible or reverted alongside it.',
+      isCaseBased: false,
+    },
+  ],
+  flashcards: [
+    { front: 'The three serving modes, and the question that picks one', back: 'Batch (score into a table, app SELECTs), online (API per request), streaming (consumer off a queue). The deciding question: does the input exist before the request? If yes, precompute it.' },
+    { front: 'The honest default for serving', back: 'Batch, until a product requirement forces online. Most teams build a real-time service for a number nobody needs fresher than a day.' },
+    { front: 'Shadow vs canary vs A/B', back: 'Shadow: both models run, old one served, new one logged — "does it work". Canary: a real % of traffic with guardrails — "is it safe". A/B: user-randomized powered experiment — "is it better". Run in that order.' },
+    { front: 'Why a shadow deployment is risk-free (and what breaks that)', back: 'The user only ever sees the old model\'s answer. It stops being risk-free the moment the shadow path can write: same table, same email, same decline, same feature update.' },
+    { front: 'Model rollback', back: 'A registry pointer move back to the previous version plus a restart — one command, under 5 minutes, no rebuild. Artifact immutable, pointer mutable; pin an explicit version in prod, never a moving alias.' },
+    { front: 'Training-serving skew', back: 'One feature name, two code paths, silently different values (window, timezone, null fill, unseen category, units). Nothing errors. Symptom: offline AUC 0.91, production 0.78 with an unchanged model.' },
+    { front: 'What a feature store actually is', back: 'One versioned definition + offline store (history, point-in-time joins, for training) + online store (latest value per key, ms lookup, for serving) + one materialization job that fills both. Feast is the common open-source one.' },
+    { front: 'Point-in-time correct join', back: 'Take the feature value as of the label\'s event time (greatest valid_from <= event_ts). Skip it and you train on the future: offline metrics go UP, production quietly fails. A suspiciously predictive feature is leakage until proven otherwise.' },
+    { front: 'The three kinds of ML tests', back: 'Code tests (pytest on transforms — fast, do first), data tests (schema/ranges/nulls/categories/row-count deltas as a gate BEFORE training — Great Expectations, Pandera), model tests (baseline, slices, invariance, direction, golden fixture).' },
+    { front: 'Pre-deploy checklist for a model', back: 'Artifact loads in a clean container; signature (names, order, dtypes) matches; p99 latency under budget on a warm instance; memory fits × worker count; fixed fixture reproduces training-time output; monitoring wired before traffic.' },
+  ],
+  mindmapMarkdown: `- Serving Patterns, Feature Stores & Testing
+  - Three serving modes
+    - Batch: score nightly into a table, app SELECTs
+    - Online: API per request, input exists only now
+    - Streaming: consumer off a queue, seconds of lag
+    - Choose by freshness → precomputability → cost; mechanics in Backend L3
+  - Rolling out a MODEL
+    - Shadow: old served, new logged, read-only — "does it work"
+    - Canary %: guardrails — "is it safe"
+    - A/B: user-randomized, powered — "is it better"
+    - Rollback = registry pointer move, < 5 min, pin the version
+  - Training-serving skew
+    - One feature name, two code paths
+    - Windows, timezone, null fill, unseen category, units
+    - Nothing throws — offline 0.91, production 0.78
+  - Feature store
+    - One versioned definition, one materialization job
+    - Offline store: history + point-in-time joins
+    - Online store: latest per key, ms lookup
+    - Point-in-time = value as of the event time; leakage RAISES offline metrics
+    - Feast; overkill for one model + batch → shared features.py
+  - Testing ML code
+    - Code tests: pytest on transforms, first
+    - Data tests: schema, ranges, nulls, categories, row deltas
+    - Gate BEFORE training, fail the DAG — Pandera / Great Expectations
+    - Model tests: baseline, slices, invariance, direction
+    - Golden fixture = determinism check; CheckList behaviours
+  - Pre-deploy checklist
+    - Artifact loads clean, signature (names, order, dtypes) matches
+    - p99 latency warm, memory × worker count
+    - Fixture reproduces training output, monitoring wired first`,
+}
+
+export default m

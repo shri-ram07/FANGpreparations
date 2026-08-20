@@ -1,0 +1,555 @@
+import type { Module } from '../types'
+
+const m: Module = {
+  id: 'mlops-l1-cicd',
+  subjectId: 'mlops',
+  level: 1,
+  title: 'CI/CD with GitHub Actions: Lint, Test, Build, Deploy',
+  whyItMatters:
+    'The plan says write the YAML by hand once — because "we use CI/CD" is a sentence anyone can say, and reading a broken workflow file is not. This module is also the spine of the grand practical: the pipeline that takes your containerized model from a commit to a canary in production, and the answer to "blue-green vs canary", which is a named interview theme.',
+  estMinutes: 55,
+  sections: [
+    {
+      type: 'intuition',
+      title: 'CI, CD, and the other CD',
+      md: `Merging once a quarter fails for the same reason as skipping rent for a year. The bill still arrives — bigger, and with interest.
+
+- **Continuous integration (CI)**: every push is automatically built and tested against the shared \`main\` branch. Integration pain gets paid in minutes instead of months.
+- **Continuous delivery (CD)**: every green build produces a deployable artifact and a one-button path to production. A human still presses the button.
+- **Continuous deployment (the other CD)**: no button. Green means it goes live by itself.
+- The distinction is an interview filter. Most teams run CI plus continuous *delivery*; saying "continuous deployment" when you actually have an approval gate tells the interviewer you have never run a release.
+- Answer it as a spectrum and place yourself on it: "staging deploys automatically, production needs one approval — so continuous delivery, not deployment."
+- The artifact is the hinge. Build the image **once**, then promote that exact image through staging and production. Rebuilding per environment means you tested something you did not ship.`,
+    },
+    {
+      type: 'intuition',
+      title: 'The object model: workflow, job, step, runner',
+      md: `Four nouns. Get these wrong and every workflow you read looks like magic.
+
+- A **workflow** is one YAML file in \`.github/workflows/\`. It has a name, a set of triggers, and jobs.
+- A **job** gets its own fresh virtual machine — the **runner**. \`runs-on: ubuntu-latest\` hands you a clean Ubuntu box that is destroyed when the job ends. Nothing survives it.
+- A **step** is one shell command (\`run:\`) or one reusable action (\`uses:\`). Steps inside a job share a machine and a filesystem. **Jobs do not.**
+- **Jobs run in PARALLEL by default.** \`needs:\` is the only thing that creates order. Forget it and your deploy job races your test job — and usually wins.
+- Because jobs get separate machines, anything a later job needs must be *published*: pushed to a registry, or uploaded with \`actions/upload-artifact\`.
+- Triggers (\`on:\`): \`push\` (with a branch filter), \`pull_request\` (the one that gates merges), \`schedule\` (cron, always UTC), \`workflow_dispatch\` (a manual Run button, with typed inputs).`,
+    },
+    {
+      type: 'code',
+      lang: 'yaml',
+      title: 'The whole pipeline, by hand, once',
+      code: `# .github/workflows/ci.yml
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 3 * * 1'
+
+env:
+  IMAGE: ghcr.io/\${{ github.repository }}
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install ruff==0.6.9
+      - run: ruff check .
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-\${{ runner.os }}-\${{ hashFiles('requirements.lock') }}
+          restore-keys: pip-\${{ runner.os }}-
+      - run: pip install -r requirements.lock
+      - run: pytest -q -m 'not gpu' --cov=app --cov-fail-under=80
+      - run: pytest -q tests/smoke_train.py --timeout=120
+
+  build:
+    needs: [lint, test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: \${{ github.actor }}
+          password: \${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: \${{ github.ref == 'refs/heads/main' }}
+          tags: \${{ env.IMAGE }}:\${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - name: canary 5 percent, then ramp
+        run: ./deploy.sh "$IMAGE:$GIT_SHA" --canary 5
+        env:
+          GIT_SHA: \${{ github.sha }}
+          DEPLOY_TOKEN: \${{ secrets.DEPLOY_TOKEN }}`,
+      annotations: {
+        4: 'on: is the trigger list. No trigger, no runs — this key is not optional.',
+        6: 'push filtered to main: this is the run that actually deploys. Unfiltered, every branch burns runner minutes twice (once for push, once for the PR).',
+        7: 'The trigger that gates merges. GitHub tests the MERGE of your branch into main, not your branch alone — which is why a PR can turn red without you touching it, when main moves underneath.',
+        8: 'A manual Run workflow button in the UI. Free to add, and the thing you will want at 2am.',
+        10: 'Cron, always UTC, five fields: minute hour day-of-month month day-of-week. Mondays 03:00 — where the slow nightly suite goes.',
+        13: 'Workflow-level env becomes a real environment variable inside every step. github.repository expands to owner/repo.',
+        16: 'lint is a JOB. lint and test are siblings with no needs: between them, so they start in the same second on two different machines.',
+        17: 'runs-on picks the runner: a fresh, throwaway VM. Nothing survives the job — not the checkout, not the venv, not /tmp.',
+        19: 'The repo is NOT on the runner by default. Forgetting checkout is everybody\'s first broken workflow.',
+        23: 'Pin the linter. An unpinned ruff upgrades itself one Tuesday and turns every open PR red for reasons nobody changed.',
+        33: 'The cache step. Without it this job downloads every wheel from PyPI on every run: roughly 4 minutes instead of 40 seconds.',
+        36: 'The key MUST contain hashFiles of the lockfile. Change a dependency, the hash changes, you get a fresh cache. Leave the hash out and CI cheerfully installs yesterday\'s dependencies forever — a green build testing the wrong code.',
+        37: 'restore-keys is the fallback prefix. On a miss, reuse the newest cache starting with this and install only the difference: warm cache without the staleness.',
+        39: 'Markers keep GPU tests off a GPU-less runner. --cov-fail-under turns coverage into a GATE instead of a number nobody reads.',
+        40: 'The ML smoke test: one epoch on a tiny fixture, assert the loss dropped and an artifact was written. A real training run does not belong in CI.',
+        43: 'needs: is the ONLY thing that creates order. Without it, build starts immediately — in parallel with the tests it is supposed to depend on.',
+        45: 'Least privilege for the auto-minted GITHUB_TOKEN. Write only on the job that pushes, so a compromised action in the lint job cannot publish an image.',
+        54: 'secrets.GITHUB_TOKEN is minted for this run and expires with it. Nothing to store, nothing to rotate, nothing to leak later.',
+        58: 'Build on every PR (a broken Dockerfile fails early), push only from main. Same YAML, two behaviours.',
+        59: 'Tag with the commit SHA. "latest" is not a version: you cannot roll back to it and you cannot tell which code is running.',
+        60: 'Docker layer cache stored in the same GitHub Actions cache. Turns a 5-minute image build into a 30-second one when only app code changed.',
+        65: 'The gate. build runs on pull requests too; deploy runs only on main.',
+        67: 'A named environment. Required reviewers and environment-scoped secrets live here — DEPLOY_TOKEN is unreadable from any other job in the repo.',
+        71: 'Pass values through env, never interpolate ${{ }} straight into a shell line. A branch name containing shell metacharacters would otherwise execute as your shell, as you.',
+        74: 'The secret is injected into this step only and masked in the logs. Masked is not safe — see the masking caveat below.',
+      },
+    },
+    {
+      type: 'note',
+      md: 'Caching is the difference between a pipeline people wait for and one they route around. The rule: **the cache key must include a hash of the lockfile** (`hashFiles(\'requirements.lock\')`, or `poetry.lock`, or `uv.lock`). Key on the branch name and you serve stale dependencies forever; key on the run id and you never hit the cache at all. `restore-keys` gives you the partial-hit path: reuse the newest near-match and install only what changed. Cache the *download* directory (`~/.cache/pip`), not the virtualenv — a venv contains absolute paths and compiled extensions and restores badly. Same idea for Docker: `cache-from: type=gha` reuses layers across runs, which only pays off if your Dockerfile copies the lockfile and installs deps *before* copying application code.',
+    },
+    {
+      type: 'intuition',
+      title: 'Secrets: a secret in the repo is a secret on the internet',
+      md: `Git history is forever. "I deleted it in the next commit" deletes nothing — the blob is still there, and so is the fork someone made.
+
+- **Repository secrets** are readable by every workflow in the repo. **Environment secrets** attach to a named environment (\`environment: production\`) and can require an approver before any job can read them. Use environments for anything that touches prod.
+- Reference them as \`\${{ secrets.DEPLOY_TOKEN }}\`. They are never in the repo, never in the image, and never in a \`.env\` you committed by accident.
+- Never bake one into an image either: \`ENV API_KEY=...\` in a Dockerfile lands in a layer, and anyone who can pull the image can read it with \`docker history\`.
+- **OIDC federation is the modern replacement for long-lived cloud keys**: the runner asks GitHub for a short-lived identity token, AWS/GCP verifies it and hands back credentials valid for minutes. Honest note — nothing to rotate and nothing to leak, but the trust policy is real IAM work, and a sloppy one (\`repo:org/*:ref:*\`) trusts every branch of every repo you own, including a fork's.
+- **The masking caveat**: GitHub replaces exact secret matches in logs with \`***\`. It does not catch a secret you base64'd, split across lines, or interpolated into a JSON blob. **A secret echoed into a log is a leaked secret** — masking is a courtesy, not a control. Rotate it, do not argue with it.
+- Corollary that surprises people: workflows from forked PRs get a read-only token and no secrets at all. That is deliberate, and it is why deploy jobs are gated on \`push\` to main.`,
+    },
+    {
+      type: 'note',
+      md: 'Matrix builds, one line: put `strategy: { matrix: { python: ["3.10", "3.11", "3.12"] } }` on a job and reference `${{ matrix.python }}` in the setup step — GitHub fans the job out into three parallel runs. Add `fail-fast: false` when you want all three results instead of the first failure cancelling the rest. It **multiplies**: 2 Python versions × 3 operating systems is 6 machines and 6× the minutes, so matrix only the axis that actually breaks.',
+    },
+    {
+      type: 'note',
+      md: 'A green pipeline enforces nothing by itself — anyone can merge red, or push straight to `main`. **Branch protection** is the enforcement layer: on `main`, require the `lint` and `test` checks to pass, require at least one approving review, require the branch to be up to date before merging (so your PR is tested against what it will actually merge into), and block force-push and deletion. The sentence to remember: **CI tells you the truth; branch protection is what makes anyone listen.** Add a CODEOWNERS file when specific directories need specific reviewers.',
+    },
+    {
+      type: 'visual',
+      component: 'PointerBoxDiagram',
+      props: {
+        title: 'One commit through the pipeline — including the day it fails',
+        notice: 'Six frames. Watch which jobs start together, what happens to the artifact when a test fails, and how the canary lets you undo a bad deploy in seconds.',
+        leftLabel: 'commit / traffic',
+        rightLabel: 'jobs / environments',
+        frames: [
+          {
+            note: 'Commit abc123f opens a pull request. lint and test start in the SAME second on two separate runners — nothing connects them. build and deploy sit idle only because they declared needs:.',
+            stack: [{ name: 'push abc123f', to: 'lint' }],
+            heap: [
+              { id: 'lint', value: 'job: lint (ruff)', label: 'running' },
+              { id: 'test', value: 'job: test (pytest)', label: 'running' },
+              { id: 'build', value: 'job: build image', label: 'waiting on needs' },
+              { id: 'dep', value: 'job: deploy', label: 'waiting on needs' },
+            ],
+          },
+          {
+            note: 'Both green in 40 seconds, because the pip cache hit — its key is the hash of requirements.lock, which did not change. needs: [lint, test] is now satisfied, so build starts.',
+            stack: [{ name: 'push abc123f', to: 'build' }],
+            heap: [
+              { id: 'lint', value: 'job: lint (ruff)', label: 'passed 18s' },
+              { id: 'test', value: 'job: test (pytest)', label: 'passed 40s' },
+              { id: 'build', value: 'job: build image', label: 'running' },
+              { id: 'dep', value: 'job: deploy', label: 'waiting on needs' },
+            ],
+          },
+          {
+            note: 'Different commit, one broken assertion. build is SKIPPED, so the image is never built — nothing to push, nothing to deploy. Broken code physically cannot reach production, and branch protection greys out the merge button on top of that.',
+            stack: [{ name: 'push def456a', to: 'test', danger: true }],
+            heap: [
+              { id: 'lint', value: 'job: lint (ruff)', label: 'passed' },
+              { id: 'test', value: 'job: test — 1 failed', danger: true, label: 'FAILED' },
+              { id: 'build', value: 'job: build image', label: 'skipped' },
+              { id: 'dep', value: 'job: deploy', label: 'skipped' },
+            ],
+          },
+          {
+            note: 'Fixed and merged. build runs docker build, tags the image with the commit SHA — never latest — and pushes it to the registry. This is THE artifact: built once here, promoted unchanged to staging and prod.',
+            stack: [{ name: 'merge 9fe0c21', to: 'img' }],
+            heap: [
+              { id: 'img', value: 'ghcr.io/app:9fe0c21', label: 'pushed' },
+              { id: 'dep', value: 'job: deploy', label: 'awaiting approval' },
+            ],
+          },
+          {
+            note: 'Deploy runs in the production environment: one required reviewer approved, and DEPLOY_TOKEN is readable only here. The router sends 5% of live traffic to the new image and keeps 95% on the old one. This is a canary.',
+            stack: [
+              { name: '95% of traffic', to: 'old' },
+              { name: '5% of traffic', to: 'new' },
+            ],
+            heap: [
+              { id: 'old', value: 'app:7ab19c0', label: 'stable' },
+              { id: 'new', value: 'app:9fe0c21', label: 'canary, watching' },
+            ],
+          },
+          {
+            note: 'Ten minutes in, the canary error rate is 8% against 0.2% on stable. Rollback = point 100% of traffic back at the old image, which never stopped running and is still tagged by its SHA. Seconds, no rebuild. 95% of users never saw the bug — that is the whole reason canary exists.',
+            stack: [
+              { name: '100% of traffic', to: 'old' },
+              { name: '0% (drained)', to: 'new', danger: true },
+            ],
+            heap: [
+              { id: 'old', value: 'app:7ab19c0', label: 'stable, still up' },
+              { id: 'new', value: 'app:9fe0c21', danger: true, label: 'errors 8% — rolled back' },
+            ],
+          },
+        ],
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'Blue-green, canary, rolling',
+      md: `Three ways to replace a running version. They differ in what you pay and how fast you can undo.
+
+- **Blue-green**: two identical environments. Blue serves traffic, you deploy to green, smoke-test it privately, then flip the router. Rollback is flipping back — seconds. Cost: **double the infrastructure** during the switch, and stateful things (schema migrations, in-flight sessions, warm caches) do not flip with the router.
+- **Canary**: one environment, two versions. Send 5% of traffic to the new one, watch error rate and latency for ten minutes, then ramp 5 → 25 → 50 → 100, or roll back. Cheap (a few extra instances) and gradual — but **useless without monitoring good enough to see a regression in 5% of traffic**.
+- **Rolling**: replace instances a few at a time until all are new. The Kubernetes default, tuned with \`maxSurge\` and \`maxUnavailable\` — the k8s module covers it. No extra environment, but both versions serve traffic for a while, and rollback is another slow roll.
+- Decision framing, three questions: how fast must rollback be, how much extra infrastructure can you afford, and **can you detect a bad version at all?** Instant rollback plus budget → blue-green. Gradual exposure plus real metrics → canary. Neither pressure → rolling, because it is already the default and free.
+- The ML wrinkle: a bad model rarely crashes. It returns confident nonsense, and a health check says 200 OK. That is exactly why model rollouts want canary against a **quality** metric, or shadow traffic (mirror real requests to the new model, compare offline, serve nobody).`,
+    },
+    {
+      type: 'note',
+      md: 'The honest note seniors say and juniors do not: **the rollback plan matters more than the deploy mechanism.** Blue-green over a migration that dropped a column is not a rollback, it is an outage with extra steps. So: tag every image by commit SHA and keep the previous one pullable; make schema changes backward-compatible in two phases (add + dual-write, deploy, remove the old path a release later); keep a feature flag for behaviour you may need to switch off *without* a deploy; and rehearse the rollback once, so you know it takes 90 seconds and not 40 minutes. A team that can roll back in a minute can deploy fearlessly with any of the three strategies.',
+    },
+    {
+      type: 'intuition',
+      title: 'CI for ML: the same pipeline, four things that break',
+      md: `Everything above still applies. These are the deltas that make an ML repo different.
+
+- **Tests are slower and flakier.** They load weights, touch a GPU, and depend on random seeds. Seed everything, mark the slow ones and run them nightly on \`schedule\`, and set a hard timeout so one hung CUDA call cannot burn six hours of runner minutes.
+- **GPU on CI is a decision, not a default.** GitHub-hosted runners have no GPU. Either mark and skip (\`pytest -m 'not gpu'\`) and run the GPU suite on a self-hosted runner nightly, or accept that CPU-only tests are what gates your PRs. Say which one you chose.
+- **Model artifacts do not go in git.** A 400 MB checkpoint makes every clone slow *forever*, because git keeps every version of it. Version data and weights with **DVC** (its own module) and let git track the tiny pointer file.
+- **A full training run does NOT belong in CI.** Hours and dollars on every push, and a red build then means "the GPU box was busy", not "your code is broken". Instead run a **smoke test**: train one epoch on a 50-row fixture, assert the loss went down and an artifact was written, in under 60 seconds. Real training is a separate pipeline triggered by a schedule, new data, or a drift alert — that is the **orchestration** module.
+- Two extra gates, one line each. **Data tests**: schema, null rate, allowed categories, range bounds — bad data fails the pipeline before it becomes a bad model. **Model tests**: the new model must beat both a dumb baseline and the current production model on a frozen eval set, and stay inside the latency budget. The testing module goes deep; here, just know they are gates exactly like pytest.`,
+    },
+    {
+      type: 'code',
+      lang: 'yaml',
+      title: 'pre-commit: the same gates, locally, in half a second',
+      code: `# .pre-commit-config.yaml
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-added-large-files
+        args: [--maxkb=500]
+      - id: detect-private-key
+      - id: check-yaml`,
+      annotations: {
+        4: 'Pin it to the SAME version CI installs. Local and CI disagreeing about formatting is an hour of your life you never get back.',
+        7: '--fix rewrites the file, so the commit aborts: what you staged is no longer what is on disk. git add -u, commit again.',
+        15: 'The hook that keeps a 400 MB checkpoint out of git history, where it would live forever in every clone. Weights belong in DVC or object storage.',
+        16: 'Catches an SSH or API key before it becomes a commit. Once it is in history, rotating the key is the only real fix.',
+        17: 'Parses every YAML file — including the workflow you just edited. Catches the typo locally instead of after a push and a 30-second wait.',
+      },
+    },
+    {
+      type: 'code',
+      lang: 'bash',
+      title: 'Using it',
+      code: `pip install pre-commit
+pre-commit install            # writes .git/hooks/pre-commit
+pre-commit run --all-files    # first run: clean the whole repo in one go
+
+git commit -m "feat: batch endpoint"
+# ruff.....................................................Failed
+# - hook id: ruff
+# - files were modified by this hook
+# trailing-whitespace......................................Passed
+#
+# ...and the commit did not happen.
+
+git add -u
+git commit -m "feat: batch endpoint"    # 0.4 s, green, done
+
+pre-commit autoupdate                   # bump the pinned revs deliberately
+SKIP=ruff git commit -m "wip"           # skip ONE hook
+git commit --no-verify -m "wip"         # skip all of them`,
+      annotations: {
+        2: 'Installs a hook into .git/hooks — which git does NOT track. Every clone, every teammate, has to run this once. That is precisely why pre-commit can never replace CI.',
+        3: 'Run this the day you adopt pre-commit, or your next innocent one-line commit tries to reformat 300 unrelated files.',
+        8: 'The hooks FIXED your files rather than only complaining. Nothing was committed, because the staged content changed underneath you.',
+        14: 'Half a second locally versus a twelve-minute pipeline telling you the same thing. That gap is the entire argument for pre-commit.',
+        18: '--no-verify skips every hook, and that is fine — which is exactly why CI runs the same checks server-side, where nobody can skip them.',
+      },
+    },
+    {
+      type: 'note',
+      md: 'Where this sits in the plan: the previous module containerized the FastAPI ML API, and this one is the machine that ships it — the same image, built once by `build`, promoted by `deploy`. Next come the pipeline modules (MLflow, DVC, Airflow) that this workflow will *trigger* rather than contain, and the k8s module that turns `deploy.sh` into a real rolling update. The grand practical is all of them wired together: Airflow ingests, DVC versions, MLflow tracks, **GitHub Actions builds and deploys**, Grafana watches, a drift alert starts it again.',
+    },
+  ],
+  quiz: [
+    {
+      question: 'Your workflow has jobs `lint` and `test`, neither with a `needs:` key. What happens on a push?',
+      options: [
+        {
+          text: 'Both start at the same time, on two separate runners with separate filesystems',
+          explanation: 'Correct. Parallel is the default. Anything test needs from lint would have to be uploaded as an artifact — the machines share nothing.',
+        },
+        { text: 'They run in the order written in the file', explanation: 'YAML order means nothing to the scheduler. Only `needs:` creates order.' },
+        { text: 'They run in sequence on the same runner, sharing the checkout', explanation: 'That is what STEPS inside one job do. Separate jobs get separate, throwaway VMs.' },
+      ],
+      correct: 0,
+    },
+    {
+      question: 'Your cache key is `pip-${{ runner.os }}` with no lockfile hash. What goes wrong?',
+      options: [
+        { text: 'Nothing — it just caches more aggressively', explanation: 'It caches more aggressively at the cost of correctness, which is the worst trade in CI.' },
+        { text: 'The cache never hits, so every run is slow', explanation: 'Backwards: this key always hits. Never hitting is what happens if you key on the run id.' },
+        {
+          text: 'You add a dependency, the key is unchanged, and CI keeps testing against the OLD dependency set',
+          explanation: 'Correct, and it is the dangerous kind of bug: a green build that tested something other than what you are about to ship. Put hashFiles(lockfile) in the key.',
+        },
+      ],
+      correct: 2,
+    },
+    {
+      question: 'Every check is green on your repo, yet broken code reached `main` last week. Most likely cause?',
+      options: [
+        { text: 'The tests do not cover that code path', explanation: 'Possible in general, but it does not explain code arriving on main WITHOUT a green run.' },
+        {
+          text: 'No branch protection — checks were advisory, so someone merged red or pushed directly',
+          explanation: 'Correct. CI reports; branch protection enforces. Required checks plus required review plus no direct push is what actually closes the door.',
+        },
+        { text: 'The cache was stale', explanation: 'A stale cache produces a wrong green result, but the fix here is enforcement, and the question says checks were green after the fact.' },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'A teammate says "the log shows *** so the API key is fine, no need to rotate". Correct?',
+      options: [
+        { text: 'Yes — GitHub masks secrets in logs', explanation: 'Masking is best-effort string replacement on exact matches. It is not a security boundary.' },
+        { text: 'Yes, as long as the repo is private', explanation: 'Private repos still have collaborators, forks, log exports and third-party actions. Privacy is not rotation.' },
+        {
+          text: 'No — masking misses transformed secrets (base64, split, embedded in JSON), so treat any echoed secret as leaked and rotate it',
+          explanation: 'Correct. Masking is a courtesy, not a control. The moment a secret can appear in a log, it is compromised.',
+        },
+      ],
+      correct: 2,
+    },
+    {
+      question: 'You are rolling out a new ranking model. Failure mode is worse recommendations, not crashes. Which strategy fits best?',
+      options: [
+        { text: 'Blue-green — instant flip, instant rollback', explanation: 'Blue-green flips 100% of traffic at once. A quality regression would hit every user before you noticed, and the health check would stay green throughout.' },
+        {
+          text: 'Canary — 5% of traffic while you watch a quality metric, then ramp or roll back',
+          explanation: 'Correct. Gradual exposure limits the blast radius, and a silent quality failure needs observation time that only canary (or shadow traffic) gives you.',
+        },
+        { text: 'Rolling — the k8s default, no extra config', explanation: 'Rolling also exposes users progressively but has no traffic-percentage control and no comparison of old versus new; it is a restart policy, not an experiment.' },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'Should a full model training run be a step in your CI workflow?',
+      options: [
+        {
+          text: 'No — run a one-epoch smoke test on a tiny fixture in CI, and trigger real training as a separate scheduled or event-driven pipeline',
+          explanation: 'Correct. Hours of GPU on every push is unaffordable, and it makes red builds mean "infra was busy" rather than "your code is broken".',
+        },
+        { text: 'Yes — otherwise you never know the model still trains', explanation: 'The smoke test answers exactly that question in 60 seconds: loss decreased, artifact written.' },
+        { text: 'Yes, but only on the main branch', explanation: 'Still hours and dollars per merge, and it blocks the deploy job behind a training queue. Separate the pipelines.' },
+      ],
+      correct: 0,
+    },
+    {
+      question: '`build` has `needs: [lint, test]`. The test job fails. What happens to build and deploy?',
+      options: [
+        { text: 'build runs anyway; deploy is skipped', explanation: 'A failed dependency skips the dependent job. build never starts.' },
+        { text: 'Both run, and the deploy is rolled back automatically', explanation: 'Actions has no automatic rollback, and nothing runs downstream of a failed needs: anyway.' },
+        {
+          text: 'Both are skipped — no image is built, so there is no artifact that could reach production',
+          explanation: 'Correct, and that is the whole safety property: the pipeline stops before the artifact exists, so broken code has nothing to be deployed from.',
+        },
+      ],
+      correct: 2,
+    },
+    {
+      question: 'Why is OIDC federation preferred over storing an AWS access key as a repository secret?',
+      options: [
+        { text: 'It is faster at authenticating', explanation: 'Speed is irrelevant here — both take milliseconds.' },
+        {
+          text: 'The runner gets short-lived credentials scoped to a specific repo and branch, so there is no long-lived key to rotate or leak',
+          explanation: 'Correct. The honest caveat: the IAM trust policy is real work, and a sloppy wildcard subject trusts branches and repos you did not mean to.',
+        },
+        { text: 'It lets you skip the permissions: block', explanation: 'Opposite — OIDC needs `id-token: write` in permissions, and you still scope the cloud role tightly.' },
+      ],
+      correct: 1,
+    },
+  ],
+  interviewQuestions: [
+    {
+      question: 'Define CI, continuous delivery and continuous deployment, and tell me which one your team actually did.',
+      answer:
+        'CI is the discipline of merging into a shared main branch frequently and having every push automatically built and tested, so integration conflicts surface in minutes rather than at the end of a quarter. Continuous delivery means every green build produces a deployable, versioned artifact and there is a repeatable one-button path to production — a human still chooses when. Continuous deployment removes the human: green goes live automatically. The distinction matters because most real teams stop at delivery, and claiming deployment when you have an approval gate signals you have not run a release. I would answer concretely: "we deploy to staging automatically on every merge, and production requires one approval in a GitHub environment, so continuous delivery." The invariant underneath all three is that the artifact is built once and promoted — the image tested in staging is byte-for-byte the image that reaches prod, because rebuilding per environment means you shipped something you never tested.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Walk me through the GitHub Actions workflow you would write for a Python ML API.',
+      answer:
+        'Triggers: pull_request for the gate, push to main for the deploy, workflow_dispatch for a manual run, and schedule for the nightly slow suite. Four jobs. lint and test have no needs:, so they run in parallel on separate runners: lint is checkout, setup-python, a pinned ruff, ruff check. test is checkout, setup-python, actions/cache on ~/.cache/pip keyed on hashFiles of the lockfile with a restore-keys prefix, install, then pytest with markers excluding GPU tests, a coverage gate via --cov-fail-under, and a one-epoch training smoke test with a timeout. build has needs: [lint, test], a permissions block granting packages: write only here, a registry login using the auto-minted GITHUB_TOKEN, and docker/build-push-action with GHA layer caching, tagged by commit SHA, pushing only when the ref is main. deploy has needs: build, an if on the ref, and environment: production so it gets a required reviewer and environment-scoped secrets; it runs the rollout script with the secret passed as an env var rather than interpolated into the shell line. Then the two non-YAML halves I would mention: branch protection requiring lint and test, and a pre-commit config pinned to the same tool versions.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Blue-green versus canary. Explain both and tell me when you pick which.',
+      answer:
+        'Blue-green runs two complete identical environments. Blue takes production traffic; you deploy the new version to green, smoke-test it privately with no users on it, then flip the load balancer. Rollback is flipping the router back, so it is seconds and it is total. The costs are real: you pay for double the infrastructure across the switch, the flip is all-or-nothing so a bad version hits 100% of users at once, and anything stateful does not flip — database migrations, in-flight sessions, warm caches all cross the boundary. Canary runs one environment with two versions side by side. You route a small slice, say 5%, to the new version, watch error rate, latency and business metrics for a window, then ramp 5 to 25 to 50 to 100 or abort. It is much cheaper — a few extra instances, not a second estate — and the blast radius of a bad release is 5% of users instead of everyone. The costs are that it is slow, it needs a router that can split traffic by percentage, and it is worthless without monitoring sensitive enough to detect a regression inside a 5% sample; at low traffic you may never reach statistical significance. My decision rule is three questions: how fast must rollback be, how much extra infrastructure can I afford, and can I actually detect a bad version? Need instant total rollback and have the budget: blue-green. Gradual exposure with good observability, especially where failure is a quality regression rather than a crash: canary. And rolling, which is the Kubernetes default, sits in between — no extra environment, gradual replacement, but no traffic-percentage control and a slow rollback. For ML specifically I lean canary or shadow traffic, because a bad model returns confident nonsense while every health check stays green, so I need observation time against a quality metric, not a liveness probe.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Case: your CI takes 22 minutes and developers have started merging without waiting for it. Fix it.',
+      answer:
+        'Twenty-two minutes is a cultural problem before it is a technical one, so I would fix both. First measure: the Actions UI gives per-job and per-step timing, and usually one or two steps dominate. The usual suspects and their fixes, cheapest first. Dependency installation with no cache, or a cache keyed wrongly so it never hits: add actions/cache on the package download directory keyed on the lockfile hash with a restore-keys prefix — typically four minutes to forty seconds. A serial pipeline: lint, test and image build often have no real dependency, so drop the needs: between them and let them run in parallel; total minutes stay the same, wall-clock drops to the longest job. A Docker build with no layer cache and a Dockerfile that copies source before installing dependencies: reorder so the lockfile is copied and installed first, and add cache-from/cache-to type=gha. A slow test suite: split by marker so PRs run the fast unit tests and the slow integration and GPU tests move to a nightly schedule, and run pytest with -n auto if the tests are parallel-safe. Then the enforcement half: branch protection with lint and test as required checks, so merging without waiting is not a choice anyone has. My target is under ten minutes for the PR path, because that is roughly the attention span before people context-switch, and the required-check gate is what makes the fast pipeline actually the path of least resistance.',
+      isCaseBased: true,
+    },
+    {
+      question: 'Case: you deploy at 16:00. At 16:03 the error rate is 8%. Talk me through the next ten minutes.',
+      answer:
+        'Mitigate first, diagnose second — that ordering is most of the answer. Minute one: roll back. If it is a canary, shift traffic to 0% on the new version; if blue-green, flip the router; if rolling on Kubernetes, kubectl rollout undo. This works only because the previous image is tagged by commit SHA and still pullable, which is why "latest" is banned. Minute two: confirm the error rate actually recovered — if it did not, the deploy was correlated, not causal, and I start looking at a dependency, a database, or a config change that landed at the same time. Minute three: check whether anything is now inconsistent. This is the question people forget: if the release ran a schema migration or wrote data in a new format, rolling back the code does not roll back the data, and I may need forward-fix instead. Then diagnosis with traffic already safe: diff the deployed commit range, read the error signature in the logs, and reproduce in staging. Afterwards, the prevention items in the postmortem: was the canary window long enough or did I ramp in three minutes; was there an automatic abort on error-rate threshold rather than a human watching a dashboard; did any test cover this path; and should schema changes be split into backward-compatible phases so rollback is always safe. The line I would end on: the rollback plan matters more than the deploy mechanism, and the rollback should have been rehearsed before it was needed.',
+      isCaseBased: true,
+    },
+    {
+      question: 'How do you handle secrets in a CI pipeline?',
+      answer:
+        'Layered. Nothing sensitive lives in the repo, ever — git history is permanent and a later deletion commit removes nothing. Short-lived, scoped credentials first: GITHUB_TOKEN is minted per run and expires with it, and I narrow it with a permissions block so only the job that pushes an image has packages: write. For cloud access I prefer OIDC federation over a stored access key: the runner requests an identity token, the cloud trust policy checks the repo and branch, and hands back credentials valid for minutes — nothing to rotate, nothing to exfiltrate. The honest caveat is that the trust policy is real IAM work and a wildcard subject silently trusts every branch and repo. What genuinely must be stored goes in environment secrets rather than repository secrets, so production credentials are readable only by a job that declares environment: production and has passed its required reviewer. In the workflow, secrets go into a step as env vars, not interpolated into a shell command, because expression interpolation into a run line is a script-injection vector. Secrets never enter an image either — no ENV API_KEY in a Dockerfile, since it is readable from the layer. And I would name the masking caveat: GitHub replaces exact matches with asterisks, but a secret that is base64-encoded, split, or embedded in a JSON blob slips through, so any secret that could have reached a log is rotated, not argued about. Forked PRs get no secrets by design, which is why deploy jobs gate on push to main.',
+      isCaseBased: false,
+    },
+    {
+      question: 'How does CI for a machine-learning repository differ from CI for an ordinary web service?',
+      answer:
+        'The skeleton is identical; four things change. Tests are slower and flakier because they load weights, may want a GPU, and depend on randomness — so I seed everything explicitly, mark slow and GPU tests and run them nightly on a schedule or a self-hosted GPU runner, and put hard timeouts on them because GitHub-hosted runners have no GPU and a hung CUDA call can burn hours of billed minutes. Artifacts do not fit in git: a few hundred megabytes of checkpoint makes every clone permanently slow because git stores every version, so weights and datasets go to DVC or object storage and git tracks only a small pointer file, which also gives me the reproducibility story. Training does not belong in CI: a full run costs hours and money on every push and makes red builds ambiguous, so CI runs a smoke test — one epoch on a fifty-row fixture asserting that loss decreased and an artifact was written — and real training is a separate pipeline triggered by schedule, new data, or a drift alert, orchestrated in Airflow. Finally there are two extra classes of gate that a web service does not have: data tests that validate schema, null rates, category sets and ranges on the input dataset, and model tests that require the candidate to beat a naive baseline and the current production model on a frozen evaluation set while staying inside the latency budget. Those two gates are what stop a pipeline that is perfectly green from shipping a useless model.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Case: a test passes on every developer laptop and fails only in CI. How do you debug it?',
+      answer:
+        'I start by naming the categories, because that turns guesswork into a checklist. Environment: is CI on a different Python or library version than local? Pin in the lockfile and print the resolved versions as the first step. Missing or stale cache: if the cache key omits the lockfile hash, CI may be installing an old dependency set — I would check by forcing a cache-busting key once and seeing if the failure moves. State: laptops accumulate state — a local .env, a running Postgres, a downloaded model file, an old .pyc — while the runner is empty every time. That usually means the test had an undeclared dependency and CI is right, which is the healthy outcome. Order and parallelism: CI often runs tests in a different order or with -n auto, so a test that depended on another test having run first now fails; pytest -p no:randomly or running the failing test alone distinguishes this quickly. Resources: less RAM and fewer cores on a runner turn a race condition or an OOM into a visible failure, and there is no GPU. Time and locale: UTC on the runner versus local time zone breaks date assertions; this is a classic. Network: outbound calls that succeed on a laptop may be blocked or rate-limited, which argues for mocking them. Practically I reproduce rather than guess — re-run the job with debug logging enabled, or use the same container image locally with docker run so the environment matches, and I add whatever I discovered as an explicit fixture or pin so the difference cannot come back.',
+      isCaseBased: true,
+    },
+    {
+      question: 'What is branch protection, and why is a green pipeline insufficient without it?',
+      answer:
+        'A workflow only reports; it has no authority. Branch protection on main is the enforcement: required status checks that must pass before merge, at least one approving review, a requirement that the branch is up to date with main before merging so the PR is tested against what it will actually merge into, no force-push and no deletion, and optionally required conversation resolution, signed commits, and CODEOWNERS so specific directories need specific reviewers. Without it, anyone can merge a red PR or push straight to main, and the pipeline becomes decoration. The subtlety worth mentioning: required checks are matched by job name, so renaming a job silently removes the requirement and everything looks fine — that is a real way protection quietly disappears. It also interacts with pipeline speed: if CI is slow, people route around it, so keeping the PR path under about ten minutes is part of making the gate stick rather than resented.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Explain a rolling update, and what can go wrong during it.',
+      answer:
+        'A rolling update replaces instances gradually — Kubernetes governs it with maxSurge, how many extra pods may exist above the desired count, and maxUnavailable, how many may be missing — until every instance runs the new version. It needs no extra environment and it is the default, which is why most deployments are rolling whether anyone chose it or not. What goes wrong: both versions serve traffic simultaneously for the whole window, so the two must be mutually compatible — an API response shape change or a database migration that the old version cannot read will break requests mid-roll. Rollback is another full roll, so it is minutes, not seconds. If the readiness probe is wrong or missing, traffic reaches a pod that has not finished loading its model, and for an ML service that is a multi-second cold start returning errors or timeouts. And a slow roll with a bad version exposes an increasing share of users the whole time, with no traffic-percentage control and no automatic comparison of old versus new. It is the right default for stateless services with backward-compatible changes and correct readiness probes; when I need faster rollback I add blue-green, and when I need controlled exposure with metrics I add canary on top.',
+      isCaseBased: false,
+    },
+    {
+      question: 'What are pre-commit hooks, and where do they stop being enough?',
+      answer:
+        'pre-commit runs a pinned set of checks on staged files before a commit exists — typically ruff and a formatter, plus small guards like trailing-whitespace, check-yaml, detect-private-key, and check-added-large-files, which is the one that keeps a large checkpoint out of git history where it would live forever in every clone. It is the fast local mirror of CI: the same rules, half a second, before the commit message is even written, instead of twelve minutes and a red pipeline. Two limits make it a complement rather than a replacement. The hook is installed into .git/hooks, which git does not track, so it exists only on machines where somebody ran pre-commit install. And it can be bypassed with --no-verify or SKIP, deliberately and legitimately. So the checks must also run server-side in CI as required checks, where nobody can skip them. The practical detail that saves an afternoon: pin the hook revs to the exact tool versions CI installs, or local and remote will disagree about formatting and you will chase a phantom diff.',
+      isCaseBased: false,
+    },
+  ],
+  flashcards: [
+    { front: 'CI vs continuous delivery vs continuous deployment', back: 'CI: every push is built and tested against main. Delivery: every green build is deployable, a human presses the button. Deployment: no button, green ships itself.' },
+    { front: 'GitHub Actions object model', back: 'Workflow (a YAML file) → jobs (each on its own fresh runner VM) → steps (run: or uses:, sharing that one machine). Steps share a filesystem; jobs share nothing.' },
+    { front: 'The default nobody expects', back: 'Jobs run in PARALLEL. `needs: [lint, test]` is the only thing that creates order — and a failed dependency SKIPS the dependent job, so no artifact is ever built.' },
+    { front: 'The four triggers worth memorizing', back: 'push (with branch filter), pull_request (gates merges, tests the merge result), schedule (cron, UTC), workflow_dispatch (manual Run button).' },
+    { front: 'The cache key rule', back: 'key: pip-${{ runner.os }}-${{ hashFiles(\'requirements.lock\') }} — the lockfile hash MUST be in the key, or CI tests against stale dependencies forever. restore-keys gives partial hits.' },
+    { front: 'Secrets: the three rules', back: 'Never in the repo, never in the image (ENV lands in a layer). Environment secrets + required reviewer for prod. OIDC federation instead of long-lived cloud keys — short-lived, nothing to rotate.' },
+    { front: 'The masking caveat', back: 'Logs mask exact matches with ***. Base64\'d, split or JSON-embedded secrets slip through. A secret echoed into a log is a leaked secret — rotate it.' },
+    { front: 'Blue-green vs canary vs rolling', back: 'Blue-green: two environments, flip the router, rollback in seconds, double the infra, all-or-nothing exposure. Canary: 5% of traffic, watch metrics, ramp or roll back — cheap, slow, needs monitoring. Rolling: replace instances gradually, the k8s default, slow rollback.' },
+    { front: 'The senior line about deploys', back: 'The rollback plan matters more than the deploy mechanism. Tag by commit SHA (never latest), make migrations backward-compatible in two phases, keep a feature flag, and rehearse the rollback.' },
+    { front: 'CI for ML — the four deltas', back: 'Slower/flakier tests (seed, mark, timeout, no GPU on hosted runners); artifacts too big for git (DVC); a full training run belongs in a separate pipeline, CI gets a 1-epoch smoke test; plus data tests and model-vs-baseline tests as gates.' },
+  ],
+  mindmapMarkdown: `- CI/CD with GitHub Actions
+  - The three terms
+    - CI: every push built + tested on main
+    - Continuous delivery: green = deployable, human presses
+    - Continuous deployment: no button
+    - Build the artifact ONCE, promote it
+  - Object model
+    - Workflow file → jobs → steps
+    - Job = fresh runner VM, nothing survives
+    - Steps share a filesystem, jobs do not
+    - PARALLEL by default; needs: creates order
+    - Triggers: push, pull_request, schedule, workflow_dispatch
+  - The workflow
+    - lint (ruff, pinned)
+    - test (pytest, markers, --cov-fail-under)
+    - build (docker, tag by SHA, push on main)
+    - deploy (environment: production, canary 5%)
+  - Caching
+    - Key MUST include hashFiles(lockfile)
+    - restore-keys = partial hit
+    - 4 minutes → 40 seconds
+    - Docker layers via type=gha
+  - Secrets
+    - Repository vs environment secrets
+    - \${{ secrets.X }}, never in repo or image
+    - GITHUB_TOKEN minted per run + permissions:
+    - OIDC federation replaces long-lived keys
+    - Masking is a courtesy — echoed = leaked
+  - Enforcement
+    - Branch protection: required checks + review
+    - Up-to-date branch, no force-push, CODEOWNERS
+    - Matrix builds fan out (and multiply minutes)
+  - Deployment strategies
+    - Blue-green: two envs, flip, instant rollback, 2x infra
+    - Canary: 5% → ramp or roll back, needs monitoring
+    - Rolling: gradual replace, the k8s default
+    - Rollback plan > deploy mechanism
+  - CI for ML
+    - Tests slower + flakier: seed, mark, timeout
+    - No GPU on hosted runners: skip or self-host
+    - Weights too big for git → DVC
+    - Smoke test 1 epoch, real training = orchestration
+    - Data tests + model-vs-baseline tests as gates
+  - pre-commit
+    - Same rules, staged files, 0.4 s
+    - Pin revs to the CI versions
+    - Skippable → CI still required`,
+}
+
+export default m

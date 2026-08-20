@@ -1,0 +1,609 @@
+import type { Module } from '../types'
+
+const m: Module = {
+  id: 'sysdesign-l2-case-chat',
+  subjectId: 'sysdesign',
+  level: 2,
+  title: 'Case Study: WhatsApp-Style Chat',
+  whyItMatters:
+    'Every other case study in this level is a request/response system: the client asks, the server answers, and the server is stateless. Chat breaks that. The server must push to a user who is not asking, which means holding a live socket per user, which means your servers now remember who is on them. That single change rewrites load balancing, deploys, failure handling and capacity math — and it is exactly what the interviewer is probing. This is also the module where "connections", not QPS, is the number that sizes the fleet.',
+  estMinutes: 55,
+  sections: [
+    {
+      type: 'intuition',
+      title: 'Why chat is not just another CRUD app',
+      md: `A web server is a shop counter: you walk up, ask, get served, leave. The counter remembers nothing about you.
+
+Chat is a phone line. It has to stay open, because the *other* side may speak at any moment — and nobody is going to redial every two seconds to check.
+
+- In HTTP, the **client always starts** the conversation. Chat needs the server to start it.
+- Keeping a line open per user means each server now holds **state**: which users are on it. Stateless scaling stops being free.
+- So the design question is not "how do we store messages" (that part is easy) — it is **"how does a message find a person"**.
+- Work the seven steps in order, and try each one yourself before reading the answer. Requirements → estimation → API → data model → HLD → deep dive → bottlenecks.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Step 1 — Requirements: what are you actually building?',
+      md: `Try it first: write down the features, then the *non*-functional constraints, before you look. Aim for about six functional features and four non-functional ones, and name the single non-functional constraint you would sacrifice if forced. Interviewers score this step more than any other — it is where scope gets set.
+
+**Functional:**
+
+- 1:1 messaging, and **group** messaging (a group is one conversation with N members — the same primitive, bigger fanout).
+- **Delivery and read receipts**: the one tick / two ticks / blue ticks chain.
+- **Online and last-seen status** (presence).
+- **Offline delivery**: a message sent to a disconnected recipient must wait for them, not vanish.
+- **Message history**: reopening a chat shows the past, syncable to a new device.
+- **Push notifications** through APNs/FCM when the app is not running.
+
+**Non-functional — the ones that actually shape the design:**
+
+- **Low latency**: under ~200 ms end-to-end for an online pair. People notice more.
+- **Ordered within a conversation**: messages in one chat must appear in the same order for everyone. Across chats, order is meaningless.
+- **No message loss**: an accepted message is delivered eventually. This is the hardest promise here.
+- **Very high concurrent connections**: hundreds of millions of open sockets. This is the constraint that dominates everything below.`,
+    },
+    {
+      type: 'note',
+      md: `**Cut scope out loud.** Say what you are NOT building: voice/video calls, message editing, cross-device history sync beyond the basics, and full end-to-end encryption (revisited honestly at the end). Also state the delivery promise you are choosing: **at-least-once with client-side dedup**, not exactly-once. Exactly-once over an unreliable network does not exist — you get at-least-once plus idempotency, and saying that early buys you credibility for the rest of the interview.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Step 2 — Estimation: do the arithmetic, not the adjectives',
+      md: `Try it first with 500M DAU and 40 messages per user per day. Compute: messages/day, average QPS, peak QPS, storage/day. Then check yourself against the math below.
+
+- 500M × 40 = **20 billion messages/day**.
+- 20e9 ÷ 86,400 ≈ **231K messages/sec** average.
+- Peak is roughly 3× average (evenings cluster) → **~700K messages/sec**.
+- A message row is small: ids, sender, timestamp, and a body averaging ~100 bytes → call it **300 bytes** with overhead.
+- Group chats multiply *deliveries*, not stored messages: you store one row per message, and fan it out to N recipients at read/push time.`,
+    },
+    {
+      type: 'math',
+      intro: 'The four lines to write on the whiteboard.',
+      latex: [
+        '500 \\times 10^{6}\\ \\text{DAU} \\times 40\\ \\text{msg/day} = 2 \\times 10^{10}\\ \\text{messages/day}',
+        '\\text{avg} = \\frac{2 \\times 10^{10}}{86{,}400} \\approx 2.3 \\times 10^{5}\\ \\text{writes/s} \\qquad \\text{peak} \\approx 3\\times \\approx 7 \\times 10^{5}\\ \\text{writes/s}',
+        '2 \\times 10^{10} \\times 300\\ \\text{B} \\approx 6\\ \\text{TB/day} \\quad (\\times 3\\ \\text{replicas} = 18\\ \\text{TB/day} \\approx 6.6\\ \\text{PB/year})',
+        '\\text{concurrent sockets} = 500 \\times 10^{6} \\times 0.4 \\approx 2 \\times 10^{8}\\ \\text{open connections at peak}',
+      ],
+    },
+    {
+      type: 'intuition',
+      title: 'The number that shapes the whole design: concurrent connections',
+      md: `700K writes/sec is a big but ordinary number — a sharded store absorbs it. **200 million simultaneously open sockets** is the number with no ordinary answer.
+
+- Every connected user costs memory on a specific machine, whether they are typing or asleep: kernel socket buffers, TLS session state, and your own per-user session object. Budget ~**50 KB per connection**.
+- 200M × 50 KB = **10 TB of RAM** just to *hold the connections*, before any message is processed.
+- So the sizing question flips: not "how many requests per second per server" but **"how many connections per server, and what caps that number"**.
+- Three candidate caps: RAM, CPU (frames pushed per second), and a limit you impose yourself for **blast radius** — how many users get disconnected when one box dies, and how long a deploy takes to drain.
+- Run the arithmetic below. The binding limit is the surprising one.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Sizing the gateway fleet — which limit actually binds?',
+      code: `from math import ceil
+
+DAU = 500_000_000
+ONLINE_AT_PEAK = 0.40           # share of DAU holding a live socket at peak
+MSGS_PER_USER_DAY = 40
+PEAK_FACTOR = 3.0               # peak vs daily average
+MEM_PER_CONN_KB = 50            # kernel socket + TLS buffers + app session state
+USABLE_RAM_GB = 48              # of a 64 GB gateway box
+EVENTS_PER_SEC_SERVER = 50_000  # frames one gateway pushes before CPU saturates
+OPS_CONN_CAP = 250_000          # blast-radius / drain-time cap we impose ourselves
+
+conns = DAU * ONLINE_AT_PEAK
+peak_qps = DAU * MSGS_PER_USER_DAY / 86_400 * PEAK_FACTOR
+events_per_conn = peak_qps * 2 / conns     # 1 send + >=1 delivery per message
+
+by_ram = USABLE_RAM_GB * 1e6 / MEM_PER_CONN_KB
+by_cpu = EVENTS_PER_SEC_SERVER / events_per_conn
+per_server = min(by_ram, by_cpu, OPS_CONN_CAP)
+servers = ceil(conns / per_server)
+
+for label, v in [('concurrent sockets at peak', conns), ('peak messages/sec', peak_qps),
+                 ('events per connection/sec', events_per_conn),
+                 ('conns/server allowed by RAM', by_ram),
+                 ('conns/server allowed by CPU', by_cpu),
+                 ('conns/server chosen', per_server), ('gateway servers needed', servers),
+                 ('reconnects/sec if one dies (60s jitter)', per_server / 60)]:
+    print(f'{label:<40}{v:>14,.4f}')
+
+# --- real output ---
+# concurrent sockets at peak              200,000,000.0000
+# peak messages/sec                         694,444.4444
+# events per connection/sec                       0.0069
+# conns/server allowed by RAM               960,000.0000
+# conns/server allowed by CPU             7,200,000.0000
+# conns/server chosen                       250,000.0000
+# gateway servers needed                        800.0000
+# reconnects/sec if one dies (60s jitter)     4,166.6667`,
+      annotations: {
+        7: 'The single most important input. 50 KB is a realistic figure with TLS; tune it and the fleet size moves proportionally. Erlang-style runtimes get this far lower — that is why WhatsApp famously ran ~1M sockets on one box.',
+        14: '0.0069 events/sec per connection. Chat connections are almost entirely IDLE — a user sends 40 messages across a whole day. You are paying for presence, not for throughput.',
+        18: 'Three ceilings, take the smallest. RAM says 960K, CPU says 7.2M — and the limit that actually binds is the one WE chose.',
+        19: '800 gateway servers. Note none of it came from QPS: the fleet is sized by sockets held, not requests served.',
+        36: 'The lesson: at 250K/server one failure disconnects a quarter-million users. Raising the cap to 1M saves money and quadruples the blast radius. That is a tradeoff to state out loud, not a config default.',
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'Step 3 — The transport decision: how does the server reach the client?',
+      md: `Try it first: list every way a server can get data to a browser or phone, and rank them. There are four, and the ranking is the answer.
+
+- **HTTP polling**: the client asks "anything new?" every 2 seconds. Dead simple, works everywhere — but at 200M clients that is 100M requests/sec of mostly-empty answers, and a message still waits up to 2 s. Wasteful *and* slow.
+- **Long polling**: the client asks, and the server *holds the request open* until there is news (or a timeout). Latency drops to near-zero; waste drops a lot. But every message costs a full request teardown and re-setup, and the connection is still one-shot.
+- **SSE (Server-Sent Events)**: one long-lived HTTP response the server writes into forever. Great — auto-reconnect built in, plain HTTP all the way — but it is **server→client only** (see the Backend module on serving and streaming). The client would still need a separate POST per message.
+- **WebSocket**: an HTTP request with an \`Upgrade\` header flips the same TCP connection into a full-duplex channel. Both sides push frames, framing overhead is a couple of bytes, and the connection lives for hours.
+
+**Chat picks WebSocket** because the client also sends continuously — messages, typing events, read receipts, heartbeats. SSE would need a second channel going the other way; you would have rebuilt WebSocket badly. (Contrast: LLM token streaming *is* one-way, which is why that uses SSE.)`,
+    },
+    {
+      type: 'note',
+      md: `**The bill for long-lived stateful connections — this is the real interview content.** (1) Your servers are **no longer stateless**: a gateway holds the socket for a specific set of users, so any message for those users must reach *that machine*. (2) You need a **connection registry** — a fast key-value store mapping \`user_id → gateway_id\` (Redis), written on connect, deleted on disconnect, TTL'd so crashes self-clean. (3) **Load balancing must count connections, not requests** — least-connections, not round-robin, because a round-robin LB happily piles new sockets onto a box that is already full while a freshly restarted one sits empty. (4) **Deploys must drain**: you cannot just kill the process, so a gateway stops accepting new connections, then asks its clients to reconnect elsewhere over a few minutes — otherwise every release is a self-inflicted reconnect storm.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Step 4 — API and protocol: what travels over the socket?',
+      md: `Try it first: name the messages the client sends, the messages the server sends, and how a tick becomes two ticks. It is a small protocol — five verbs do almost everything.
+
+- \`send(conversation_id, client_msg_id, body)\` — client → server. The server replies \`ack(client_msg_id, seq, server_ts)\`: **one tick, "sent"**. This ack means *stored*, nothing more.
+- **delivered**: when the message is actually pushed onto the recipient's socket and their client acks it, the recipient's device sends \`delivered(message_id)\`, which is relayed to the sender: **two ticks**. Generated by the recipient's *device*, not by the server guessing.
+- **read**: when the recipient opens the conversation, the client sends \`read(conversation_id, up_to_seq)\` — one event covers a whole backlog rather than one per message: **blue ticks**.
+- \`typing(conversation_id)\` — fire-and-forget, never stored, never retried, expires after ~5 seconds client-side. It is the one event you are allowed to lose.
+- \`heartbeat\` / ping-pong every ~30 s so both sides detect a dead connection that TCP has not noticed yet.
+
+**The \`client_msg_id\` is the load-bearing part.** The client generates a UUID *before* sending. If the ack never arrives, the client retries with the same id — and the server, seeing that id already stored, returns the original ack instead of creating a second message. That is **idempotency**, the same key trick as the resilience module: without it, every flaky-network retry duplicates a message, and users see everything twice.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Step 5 — Data model: what does the store have to be good at?',
+      md: `Try it first: what is the *only* query the chat screen makes? Design backwards from it.
+
+The answer: **"give me the last 50 messages of conversation X, then the 50 before those."** That is a single-partition, time-ordered range read. Everything else is secondary.
+
+- **messages**, keyed by \`(conversation_id, seq)\`: partition by conversation so one chat is one contiguous, sorted run of rows; cluster by a server-assigned sequence number descending so "latest 50" is a prefix scan, no sorting, no index lookup.
+- **conversation_members**: \`conversation_id → user_ids\` (who to fan out to) plus the reverse \`user_id → conversation_ids\` (the chat list). Two tables, because you query it both ways and there are no joins here.
+- **per-user state**: \`(user_id, conversation_id) → last_delivered_seq, last_read_seq\`. Two integers replace a receipt row per message per member — in a 200-person group that is 2 numbers instead of 400 rows.
+- **Store choice: a wide-column store (Cassandra).** Why: the workload is write-heavy (700K writes/sec, essentially no updates), append-only and time-ordered, always accessed by one partition key, and needs no joins or multi-row transactions. That is the exact shape wide-column stores are built for — see the DBMS module on NoSQL families. Leader-based Postgres would need hand-built sharding to absorb these writes and would give up features we do not use to get there.
+- **The cost, said out loud:** no joins, no ad-hoc queries ("find all messages containing 'invoice'" needs a separate search index), and unbounded partitions — a five-year-old group chat is one enormous row unless you bucket the key by month.`,
+    },
+    {
+      type: 'code',
+      lang: 'sql',
+      title: 'The schema, in CQL',
+      code: `-- one partition per conversation, physically sorted newest-first
+CREATE TABLE messages (
+  conversation_id uuid,
+  seq             bigint,      -- server-assigned, monotonic within the conversation
+  message_id      uuid,        -- client-generated: the idempotency / dedup key
+  sender_id       uuid,
+  body            text,
+  created_at      timestamp,
+  PRIMARY KEY ((conversation_id), seq)
+) WITH CLUSTERING ORDER BY (seq DESC);
+
+-- the only read the chat screen ever performs
+SELECT * FROM messages WHERE conversation_id = ? AND seq < ? LIMIT 50;
+
+-- receipts as two integers per (user, conversation), not a row per message
+CREATE TABLE conversation_state (
+  user_id            uuid,
+  conversation_id    uuid,
+  last_delivered_seq bigint,
+  last_read_seq      bigint,
+  PRIMARY KEY ((user_id), conversation_id)
+);`,
+      annotations: {
+        9: 'Partition key in the inner parentheses = which node holds it. Everything for one chat lives together on one node; a 1:1 chat and a 200-person group are the same shape.',
+        10: 'The sort order is baked into storage, not computed per query. "Latest 50" is a sequential read of the first rows on disk.',
+        13: 'One query, one partition, no index, no join. If your chat screen needs anything else, the data model is wrong — not the store.',
+        20: 'Scaling win: marking 300 backlogged messages read is ONE update to one integer, not 300 writes.',
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'Step 6 — HLD: the boxes and why each exists',
+      md: `Try it first: sketch it, using the 200M sockets and 700K writes/sec you computed. Seven or eight boxes is the right size, and you should be able to say which two hold state. Then compare — if you have a box we do not, justify it; if we have one you skipped, that box is the interview point.
+
+- **Clients** hold one WebSocket to a **gateway server**. That is the only long-lived thing in the system.
+- **WebSocket gateway fleet** (~800 boxes from our arithmetic): terminates TLS, owns the sockets, does almost no business logic. Thin on purpose — it is the layer you least want to redeploy.
+- **Session / presence registry (Redis)**: \`user_id → gateway_id\` plus a heartbeat-refreshed \`online\` key with a short TTL. Every delivery starts with a lookup here. It must be fast and it is allowed to be slightly wrong.
+- **Message service**: assigns the sequence number, checks the idempotency key, decides recipients, and hands off. The only stateless tier — scale it on CPU like a normal service.
+- **A queue between gateway and store** (Kafka): the gateway must never block on a database write, and a store hiccup must not drop accepted messages. The queue absorbs the spike and makes the write path retryable.
+- **Message store (Cassandra)**: durable history, plus each user's undelivered **inbox**.
+- **Push notification service** (APNs/FCM): the only way to reach a device with no socket. Fired when the registry says the recipient is offline.
+- **Blob storage + CDN**: media never travels through the socket — the socket carries a URL.`,
+    },
+    {
+      type: 'visual',
+      component: 'PointerBoxDiagram',
+      props: {
+        title: 'One message, all the way through — online, offline, and reconnect',
+        notice: 'Left: what is in flight. Right: the services and what each knows at that moment. Step through it — the registry lookup is the hinge the whole design turns on.',
+        leftLabel: 'in flight',
+        rightLabel: 'services',
+        frames: [
+          {
+            note: 'Alice types "hi". Her client stamps a UUID (client_msg_id) BEFORE sending, so a retry can never duplicate it, and pushes one frame down her existing socket to gateway gw-3.',
+            stack: [{ name: 'send(m-9f2, "hi")', to: 'gw3' }],
+            heap: [
+              { id: 'gw3', value: 'socket: alice', label: 'gateway gw-3 (Alice)' },
+              { id: 'queue', value: 'empty', label: 'queue (Kafka)' },
+              { id: 'store', value: 'conv-42: …seq 100', label: 'message store' },
+              { id: 'registry', value: 'alice -> gw3, bob -> gw7', label: 'session registry (Redis)' },
+              { id: 'gw7', value: 'socket: bob', label: 'gateway gw-7 (Bob)' },
+            ],
+          },
+          {
+            note: 'The gateway does not write to the database — it publishes to the queue and returns. The message service consumes, sees m-9f2 is new, assigns seq 101 (server-assigned: Alice\'s clock is not trusted) and persists.',
+            stack: [{ name: 'm-9f2 -> queue -> store', to: 'store' }],
+            heap: [
+              { id: 'gw3', value: 'socket: alice', label: 'gateway gw-3' },
+              { id: 'queue', value: 'm-9f2 consumed', label: 'queue — absorbed the spike' },
+              { id: 'store', value: 'conv-42: …100, 101 = "hi"', label: 'message store — durable' },
+              { id: 'registry', value: 'alice -> gw3, bob -> gw7', label: 'session registry' },
+              { id: 'gw7', value: 'socket: bob', label: 'gateway gw-7 (Bob)' },
+            ],
+          },
+          {
+            note: 'ONE TICK. The ack goes back to Alice the moment the message is durable — "sent" means stored, not delivered. Meanwhile the service asks the registry where Bob is: bob -> gw7.',
+            stack: [
+              { name: 'ack(m-9f2, seq 101)', to: 'gw3' },
+              { name: 'lookup(bob)', to: 'registry' },
+            ],
+            heap: [
+              { id: 'gw3', value: 'socket: alice — one tick shown', label: 'gateway gw-3' },
+              { id: 'queue', value: 'empty', label: 'queue' },
+              { id: 'store', value: 'conv-42: …100, 101', label: 'message store' },
+              { id: 'registry', value: 'bob -> gw7  (HIT)', label: 'session registry — the hinge' },
+              { id: 'gw7', value: 'socket: bob', label: 'gateway gw-7 (Bob)' },
+            ],
+          },
+          {
+            note: 'TWO TICKS. gw-7 pushes seq 101 onto Bob\'s socket; his device acks, and that "delivered" event is relayed to Alice. The receipt is generated by Bob\'s DEVICE — the server never guesses delivery it did not observe.',
+            stack: [
+              { name: 'push seq 101', to: 'gw7' },
+              { name: 'delivered(m-9f2) -> alice', to: 'gw3' },
+            ],
+            heap: [
+              { id: 'gw3', value: 'socket: alice — two ticks', label: 'gateway gw-3' },
+              { id: 'queue', value: 'empty', label: 'queue' },
+              { id: 'store', value: 'bob.last_delivered_seq = 101', label: 'per-user state updated' },
+              { id: 'registry', value: 'bob -> gw7', label: 'session registry' },
+              { id: 'gw7', value: 'delivered to bob', label: 'gateway gw-7' },
+            ],
+          },
+          {
+            note: 'BLUE TICKS. Bob opens the chat and sends read(conv-42, up_to_seq=101) — one event covering the entire backlog, not one per message. last_read_seq is a single integer.',
+            stack: [{ name: 'read(conv-42, up_to 101)', to: 'store' }],
+            heap: [
+              { id: 'gw3', value: 'socket: alice — blue', label: 'gateway gw-3' },
+              { id: 'queue', value: 'empty', label: 'queue' },
+              { id: 'store', value: 'bob.last_read_seq = 101', label: 'two integers, not 101 rows' },
+              { id: 'registry', value: 'bob -> gw7', label: 'session registry' },
+              { id: 'gw7', value: 'socket: bob', label: 'gateway gw-7' },
+            ],
+          },
+          {
+            note: 'OFFLINE CASE. Alice sends seq 102 to Carol, whose phone is in a tunnel. The registry lookup MISSES. Nothing is lost and nothing is retried in a loop: the message is already durable, it is flagged undelivered in Carol\'s inbox, and a push notification is fired at APNs/FCM.',
+            stack: [
+              { name: 'send(m-a01) -> seq 102', to: 'store' },
+              { name: 'lookup(carol)', to: 'registry', danger: true },
+            ],
+            heap: [
+              { id: 'store', value: 'conv-77: seq 102 stored', label: 'message store — durable already' },
+              { id: 'registry', value: 'carol -> (no entry)', label: 'session registry — MISS', danger: true },
+              { id: 'inbox', value: 'carol: [102] undelivered', label: 'carol\'s inbox queue' },
+              { id: 'push', value: 'APNs/FCM: "Alice sent a message"', label: 'push service — the only way in' },
+              { id: 'gwX', value: 'no socket for carol', label: 'no gateway holds carol', danger: true },
+            ],
+          },
+          {
+            note: 'RECONNECT. Carol\'s phone finds signal, connects to gw-2 (a NEW gateway — nothing was pinned), and the registry is rewritten. gw-2 drains her inbox from last_delivered_seq onward. Her client dedups by message_id, so a message she already had is dropped silently — at-least-once delivery made safe.',
+            stack: [
+              { name: 'connect + register(carol)', to: 'registry' },
+              { name: 'drain inbox from seq 101', to: 'inbox' },
+            ],
+            heap: [
+              { id: 'store', value: 'conv-77: …102', label: 'message store' },
+              { id: 'registry', value: 'carol -> gw2  (rewritten)', label: 'session registry — updated' },
+              { id: 'inbox', value: 'carol: [] drained', label: 'inbox emptied in order' },
+              { id: 'push', value: 'idle', label: 'push service' },
+              { id: 'gw2', value: 'socket: carol, seq 102 delivered', label: 'gateway gw-2 — new home' },
+            ],
+          },
+        ],
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'Deep dive A — message delivery, including when nobody is home',
+      md: `Try it first: Alice sends to Carol, whose phone has been off for a day. Trace the delivery path from the gateway to Carol reading it, assuming a Redis registry of \`user_id → gateway_id\`. A good answer names one lookup, both branches it can take, where the message waits while she is dark, and what the client sends on reconnect.
+
+The whole delivery path is one lookup and two branches.
+
+1. **Find the recipient.** \`GET user:carol:gateway\` in Redis. Sub-millisecond, and this happens once per delivery — at peak that is ~700K lookups/sec, which is why it is a memory store and not a table.
+2. **Hit** → forward the message to that gateway (internal RPC or a per-gateway topic) → gateway writes the frame to the socket → device acks → receipt relayed.
+3. **Miss** (offline, or the entry TTL'd out after a crash) → the message is already durable in the store, so nothing is lost: append its id to the recipient's **inbox** (undelivered queue) and fire a **push notification**. Push is a hint, not delivery — APNs/FCM make no guarantees and will drop notifications for a device that has been dark for days.
+4. **On reconnect**, the client sends its \`last_delivered_seq\` per conversation; the server streams everything after it, in order, then marks the inbox drained.
+5. **Stale registry entries are normal**: a gateway can crash between the socket dying and Redis noticing. Forwarding to a gateway that no longer holds the user must fall back to the offline path rather than erroring — treat the registry as a *hint*, verified by the gateway.`,
+    },
+    {
+      type: 'note',
+      md: `**At-least-once, plus dedup — the only honest delivery promise.** The network can drop an ack after the work happened, so the sender cannot distinguish "lost message" from "lost ack" and must retry. Retries mean duplicates. The fix is not a cleverer protocol, it is the \`message_id\` the client generated at step one: the server rejects a second write with the same id, and the client drops a message whose id it already rendered. Together those two dedup points turn at-least-once into what users experience as exactly-once. Say it in exactly that shape in an interview — "at-least-once delivery, idempotent by client-generated id" — because "exactly-once" is the answer that gets you follow-up questions you cannot win.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Deep dive B — presence, and the honest cost of a green dot',
+      md: `Try it first: 500M users, ~200 contacts each, and a phone that never says goodbye before it dies. How does the server decide someone is offline, and how many notifications does one person going online cost? A good answer gives the detection mechanism, the fanout number, and at least two ways to cut that number by an order of magnitude.
+
+Presence looks trivial and is the most expensive small feature in the product.
+
+- **Mechanism**: the client heartbeats every ~30 s; the server sets \`online:user\` in Redis with a ~45 s TTL. No heartbeat, key expires, user is offline. The TTL *is* the failure detector — no explicit "goodbye" needed, which matters because phones never send one.
+- **The fanout problem**: one user going online must notify everyone who cares. Average 200 contacts → 200 pushes for one event. Across 500M users toggling a few times a day, that is **billions of presence events/day, for a feature nobody would pay for** — and it can easily exceed your actual message traffic. This is the same fanout arithmetic as the feed case study, in a smaller costume.
+- **Mitigation 1 — publish only to interested parties.** Notify only contacts who currently have that chat *open*. Nobody needs a green dot on a screen they are not looking at. This alone kills 95%+ of the traffic.
+- **Mitigation 2 — batch and poll.** When a client opens the chat list, it asks once for the status of the 20 visible users, and re-asks every ~30 s. Pull for lists, push for the open chat.
+- **Mitigation 3 — accept staleness as a product decision.** "Last seen 2 minutes ago" is not a degraded version of presence; it is a deliberate choice that removes the need for real-time accuracy and lets you round, cache, and delay everything. The product feature was designed around the systems cost — this is the example to quote when an interviewer asks where you would relax a requirement.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Ordering: server-assigned sequence numbers, per conversation only',
+      md: `Two people send at the same moment. Whose message is first?
+
+- **Not the client timestamp.** Phone clocks drift, users change timezones, and a device that has been off can be minutes wrong. Trusting client time means messages inserting themselves *above* messages you already read.
+- **The fix**: the message service assigns a **monotonic sequence number per conversation** as it writes. That number, not the timestamp, is the sort key and the pagination cursor. Client time is kept and displayed, but never used to order.
+- **The tie-break is the server's arrival order** — arbitrary, but *consistent for everyone*, which is the whole requirement. Every participant sees the same sequence.
+- **Global ordering across all conversations is unnecessary** and would be catastrophic: one global counter is one bottleneck for 700K writes/sec, and no user can observe the relative order of two unrelated chats anyway. Per-conversation counters shard perfectly — one per partition, which is exactly how the data is laid out.
+- The generalized rule: **order things only within the unit where order is observable.**`,
+    },
+    {
+      type: 'intuition',
+      title: 'Step 7 — Bottlenecks and tradeoffs',
+      md: `Try it first: name the three things that break first at 200M sockets and 700K writes/sec, and the one feature you would switch off to protect the rest. Two of the three follow from the connection being long-lived and stateful; the third follows from group size.
+
+- **Connection storms.** A network blip or one dead gateway drops 250K sockets at once, and every client reconnects immediately — a thundering herd that knocks over the gateway it lands on, which drops *its* connections. The fix is **jittered exponential backoff** in the client (see the resilience module): our own numbers say 250K instant reconnects become 4,167/sec spread over a 60-second jitter window, ~5/sec per surviving server. The client-side sleep is the load-shedding mechanism.
+- **Groups are a fanout multiplier.** A 256-member group turns one write into 255 deliveries. At scale, cap group size (a product constraint doing systems work), fan out asynchronously through the queue rather than in the send path, and never make the sender wait on N deliveries.
+- **Media never goes through the socket.** A 5 MB video would occupy one gateway's CPU and buffers for seconds and block every other user's frames on that box. Instead: the client uploads directly to blob storage via a pre-signed URL, and the socket carries a **URL plus a thumbnail**. Downloads come from the CDN. The gateway stays thin, which is exactly what its 250K-connection budget requires.
+- **The store's own limit**: a years-old group chat is one unbounded partition. Bucket the partition key by month, and tier cold history to cheaper storage — most reads are for the last few days.
+- **Presence is optional; messaging is not.** Under overload, shed presence and typing indicators first. They are the only things in the system you are allowed to drop.`,
+    },
+    {
+      type: 'note',
+      md: `**End-to-end encryption, honestly.** E2EE means the message is encrypted on the sender's device with a key the server never holds, and decrypted only on the recipient's. It changes surprisingly little of the pipeline — the server still routes, queues, and stores an opaque blob — but it moves **key exchange and per-device key management onto the clients**, which is where most of the real complexity goes (a new device cannot read old messages unless you build a separate encrypted-backup path). The tradeoff to state plainly: the server can no longer **search** message content, **moderate** it, generate **link previews or thumbnails**, or run any server-side ML on it. Those features must move to the client or disappear. That is a genuine product decision, not a security checkbox — and naming both halves is what separates a senior answer from a buzzword.`,
+    },
+    {
+      type: 'intuition',
+      title: 'The 60-second version, for when the interviewer says "summarize"',
+      md: `*"Clients hold WebSockets to a thin gateway fleet — that transport choice is forced by the client needing to send continuously, and it is what makes the servers stateful. A Redis registry maps user to gateway; every delivery is one lookup. Messages go gateway → queue → message service, which assigns a per-conversation sequence number and writes to Cassandra, partitioned by conversation and clustered by that sequence so the chat screen is a single-partition range read. If the recipient's registry lookup misses, the message sits in their inbox and we fire a push; they drain it on reconnect. Delivery is at-least-once, deduped by a client-generated message id. The fleet is sized by concurrent connections, not QPS — 200M sockets at 250K per box is 800 gateways, and that per-box number is a blast-radius decision, not a hardware one. The features I would cut first under load are presence and typing indicators."*
+
+- Notice what that paragraph never does: name a technology without naming the problem it solves.
+- Every number in it came from arithmetic you did in step 2, not from memory.
+- Next case studies reuse most of this: the fanout arithmetic from presence is the feed problem, the queue is the notification system, and the inbox is every offline-delivery design you will ever draw.`,
+    },
+  ],
+  quiz: [
+    {
+      question: 'Why is WebSocket the right transport for chat, when SSE also gives the server a persistent push channel?',
+      options: [
+        { text: 'SSE cannot stay open for more than 60 seconds', explanation: 'It can stay open indefinitely — that is exactly what it is for, and it auto-reconnects when broken.' },
+        { text: 'SSE has higher per-message overhead than WebSocket frames', explanation: 'Mildly true but irrelevant at chat volumes — an SSE frame is a few bytes of text. Overhead is not what decides this.' },
+        { text: 'SSE is server-to-client only, and a chat client sends continuously (messages, receipts, typing, heartbeats)', explanation: 'Correct. The traffic is genuinely bidirectional, so SSE would need a second channel for the upstream half — at which point you have rebuilt WebSocket, worse. SSE wins when only the server talks (LLM token streaming).' },
+        { text: 'WebSocket connections are stateless, so they scale better', explanation: 'The opposite: WebSockets make your servers stateful, which is the main cost of choosing them. You pay it because the traffic requires it.' },
+      ],
+      correct: 2,
+    },
+    {
+      question: '500M DAU, 40 messages/user/day. Which number sizes the gateway fleet?',
+      options: [
+        { text: '~231K messages/sec average write throughput', explanation: 'That is real, but a sharded store absorbs it and it is spread across the whole fleet. It is not what limits a single gateway.' },
+        { text: '~200M concurrent open connections, at ~50 KB of memory each', explanation: 'Correct. Idle sockets cost memory whether or not anyone is typing — 0.0069 events/sec per connection means these boxes are holding, not computing. Connections held, not requests served, is the sizing unit.' },
+        { text: '6 TB/day of message storage', explanation: 'That sizes the storage tier and its replication bill, not the connection tier.' },
+        { text: 'Peak QPS of ~700K', explanation: 'Divided across ~800 gateways that is under 900 events/sec each — trivial. CPU is nowhere near the binding limit here.' },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'RAM allows 960K connections per gateway and CPU allows 7.2M, yet the design caps each box at 250K. Why?',
+      options: [
+        { text: 'The kernel cannot open more than 250K file descriptors', explanation: 'That is a tunable limit (ulimit / sysctl), routinely raised to millions. Not a real ceiling.' },
+        { text: 'Redis cannot track more than 250K users per gateway', explanation: 'The registry stores one small key per user regardless of how they are grouped. It does not care about the distribution.' },
+        { text: 'To keep the fleet at a round 800 servers', explanation: 'Backwards — the server count is the output of the cap, not its justification.' },
+        { text: 'Blast radius and drain time: one dead box disconnects that many users at once, and a deploy must drain them all', explanation: 'Correct. At 1M/box you would need a quarter of the servers and a quarter of the cost, and every failure or deploy would hit four times as many users with four times the reconnect storm. It is an availability tradeoff you choose deliberately, not a hardware limit.' },
+      ],
+      correct: 3,
+    },
+    {
+      question: 'A user sends a message, the network drops the ack, and the client retries. What prevents a duplicate message?',
+      options: [
+        { text: 'The client-generated message id: the server recognises the repeat and returns the original ack instead of storing again', explanation: 'Correct. Generating the id before the first send is what makes the retry idempotent — and the same id lets the recipient drop a message it already rendered. That pair is what turns at-least-once into user-visible exactly-once.' },
+        { text: 'Exactly-once delivery guaranteed by the queue', explanation: 'No queue can give exactly-once across an unreliable client network — the client cannot tell "message lost" from "ack lost", so it must retry. Duplicates are inevitable; deduplication is the answer.' },
+        { text: 'The server compares message bodies and rejects identical text', explanation: 'Then a user could never legitimately send "ok" twice. Content is not identity.' },
+        { text: 'The server-assigned sequence number', explanation: 'It is assigned during the write, so a duplicate write would simply get a second sequence number. It orders messages; it does not identify them across retries.' },
+      ],
+      correct: 0,
+    },
+    {
+      question: 'Why partition the messages table by conversation_id and cluster by seq?',
+      options: [
+        { text: 'It makes cross-conversation search fast', explanation: 'It makes it impossible — search across partitions needs a separate index. That is a cost of this model, not a benefit.' },
+        { text: 'The only hot query is "latest 50 in this conversation", which becomes a sorted prefix scan of one partition', explanation: 'Correct. The data is physically laid out in the order the chat screen reads it — one node, one sequential read, no sort, no index hop, no join. Design backwards from the one query that matters.' },
+        { text: 'It guarantees global ordering across all conversations', explanation: 'It deliberately does not, and does not need to — no user can observe the relative order of two unrelated chats. A global counter would be a single bottleneck for 700K writes/sec.' },
+        { text: 'It keeps every partition the same size', explanation: 'It does the opposite: a busy group chat grows without bound, which is why the key gets bucketed by month.' },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'The recipient is offline. What should happen to the message?',
+      options: [
+        { text: 'The sender gets an error and must retry later', explanation: 'The sender should not learn about the recipient\'s connectivity, and forcing retries pushes durability onto the least reliable participant.' },
+        { text: 'The gateway holds it in memory until the recipient reconnects', explanation: 'That loses the message the moment the gateway restarts, and pins the recipient to one machine — they may well reconnect to a different gateway entirely.' },
+        { text: 'It is already durable in the store; flag it in the recipient\'s inbox and fire a push notification, then drain the inbox on reconnect', explanation: 'Correct. The message was persisted before delivery was even attempted, so offline is not a failure — it is just a delivery deferred. Push is a hint to wake the app, not the delivery mechanism.' },
+        { text: 'Poll the recipient every second until they answer', explanation: 'There is nothing to poll — a disconnected device has no socket and no address. And 200M pollers would cost more than the messaging system itself.' },
+      ],
+      correct: 2,
+    },
+    {
+      question: 'Broadcasting online status to every contact of every user is unaffordable. Which mitigation gives the biggest saving?',
+      options: [
+        { text: 'Only publish presence to contacts who currently have that chat open', explanation: 'Correct. Almost nobody is looking at any given contact at any given moment, so this removes the overwhelming majority of the fanout while keeping the green dot accurate exactly where it is visible. Everything else is a pull.' },
+        { text: 'Compress the presence payload', explanation: 'The payload is already tiny — the cost is the number of events (billions/day), not their size. Compressing nothing by 50% saves nothing.' },
+        { text: 'Store presence in Cassandra instead of Redis', explanation: 'That makes it slower and more expensive per write. The problem is fanout volume, not the store.' },
+        { text: 'Heartbeat every 5 seconds instead of 30 for faster detection', explanation: 'That multiplies the traffic by six to make an already-expensive feature more precise. Presence should get *less* accurate under pressure, not more.' },
+      ],
+      correct: 0,
+    },
+    {
+      question: 'A regional network blip disconnects 250K clients at once. What is the danger, and the fix?',
+      options: [
+        { text: 'The message store loses the in-flight writes; fix with synchronous replication', explanation: 'Accepted messages were already durable in the store before delivery was attempted. Nothing in flight is lost by a client disconnecting.' },
+        { text: 'Presence goes stale; fix by shortening the TTL', explanation: 'Presence going stale for a minute is the cheap, intended behaviour. A shorter TTL would add traffic during exactly the worst moment.' },
+        { text: 'All 250K reconnect simultaneously — a thundering herd that overloads the gateways they land on; fix with jittered exponential backoff in the client', explanation: 'Correct. Synchronized retries are self-amplifying: the herd knocks over the next box and creates a bigger herd. Spreading the same 250K reconnects over a 60-second jittered window turns 250K/sec into ~4,167/sec, about 5/sec per surviving server.' },
+        { text: 'The registry fills with stale entries; fix by disabling TTLs', explanation: 'TTLs are what clean up stale entries after a crash — removing them makes the problem permanent.' },
+      ],
+      correct: 2,
+    },
+  ],
+  interviewQuestions: [
+    {
+      question: 'Design WhatsApp. Start wherever you want.',
+      answer:
+        'I would start by pinning requirements and then the one number that constrains everything. Functional: 1:1 and group messaging, delivery/read receipts, presence, offline delivery, history, push. Non-functional: sub-200 ms for online pairs, per-conversation ordering, no loss of an accepted message, and hundreds of millions of concurrent connections. Estimation: 500M DAU × 40 messages = 20B/day, ~231K/sec average, ~700K peak, ~6 TB/day stored. But the number that decides the architecture is ~200M concurrent sockets — at ~50 KB each that is 10 TB of RAM just to hold connections. From there the design follows: WebSocket gateways (thin, ~250K connections each, ~800 boxes), a Redis registry mapping user to gateway, a queue into a message service that assigns per-conversation sequence numbers, Cassandra partitioned by conversation, an inbox plus APNs/FCM for offline recipients. Delivery is at-least-once with client-generated message ids for dedup. I would then go deep wherever you want — delivery or presence are the two with real substance.',
+      isCaseBased: true,
+    },
+    {
+      question: 'Walk me through the transport options and defend WebSocket over each.',
+      answer:
+        'Four options. HTTP polling: the client asks every N seconds — trivially simple, works through every proxy, but at 200M clients it is ~100M requests/sec of mostly-empty responses and still adds up to N seconds of latency. Wasteful and slow simultaneously, which is rare. Long polling: the server holds the request open until there is news — latency and waste both drop a lot, but each message costs a full request teardown and re-establish, and it is still one-directional per request. SSE: one never-ending HTTP response, with auto-reconnect and Last-Event-ID for free, but strictly server-to-client. WebSocket: an HTTP Upgrade flips the same TCP connection to full duplex, a few bytes of framing, open for hours. Chat picks WebSocket because the client sends continuously too — messages, read receipts, typing, heartbeats. With SSE I would need a parallel POST channel and would have rebuilt WebSocket badly. The contrast worth naming: LLM token streaming is genuinely one-way, so SSE is correct there — the transport follows the direction of the traffic, not fashion.',
+      isCaseBased: false,
+    },
+    {
+      question: 'What breaks once your servers hold long-lived connections instead of serving stateless requests?',
+      answer:
+        'Four things, and they are the real content of this question. (1) Routing: a message for Bob must reach the specific machine holding Bob\'s socket, so I need a connection registry — Redis, user_id to gateway_id, written on connect, deleted on disconnect, TTL\'d so crashes self-clean — and every delivery starts with that lookup. (2) Load balancing: round-robin is wrong because it distributes new *requests*, and what matters is *connections held*; a freshly restarted box has zero connections while its neighbours are full, so you route on least-connections. (3) Deploys: you cannot kill the process — a gateway must stop accepting, then ask clients to reconnect elsewhere over minutes, or every release becomes a self-inflicted reconnect storm. (4) Failure: one box dying disconnects everyone on it at once, so the connections-per-box number becomes an availability decision. I keep gateways deliberately thin — TLS and sockets, no business logic — precisely so they are the tier I redeploy least.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Case: your gateway boxes have 64 GB of RAM. How many connections per box, and how do you defend the number?',
+      answer:
+        'Do the arithmetic out loud. Budget ~50 KB per connection — kernel socket buffers, TLS state, and the app-level session object — with ~48 GB usable, so RAM permits ~960K. CPU: each connection sees about 0.007 events/sec (a user sends 40 messages in a whole day), so at 50K frames/sec per box CPU permits ~7 million. Both ceilings are far above what I would actually run. I would cap at ~250K, and the defence is not hardware — it is blast radius and drain time. At 250K, one failure disconnects a quarter-million users and a rolling deploy drains that many per box; at 1M I cut my fleet from 800 to 200 boxes and quarter my cost, but every incident and every release hits four times as many people with four times the reconnect burst. If asked to push the number up, I would want the reconnect path proven first: jittered backoff, tested drain, and enough spare capacity that survivors absorb the herd. Worth noting the counterexample: WhatsApp ran ~1M+ sockets per box on an Erlang stack, where per-connection cost is far lower — the right cap is a function of your runtime, not a universal constant.',
+      isCaseBased: true,
+    },
+    {
+      question: 'How do the one tick / two ticks / blue ticks actually get generated?',
+      answer:
+        'Each one is a different party making a claim, which is why there are three. One tick is the server acking the sender once the message is durable — it means stored, not delivered, and it is the only one the server can assert on its own. Two ticks is the recipient\'s *device* acking that the frame arrived on its socket; the server relays that to the sender. Crucially the server does not generate this from "I pushed it" — pushing into a socket is not delivery, since the TCP connection may already be dead. Blue ticks come from the client when the user opens the conversation: read(conversation_id, up_to_seq), one event covering the entire backlog. That last design choice matters at scale — marking 300 backlogged messages read is a single integer update to last_read_seq, not 300 writes. Same for delivery: last_delivered_seq is one number per (user, conversation), which in a 200-member group replaces 400 receipt rows per message with 400 integers total.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Why Cassandra here rather than Postgres? And what does that cost you?',
+      answer:
+        'The workload matches wide-column exactly: ~700K writes/sec at peak, append-only with essentially no updates, always read by one partition key, time-ordered, no joins, no multi-row transactions. Partition by conversation_id and cluster by seq descending, and the only hot query — "latest 50 in this chat, then 50 before" — is a sorted prefix scan of a single partition on a single node. Cassandra gives multi-node write scaling and that layout natively. Postgres would need hand-built sharding to absorb those writes, and I would be paying for joins, constraints, and ad-hoc querying that this workload never uses. The costs, stated plainly: no ad-hoc queries, so "find messages containing invoice" needs a separate search index; no cross-partition transactions; eventual consistency to reason about; and unbounded partitions — a five-year-old group chat is one enormous row unless I bucket the partition key by month. If the interviewer pushes back that this is premature, the honest answer is yes at 10K users — the choice is justified by the 700K/sec number, not by the technology being fashionable.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Case: users report that messages sometimes arrive twice. Diagnose and fix.',
+      answer:
+        'Duplicates are the expected behaviour of at-least-once delivery, so I would first check where the dedup is missing rather than hunting a "bug". Two candidate points. First the write path: the client retries after a lost ack, and if the server is not keying on the client-generated message_id it stores a second row with a second sequence number — that produces a permanent duplicate visible to everyone, and the fix is enforcing idempotency on message_id at write time, returning the original ack for a repeat. Second the delivery path: the server re-pushes on reconnect because it never received the delivered-ack, and the client renders it again — that produces a duplicate only for one user, and the fix is client-side dedup by message_id plus correct last_delivered_seq checkpointing. I would tell them apart by asking whether the sender also sees two messages (write path) or only the recipient does (delivery path). What I would not do is chase exactly-once delivery — it does not exist across an unreliable client network, because the sender genuinely cannot distinguish a lost message from a lost ack. At-least-once plus an idempotency key is the design; duplicates showing up mean a dedup point is missing, not that the model is wrong.',
+      isCaseBased: true,
+    },
+    {
+      question: 'Presence looks like a trivial feature. Why is it the expensive one?',
+      answer:
+        'Because it is a fanout problem wearing a small costume. Mechanically it is cheap: heartbeat every 30 s, set an online key in Redis with a 45 s TTL, and let expiry be the failure detector — phones never send a clean goodbye, so you cannot rely on disconnect events. The expense is notification. One user going online must reach everyone who cares; at ~200 contacts each and 500M users toggling several times a day, presence events can exceed actual message traffic — billions a day for a green dot. Three mitigations, in order of impact: publish only to contacts who currently have that chat open (almost nobody is looking, so this removes the vast majority); batch the rest as a pull — the chat list asks once for its 20 visible users and re-asks every 30 s; and accept staleness deliberately. "Last seen 2 minutes ago" is the interesting one: it is a product decision that removes the real-time requirement entirely and lets you round, cache, and delay everything. It is my favourite example of a feature designed around its systems cost, and under overload presence is the first thing I shed.',
+      isCaseBased: false,
+    },
+    {
+      question: 'How do you guarantee message ordering, and do you need it globally?',
+      answer:
+        'Per conversation, via a server-assigned monotonic sequence number written at the same time as the message. That number is the sort key and the pagination cursor. I explicitly do not order by client timestamp: phone clocks drift, timezones change, and a device that has been off can be minutes wrong — trusting it means new messages inserting themselves above ones you have already read. Client time is stored and displayed; it never orders. Ties are broken by server arrival order, which is arbitrary but identical for every participant, and that is the entire requirement — everyone sees the same sequence. Global ordering across all conversations is unnecessary and actively harmful: no user can observe the relative order of two unrelated chats, and a single global counter would be one bottleneck for 700K writes/sec. Per-conversation counters shard perfectly because they align with the partition key. The generalizable rule: order only within the unit where order is observable.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Case: a data-centre network blip drops 20% of your connections at once, and the fleet then falls over completely. Explain and fix.',
+      answer:
+        'This is a thundering herd. The blip itself is survivable — messages are durable and offline recipients queue normally. What kills you is that every disconnected client retries at the same instant, so surviving gateways get a synchronized burst of TLS handshakes and registry writes, saturate, and drop *their* connections, which enlarges the herd. It is self-amplifying, which is why the fleet dies after the incident rather than during it. Fixes in layers. Client: jittered exponential backoff — random delay, growing on repeat failure — which turns 250K instant reconnects into ~4,167/sec over a 60-second window, roughly 5/sec per surviving server. The randomness matters more than the backoff; without jitter the herd just re-forms at the next interval. Server: accept-rate limiting at the gateway so it sheds excess handshakes rather than dying, and enough headroom that surviving boxes can hold the extra sockets. Operationally: the same mechanism protects deploys, which is a self-inflicted version of this event — drain gradually, never restart the fleet in lockstep. The mental model to state: retry storms are a positive feedback loop, and the client-side sleep is the load-shedding device.',
+      isCaseBased: true,
+    },
+    {
+      question: 'How do images and videos flow through this system?',
+      answer:
+        'Not through the socket, and that is the point. A 5 MB video pushed down a WebSocket occupies one gateway\'s CPU and buffers for seconds and delays every other user\'s frames on that box — a single upload degrading 250K people. Instead: the client requests a pre-signed URL, uploads directly to blob storage (S3-style), and then sends a normal chat message whose body is a URL plus a small thumbnail and metadata. Recipients fetch from the CDN, so the bytes never touch my servers on the way out either, and popular media in a big group is served from edge cache once per region rather than once per recipient. The message row stays ~300 bytes, so storage estimates hold. Secondary benefits: uploads resume independently of the chat connection, and I can transcode asynchronously. The general principle — keep bulk data off the control plane — is the same reason the gateway holds no business logic.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Add end-to-end encryption. What changes, and what do you lose?',
+      answer:
+        'Less of the pipeline than people expect, and more of the product than they expect. The server keeps routing, queuing, and storing — it just handles an opaque blob, so gateways, registry, sequence numbers, inbox, and receipts all work unchanged. The complexity moves to the clients: key exchange, per-device key management, and the fact that a new device cannot read old history unless you build a separate encrypted-backup path with its own key. Group chats get harder — a message must be encrypted for every member device, and membership changes require rekeying. What you lose is server-side knowledge of content: no search over messages (search becomes local-only, per device), no server-side moderation or spam filtering on content, no link previews or thumbnail generation on the server, and no content-based ML features. Metadata is still visible — who talks to whom, when, how often — which is worth saying because it is a common misconception that E2EE hides everything. The honest framing: E2EE is a product decision with real feature costs, not a checkbox, and being able to name both halves is the answer.',
+      isCaseBased: false,
+    },
+  ],
+  flashcards: [
+    { front: 'The price of long-lived connections', back: 'The server must push to a user who is not asking, so each gateway remembers who is on it. Consequences: a connection registry (Redis user_id → gateway_id, TTL\'d, treated as a HINT — a stale entry falls back to the offline path), load balancing on connection count not request rate, and graceful drain on every deploy.' },
+    { front: 'The four transports, ranked', back: 'Polling (simple, wasteful, laggy) → long polling (low latency, one-shot per message) → SSE (persistent but server→client only) → WebSocket (full duplex). Chat needs WebSocket because the client sends continuously too.' },
+    { front: 'Sizing a chat fleet', back: 'Connections, not QPS. 500M DAU × 40% online = ~200M sockets × 50 KB = ~10 TB of RAM just to hold them. The binding cap is neither RAM (960K/box) nor CPU (7.2M) but the self-imposed blast radius (250K → 800 servers).' },
+    { front: 'The three ticks', back: 'One tick = server acks the sender, meaning STORED. Two ticks = recipient\'s DEVICE acks the frame. Blue = recipient\'s client sends read(up_to_seq) — one event for a whole backlog.' },
+    { front: 'Delivery guarantee to say in an interview', back: '"At-least-once, idempotent by client-generated message id." The client makes the id before the first send: server dedups on write, client dedups on render. Exactly-once across a flaky network does not exist.' },
+    { front: 'Chat data model', back: 'messages PRIMARY KEY ((conversation_id), seq) clustered seq DESC → "latest 50" is a single-partition prefix scan. Receipts are two integers per (user, conversation), not a row per message. Wide-column (Cassandra) fits: write-heavy, time-ordered, one partition key, no joins.' },
+    { front: 'Offline delivery path', back: 'Registry lookup misses → message is already durable → flag it in the recipient\'s inbox + fire APNs/FCM push (a hint, not delivery) → on reconnect, stream everything after their last_delivered_seq, client dedups by id.' },
+    { front: 'Presence: cost and the three mitigations', back: 'Heartbeat + Redis TTL is cheap; the fanout is not (200 contacts × every toggle = billions of events/day). Fix: publish only to contacts with the chat open, batch/pull for lists, and accept staleness — "last seen 2 min ago" is a product decision that buys enormous savings.' },
+    { front: 'Ordering rule', back: 'Server-assigned monotonic seq PER CONVERSATION. Never client timestamps (clock skew inserts messages above ones you already read). Global ordering is unnecessary — nobody can observe order across chats — and would be one bottleneck for 700K writes/sec.' },
+    { front: 'The three big bottlenecks', back: 'Reconnect storms (jittered backoff: 250K instant → ~4,167/sec over 60 s), group fanout (one write → 255 deliveries: cap size, fan out async), and media (never through the socket — pre-signed upload to blob storage, socket carries a URL, CDN serves it).' },
+  ],
+  mindmapMarkdown: `- Case Study: WhatsApp-Style Chat
+  - Step 1 Requirements
+    - 1:1 + groups, receipts, presence
+    - Offline delivery, history, push
+    - Low latency, per-conversation order, no loss
+    - Very high concurrent connections
+  - Step 2 Estimation
+    - 500M DAU x 40 = 20B msg/day
+    - 231K/s avg, ~700K/s peak
+    - 6 TB/day, 18 TB replicated
+    - 200M sockets x 50 KB = 10 TB RAM
+  - Step 3 Transport
+    - Polling: simple, wasteful, laggy
+    - Long polling: better, still one-shot
+    - SSE: server to client only
+    - WebSocket: full duplex, the answer
+    - Cost: stateful servers
+      - Connection registry user to gateway
+      - LB on connection count
+      - Graceful drain on deploy
+  - Step 4 API / protocol
+    - send, ack chain sent-delivered-read
+    - typing (droppable), heartbeat
+    - client_msg_id = idempotency key
+  - Step 5 Data model
+    - (conversation_id, seq) sorted DESC
+    - membership both directions
+    - last_delivered_seq / last_read_seq
+    - Cassandra: write-heavy, time-ordered
+  - Step 6 HLD
+    - Client to WebSocket gateway fleet
+    - Redis session/presence registry
+    - Queue to message service
+    - Message store + inbox
+    - APNs/FCM push, blob + CDN
+  - Deep dive A Delivery
+    - Registry lookup is the hinge
+    - Offline: inbox + push, drain on reconnect
+    - At-least-once + client dedup
+  - Deep dive B Presence
+    - Heartbeat + TTL = failure detector
+    - Fanout: 200 contacts per toggle
+    - Only chat-open contacts, batch, staleness
+  - Ordering
+    - Server seq per conversation
+    - Never client clocks
+    - Global order unnecessary
+  - Bottlenecks
+    - Reconnect storms, jittered backoff
+    - Group fanout multiplier
+    - Media off the socket
+    - Unbounded partitions, bucket by month
+    - E2EE: no search, moderation, previews`,
+}
+
+export default m
