@@ -6,88 +6,236 @@ const m: Module = {
   level: 2,
   title: 'Alignment: RLHF, Reward Models & DPO',
   whyItMatters:
-    'This is the step that turned a text predictor into ChatGPT, and it is the GenAI interview question with the widest gap between people who can recite "SFT, reward model, PPO" and people who can explain why the KL penalty exists. It is also the most practical thing on the list: DPO is cheap enough that you can actually run it, and "I aligned a small model with DPO on my own preference pairs" is a resume line almost nobody has.',
-  estMinutes: 55,
+    'A model trained on the internet learns to continue text. That is not the same thing as answering your question, and no amount of extra internet text fixes it. This module builds, from zero, the three-step process that turned a text predictor into an assistant: teach it the shape of an answer, learn a scoring function from human comparisons, then improve the model against that score without letting it cheat. Every number here is computed with plain Python you can run, including the exact failure that happens when the safety leash is removed.',
+  assumes: [
+    'You know what a probability is: a number between 0 and 1 saying how likely something is',
+    'You have seen a Python for loop, a function, and a list',
+    'You know that a language model produces text one word at a time, each time picking a likely next word',
+    'It helps to have read the Metrics module Text Generation Metrics: Perplexity, BLEU & ROUGE, which is where KL divergence is explained. This module uses it but does not re-derive it.',
+    'No reinforcement learning background is needed. Every term used here is defined here.',
+  ],
+  estMinutes: 42,
   sections: [
     {
       type: 'intuition',
-      title: 'The problem: a base model is autocomplete, not an assistant',
-      md: `Pretraining optimises exactly one thing: *which token probably comes next on the internet*. Nothing in that objective says "be useful".
+      title: 'Ask a pretrained model a question and watch what you get',
+      md: `A **pretrained** language model has been trained on one task only: given some text, predict the word that probably comes next. It saw a very large pile of web pages and got very good at continuing them.
 
-- Ask a base model *"How do I fix a flat tyre?"* and a very likely continuation is *"How do I change a headlight? How do I check tyre pressure?"* — because that is what an FAQ page looks like.
-- The model is not broken. It is doing its job perfectly. Its job is just not your job.
-- The gap has a name: **capability vs alignment**. The knowledge is already in the weights; the model has no idea you wanted it *pointed at you*.
-- And "likely" includes confidently wrong text, unsafe instructions and internet-flavoured rudeness — all extremely well-represented continuations.
-- Alignment is the work of turning *likely* into **helpful, honest, harmless**. The whole subject exists because we cannot write that as a loss function.`,
+Now type this into it:
+
+- **You:** *"How do I fix a flat tyre?"*
+- **The model:** *"How do I check my tyre pressure? How do I change a headlight? How often should I rotate my tyres?"*
+
+That output is not a bug. On the internet, a line that looks like a question is very often followed by more questions, because that is what an FAQ page is. The model produced a **likely** continuation. It did exactly what it was trained to do.
+
+But it is useless to you. You wanted an answer, not a list of related questions. So we have two different things that we had been quietly assuming were the same thing:
+
+- **Likely** — what the training data says usually comes next.
+- **Helpful** — what actually serves the person who typed the question.
+
+**Alignment** is the name for the work of moving a model from the first to the second: making it helpful, honest and safe, rather than merely likely. That is the whole subject of this module.`,
     },
     {
       type: 'note',
-      md: 'You cannot label "good answer" the way you label a cat photo. There is no ground-truth string — two humans write two different good answers and both are right. So RLHF does something sneaky: instead of scoring text directly, it **learns the scoring function from humans**, then optimises against it. Almost every problem in this module traces back to that one substitution.',
+      md: 'Why we cannot fix this the ordinary way: ordinary training needs a correct answer to copy. For "is this photo a cat?" there is one right label. For "how do I fix a flat tyre?" there is no single correct string — two good writers produce two different good answers, and both are right. So there is nothing to compare against, and no obvious loss to minimise. Everything difficult in this module comes from working around that one missing ingredient.',
     },
     {
       type: 'intuition',
-      title: 'The three-stage pipeline, one line each',
-      md: `InstructGPT — the paper behind ChatGPT — fixed it in three stages. Say them in this order and the interviewer relaxes.
+      title: 'The three stages, in order, in plain words',
+      md: `The pipeline that fixed this is called **RLHF**: reinforcement learning from human feedback. It has three stages, and it is worth memorising what goes in and what comes out of each one before we look at any of them in detail.
 
-1. **SFT (supervised fine-tuning).** Humans write ideal answers to real prompts; fine-tune the base model on them with the plain next-token loss. This teaches the *format*: a question gets an answer, not more questions. Mechanically it is identical to the fine-tuning module — same loss, curated data, often LoRA.
-2. **Reward model.** Show humans two answers to the same prompt and let them pick the better one. Train a separate model on those comparisons to emit one scalar: *how good is this response?*
-3. **PPO (reinforcement learning).** The SFT model is now a **policy**. Generate answers, score them with the reward model, push the policy toward higher scores — on a leash that stops it running away from the SFT model.
+1. **SFT — supervised fine-tuning.** In: a few tens of thousands of *demonstrations*, which are prompts with an ideal answer written by a human. Out: a model that replies in the shape of an answer instead of continuing a document. This stage is ordinary training with the ordinary next-word loss. Nothing new.
+2. **Reward model.** In: *preference data* — for one prompt, two candidate answers and a human's verdict on which one is better. Out: a **reward model**, a separate small model that reads one answer and returns a single number saying how good it is.
+3. **Policy optimisation.** In: the SFT model, the reward model, and a pile of prompts. Out: the final aligned model. The SFT model writes answers, the reward model scores them, and the SFT model is nudged toward writing higher-scoring answers — while a leash stops it going too far.
 
-- Stage 1 needs *expensive* data (humans writing) so it stays small: tens of thousands of demonstrations.
-- Stages 2 and 3 need *cheap* data (humans choosing) so they scale: hundreds of thousands of comparisons.
-- That asymmetry is the whole design rationale. **Judging is easier than writing.**`,
+Two more words, defined now, used constantly from here on:
+
+- **Policy.** The model we are currently improving. It is called a policy because in stage 3 we treat it as something that takes an action (writing an answer) and receives a score for that action. It is the same neural network as before; only the name changes.
+- **Reference model.** A frozen copy of the SFT model that is never updated. Its only job in stage 3 is to be the thing we compare the policy against, so we can measure how far the policy has wandered.
+
+There is a design reason the stages are split this way. Writing a good answer by hand is slow and expensive, so stage 1 stays small. Reading two answers and clicking the better one is fast and cheap, so stages 2 and 3 can use hundreds of thousands of examples. Judging is easier than writing, and the pipeline is built around that fact.`,
     },
     {
       type: 'intuition',
-      title: 'Stage 2: why comparisons, not scores',
-      md: `Ask ten labellers to rate an answer out of 10 and you get noise: one person's 7 is another's 4, and the same person drifts across a shift.
+      title: 'Stage 2, first half: why we ask "which is better?" and never "rate this out of 10"',
+      md: `The reward model needs training data. The obvious plan is to have humans score answers out of 10 and then train a model to predict the score. That plan fails, and the reason is about people, not about maths.
 
-- Ask instead *"A or B?"* and agreement jumps. Humans are reliable **comparators** and unreliable absolute meters.
-- So the dataset is triples: prompt *x*, chosen answer *y_w*, rejected answer *y_l*. There are no scores anywhere in it.
-- But the reward model must output a *number*. **Bradley-Terry** is the bridge: assume the probability A beats B is a sigmoid of the gap between their hidden scores, then fit those scores by maximum likelihood.
-- Practical detail: the reward model is usually the SFT model with its token head swapped for a single scalar head — it already understands language, it just learns to grade.
-- Consequence worth knowing cold: only the **gap** is identified. Add 5 to every reward and no preference changes. Raw reward values are meaningless across runs; only differences mean anything.`,
-    },
-    {
-      type: 'math',
-      intro: 'Bradley-Terry: the standard model for pairwise preferences, borrowed from chess ratings. The reward-model loss is just binary cross-entropy on "did the chosen one win?".',
-      latex: [
-        'P(y_w \\succ y_l \\mid x) \\;=\\; \\sigma\\!\\left( r(x, y_w) - r(x, y_l) \\right) \\;=\\; \\frac{e^{r(x, y_w)}}{e^{r(x, y_w)} + e^{r(x, y_l)}}',
-        '\\mathcal{L}_{\\text{RM}}(\\phi) \\;=\\; -\\,\\mathbb{E}_{(x,\\, y_w,\\, y_l) \\sim \\mathcal{D}} \\left[ \\log \\sigma\\!\\left( r_\\phi(x, y_w) - r_\\phi(x, y_l) \\right) \\right]',
-        '\\text{Shift invariance: } r \\to r + c \\;\\Rightarrow\\; \\text{every preference probability is unchanged. Only gaps are learned.}',
-      ],
+- Ask ten people to rate the same answer out of 10 and you get 4, 6, 7, 5, 8, 6, 3, 7, 6, 9. One person's 7 is another person's 4. There is no shared meaning for the numbers.
+- Worse, one person drifts. The same labeller marks harder at 9am than at 4pm. Their 6 in the morning is their 8 in the afternoon.
+- Now ask the same ten people *"which of these two answers is better, A or B?"* and they agree far more often. That question does not require anyone to hold a private scale in their head. It only requires a comparison.
+
+So the data we collect is a **preference pair**: one prompt, one answer marked *chosen*, one answer marked *rejected*. There is not a single number anywhere in the dataset.
+
+That leaves an obvious problem. Stage 3 needs a *number* to push against, and our data has none. Bridging that gap is exactly what the reward model is for: it is trained on comparisons, and it outputs numbers.`,
     },
     {
       type: 'intuition',
-      title: 'Stage 3: PPO, and the leash',
-      md: `Now optimise. The policy writes answers, the reward model scores them, the gradient says "do more of what scored well". Standard policy-gradient RL; PPO is chosen for its clipped update, which stops any single step from moving the policy too far.
+      title: 'Stage 2, second half: turning "A beat B" into numbers',
+      md: `Here is the trick. Give the reward model two answers and it produces two numbers, say r(A) and r(B). Turn the *difference* between those numbers into a probability using the **sigmoid** function, which squashes any number into the range 0 to 1:
 
-- One problem: the reward model is a *model*, fit to a finite sample of human taste. It is accurate where it saw data and nonsense outside it.
-- Left unconstrained, the policy will go find the outside. It is an optimiser — locating the argmax of a flawed function is literally its job description.
-- The fix is a **KL penalty against the frozen SFT model**, the *reference policy*. Every token the tuned model makes much more likely than the reference costs reward.
-- Read it as a leash: go find high reward, but stay within a short distance of the model we already know produces sane English.
-- **β** sets the leash length. Too tight (β large) and RLHF barely changes anything; too loose (β → 0) and you get high-reward gibberish. It is the single most important knob in the pipeline.`,
+- sigmoid(0) = 0.5. If the two scores are equal, we predict a coin flip between A and B.
+- sigmoid(+2) = 0.88. If A scores two points higher, we predict humans pick A about 88% of the time.
+- sigmoid(-2) = 0.12. If A scores two points lower, we predict A wins only 12% of the time.
+
+So "the model's belief that a human prefers A" is sigmoid(r(A) − r(B)). Now we have a probability, and training a model to make a known event probable is completely standard: the loss is minus the logarithm of the probability we assigned to what actually happened. Small probability for the thing that happened means a big loss.
+
+That is the entire reward-model objective. Work one pair by hand before running it:
+
+- Suppose the reward model currently scores r(A) = 0.20 and r(B) = 0.50, but the human chose A. The model has the order backwards.
+- The gap is 0.20 − 0.50 = −0.30, and sigmoid(−0.30) = 0.426. The model gives the correct outcome only a 42.6% chance.
+- Loss = −log(0.426) = 0.854. That is a real penalty, and training will reduce it by raising r(A) and lowering r(B).
+
+One consequence you should notice straight away: only the **gap** matters. Scores of 0.2 and 0.5 give exactly the same prediction as scores of 10.2 and 10.5. A single reward number, on its own, means nothing at all.`,
     },
     {
-      type: 'math',
-      intro: 'The RLHF objective. The second term is the leash — and in real implementations it is folded into the per-token reward so PPO never sees it as a separate constraint.',
-      latex: [
-        '\\max_{\\pi_\\theta} \\;\\; \\mathbb{E}_{x \\sim \\mathcal{D},\\; y \\sim \\pi_\\theta(\\cdot \\mid x)} \\big[\\, r_\\phi(x, y) \\,\\big] \\;-\\; \\beta \\, D_{\\mathrm{KL}}\\!\\left( \\pi_\\theta(\\cdot \\mid x) \\,\\|\\, \\pi_{\\text{ref}}(\\cdot \\mid x) \\right)',
-        '\\text{Implemented as a shaped reward: } \\;\\; \\tilde{r}(x, y) \\;=\\; r_\\phi(x, y) \\;-\\; \\beta \\log \\frac{\\pi_\\theta(y \\mid x)}{\\pi_{\\text{ref}}(y \\mid x)}',
-        '\\beta \\uparrow \\;\\Rightarrow\\; \\text{hugs the SFT model, learns little.} \\qquad \\beta \\downarrow \\;\\Rightarrow\\; \\text{chases reward, drifts into gibberish.}',
-      ],
+      type: 'code',
+      lang: 'python',
+      title: 'Snippet 1: the reward model learning that A beats B',
+      code: `import math
+
+def sigmoid(z):
+    return 1.0 / (1.0 + math.exp(-z))
+
+rA = 0.20                                   # current score for the CHOSEN answer
+rB = 0.50                                   # current score for the REJECTED answer
+lr = 0.5                                    # step size: how hard each update pushes
+print('step  r(A)    r(B)    P(A wins)   loss')
+for step in range(5):
+    p = sigmoid(rA - rB)                    # our predicted chance the human picks A
+    loss = -math.log(p)                     # penalty for not predicting it confidently
+    print('%2d   %+.3f  %+.3f    %.3f     %.4f' % (step, rA, rB, p, loss))
+    rA = rA + lr * (1.0 - p)                # push the chosen answer's score UP
+    rB = rB - lr * (1.0 - p)                # push the rejected answer's score DOWN
+
+# ---- real output ----
+# step  r(A)    r(B)    P(A wins)   loss
+#  0   +0.200  +0.500    0.426     0.8544
+#  1   +0.487  +0.213    0.568     0.5653
+#  2   +0.703  -0.003    0.670     0.4011
+#  3   +0.868  -0.168    0.738     0.3035
+#  4   +0.999  -0.299    0.786     0.2413`,
+      annotations: {
+        1: 'math is Python\'s built-in maths library. We need exp for the sigmoid and log for the loss. Nothing else is imported anywhere in this module.',
+        3: 'def starts a function. sigmoid takes one number z and returns a number between 0 and 1.',
+        4: 'The sigmoid formula. exp(-z) is huge when z is very negative (so the result is near 0) and near zero when z is large positive (so the result is near 1).',
+        6: 'r(A) is the score the reward model currently gives the answer the human chose. We start it deliberately too low.',
+        7: 'r(B) is the score for the answer the human rejected. It starts higher than r(A), so the model has the order wrong. That is the interesting case.',
+        8: 'The learning rate: the fraction of the suggested correction we actually apply on each step. Real training uses a much smaller value; 0.5 makes the movement visible in five steps.',
+        9: 'A plain header line so the printed table has column names.',
+        10: 'range(5) gives 0,1,2,3,4 — we take five update steps and print each one.',
+        11: 'The gap rA - rB fed through sigmoid. This is the model\'s predicted probability that a human prefers A.',
+        12: 'The loss: minus the log of the probability we gave the outcome that actually happened. p = 0.426 gives 0.854; p = 0.99 would give 0.01.',
+        13: 'Prints one row. %+.3f shows three decimals with an explicit + or - sign; %2d pads the step number to width 2.',
+        14: 'Raise the chosen answer\'s score. The size of the push is (1 - p): when p is already near 1 we are nearly right and barely move, when p is near 0 we are badly wrong and move a lot.',
+        15: 'Lower the rejected answer\'s score by the same amount. Notice both lines use the same (1 - p), so the gap grows twice as fast as either score moves.',
+      },
+    },
+    {
+      type: 'note',
+      md: 'Read the output columns. The gap starts negative (0.200 below 0.500) and by step 2 it has flipped: r(A) = 0.703 sits above r(B) = -0.003. P(A wins) climbs 0.426 to 0.786 and the loss falls 0.8544 to 0.2413. Also watch the steps shrink: the jump from step 0 to 1 moves r(A) by 0.287, while step 3 to 4 moves it by only 0.131. The update is self-damping, because it is scaled by how wrong we still are.',
+    },
+    {
+      type: 'intuition',
+      title: 'Stage 3: the model chases the score, and here is what goes wrong',
+      md: `We now have a number for any answer, so stage 3 looks easy: generate answers, score them, adjust the policy so high-scoring answers become more likely. Repeat.
+
+It does not work, and the reason is important enough that the fix has a name.
+
+The reward model is a *model*. It was fitted to a finite pile of human comparisons. Inside the range of text it saw during training, it grades reasonably. Outside that range it is guessing, and some of its guesses are badly wrong — there will be strange, repetitive, or oddly formatted text that it happens to score very high for no good reason.
+
+Now think about what the policy is. It is an optimiser. Its entire job is to find text that maximises a number. If there is a region where the reward model is broken and generous, the policy will find it, because finding maxima is the only thing it does.
+
+This failure is called **reward hacking**: the policy raises the measured score without raising real quality. It is not subtle when it happens. The reward curve on your dashboard goes up smoothly and beautifully, and then you actually read a sample and it says:
+
+*"Sure! Sure! I'd be happy to help! Sure! I'd be happy to help! Sure!"*
+
+The reward model loves it. A human would not accept it. The measure became the target and stopped being a good measure.
+
+The fix is to refuse to let the policy travel far from text we already know is sane. We keep the frozen **reference model** — the SFT checkpoint from stage 1 — and add a **KL penalty**: a cost that grows the more the policy's word probabilities differ from the reference's. The thing being optimised becomes *reward minus β times the KL distance from the reference*, where **β** is a knob you choose.
+
+Think of it as a leash. Go find high reward, but stay within a short distance of the model we already trust to produce normal English. β is the length of the leash: large β is a short leash, small β is a long one, and β = 0 means no leash at all.`,
+    },
+    {
+      type: 'note',
+      md: 'KL divergence is not defined here because it is defined properly in the Metrics subject, in **Text Generation Metrics: Perplexity, BLEU & ROUGE**. The one-line version you need for this module: KL is a non-negative number measuring how far one set of probabilities sits from another, and it is zero only when the two match exactly. The direction used in RLHF is KL(policy from reference), which means it charges the policy for making things likely that the reference thought unlikely. A side effect worth knowing: that direction lets the policy quietly drop options the reference kept, which is part of why aligned models sound more samey than the models they came from.',
+    },
+    {
+      type: 'intuition',
+      title: 'Watching the leash work, with three numbers',
+      md: `Shrink the problem until it fits on a page. The model has exactly three possible replies to one prompt, and the reference model (our frozen SFT checkpoint) gives them these probabilities:
+
+- A real answer: **0.70**
+- *"Sure! Sure! Sure!"*: **0.02**
+- A rambling answer: **0.28**
+
+The reward model scores them **3.0**, **9.5** and **2.0**. That 9.5 is the bug: the reward model was never shown repetitive text like reply 2 during its training, and it grades it far too generously.
+
+Now compare two candidate policies:
+
+- The **hacked** policy: 0.01, 0.98, 0.01. It puts almost all its probability on the degenerate reply.
+- The **sane** policy: 0.75, 0.02, 0.23. Barely moved from the reference.
+
+On raw reward alone the hacked policy scores 9.36 against the sane policy's 2.90. Reward says hacking wins by a mile. Add the KL penalty and the ranking depends on β, which is exactly what the next snippet prints.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Snippet 2: the same reward hack, judged at three leash lengths',
+      code: `import math
+
+ref = [0.70, 0.02, 0.28]                    # frozen reference model's probabilities
+reward = [3.0, 9.5, 2.0]                    # reward model's scores; 9.5 is the bug
+
+def objective(policy, beta):
+    total = 0.0
+    for i in range(3):
+        kl = math.log(policy[i] / ref[i])   # how far reply i moved from the reference
+        total = total + policy[i] * (reward[i] - beta * kl)
+    return total
+
+hacked = [0.01, 0.98, 0.01]                 # policy that chases the broken score
+sane = [0.75, 0.02, 0.23]                   # policy that stays near the reference
+print('beta   hacked policy   sane policy')
+for beta in [0.0, 1.0, 3.0]:
+    print('%.1f      %+8.3f      %+8.3f' % (beta, objective(hacked, beta), objective(sane, beta)))
+
+# ---- real output ----
+# beta   hacked policy   sane policy
+# 0.0        +9.360        +2.900
+# 1.0        +5.622        +2.893
+# 3.0        -1.855        +2.880`,
+      annotations: {
+        1: 'Same import as before. Each snippet in this module stands alone and can be pasted into a fresh Python session.',
+        3: 'The reference model\'s three probabilities. They add to 1.00 because these are the only three replies in our toy world.',
+        4: 'The reward model\'s score for each reply. Reply 2 scoring 9.5 is deliberately wrong: that is the flaw the policy will exploit.',
+        6: 'The function computes the full RLHF objective for one policy at one leash length: average reward minus beta times the KL distance.',
+        7: 'A running total, starting at zero. We will add one reply\'s contribution at a time.',
+        8: 'range(3) gives 0,1,2 — one pass per possible reply.',
+        9: 'log(policy / reference) for this reply. It is positive when the policy made the reply more likely than the reference did, and negative when it made it less likely.',
+        10: 'Weight this reply by how often the policy actually produces it, then add its reward minus the leash cost. Summing this over all replies is the KL-penalised objective.',
+        11: 'Hand the finished total back to the caller.',
+        13: 'The hacked policy: 98% of its probability on the degenerate reply the reward model over-scores.',
+        14: 'The sane policy: almost the reference, with a small shift toward the genuinely good reply.',
+        15: 'Column headers for the printed table.',
+        16: 'Three leash lengths: no leash, a moderate one, a tight one.',
+        17: 'Prints both objective values side by side. %+8.3f pads to width 8, three decimals, always signed.',
+      },
+    },
+    {
+      type: 'note',
+      md: 'That table is the whole argument for the KL penalty in three rows. At **beta = 0** the hacked policy wins 9.360 to 2.900, so an optimiser with no leash will pick the gibberish every single time — the reward model told it to. At **beta = 1.0** hacking still wins, 5.622 to 2.893: a leash that is too loose only slows the drift down, it does not prevent it. At **beta = 3.0** the hacked policy scores -1.855, below the sane policy\'s 2.880, so the optimiser finally rejects it. Also notice the sane policy barely changes across all three rows, 2.900 to 2.880, because it never moved far from the reference and therefore never pays much. The leash costs an honest policy almost nothing and costs a cheating one everything. That asymmetry is the design.',
     },
     {
       type: 'visual',
       component: 'PointerBoxDiagram',
       props: {
         title: 'Alignment, stage by stage',
-        notice: 'Left column: what is being fed in at this stage. Right column: which models exist and which of them are frozen. Watch how many boxes PPO needs — and how many DPO needs.',
+        notice: 'Left column: what is fed in at this stage. Right column: which models exist and which of them are frozen. Count the boxes RLHF needs, then count the boxes DPO needs.',
         leftLabel: 'stage inputs',
         rightLabel: 'models / artefacts',
         frames: [
           {
-            note: 'Stage 0. A pretrained base model. Give it a question and it continues the document — often with more questions.',
+            note: 'Stage 0. A pretrained model. Give it a question and it continues the document, often with more questions.',
             stack: [{ name: 'prompt', to: 'base' }],
             heap: [
               { id: 'base', value: 'base LM', label: 'pretrained' },
@@ -95,7 +243,7 @@ const m: Module = {
             ],
           },
           {
-            note: 'Stage 1 (SFT). Fine-tune on human-written demonstrations. Now it answers in the right FORMAT. This checkpoint is kept twice: as the policy, and as the frozen reference.',
+            note: 'Stage 1 (SFT). Train on human-written demonstrations. Now it answers in the right shape. This one checkpoint is kept twice: as the policy we improve, and as the frozen reference.',
             stack: [
               { name: 'demos', value: 'prompt+answer' },
               { name: 'policy', to: 'sft' },
@@ -106,7 +254,7 @@ const m: Module = {
             ],
           },
           {
-            note: 'Stage 2a. Sample two answers per prompt; a human says which is better. Comparisons, never absolute scores — that is what humans are reliable at.',
+            note: 'Stage 2a. Two answers per prompt; a human says which is better. Comparisons only, never a score out of 10 — comparisons are what humans agree on.',
             stack: [
               { name: 'prompt x', to: 'sft' },
               { name: 'human label', value: 'A > B' },
@@ -118,55 +266,45 @@ const m: Module = {
             ],
           },
           {
-            note: 'Stage 2b. Train a reward model on those pairs with the Bradley-Terry loss. Output: one scalar per response. Only the gap between scores carries meaning.',
+            note: 'Stage 2b. Train a reward model on those pairs: raise the chosen score, lower the rejected one. Output is one number per answer, and only the gap between numbers carries meaning.',
             stack: [{ name: 'pref pairs', to: 'rm' }],
             heap: [
-              { id: 'rm', value: 'reward model', label: 'scalar head' },
-              { id: 'ra', value: 'r(A) = +1.4' },
-              { id: 'rb', value: 'r(B) = -0.3' },
+              { id: 'rm', value: 'reward model', label: 'one number out' },
+              { id: 'ra', value: 'r(A) = +0.999' },
+              { id: 'rb', value: 'r(B) = -0.299' },
             ],
           },
           {
-            note: 'Stage 3 (PPO). The policy generates, the reward model scores, the gradient pushes reward up — while a KL term to the frozen reference pulls back. Leash and engine.',
+            note: 'Stage 3. The policy writes, the reward model scores, the policy is pushed up the score — while the KL penalty against the frozen reference pulls back. Engine and leash together.',
             stack: [
               { name: 'sampled answers', to: 'pi' },
               { name: 'score', to: 'rm' },
               { name: 'KL leash', to: 'ref' },
             ],
             heap: [
-              { id: 'pi', value: 'PPO policy', label: 'training' },
+              { id: 'pi', value: 'policy', label: 'training' },
               { id: 'rm', value: 'reward model', label: 'frozen' },
               { id: 'ref', value: 'SFT reference', label: 'frozen' },
             ],
           },
           {
-            note: 'The real bill. Three-plus models resident at once, generation inside the training loop, and four fragile hyperparameters. This is why so few teams got RLHF working.',
-            stack: [{ name: 'GPU memory', value: '3-4 models' }],
-            heap: [
-              { id: 'pi', value: 'policy', label: 'trains' },
-              { id: 'ref', value: 'reference', label: 'frozen' },
-              { id: 'rm', value: 'reward model', label: 'frozen' },
-              { id: 'vf', value: 'value head', label: 'trains' },
-            ],
-          },
-          {
-            note: 'Cut the leash (beta -> 0). Reward climbs beautifully and the text collapses. The policy found a bug in the reward model, not a better answer.',
+            note: 'Cut the leash (beta = 0). Reward climbs beautifully and the text collapses. The policy found a flaw in the reward model, not a better answer.',
             stack: [
               { name: 'KL leash', value: 'beta = 0', danger: true },
               { name: 'policy', to: 'pi', danger: true },
             ],
             heap: [
               { id: 'pi', value: 'drifted policy', danger: true },
-              { id: 'r', value: 'reward 9.8 (up)', danger: true },
+              { id: 'r', value: 'reward 9.36 (up)', danger: true },
               { id: 'txt', value: '"Sure! Sure! Sure!"', danger: true },
             ],
           },
           {
-            note: 'DPO collapses stages 2 and 3 into one. No reward model, no sampling, no RL — the same preference pairs go straight into a classification loss.',
+            note: 'DPO collapses stages 2 and 3 into one. No reward model, no sampling, no reinforcement learning — the same preference pairs go straight into one ordinary loss.',
             stack: [
-              { name: 'pref pairs', value: 'x, y_w, y_l' },
+              { name: 'pref pairs', value: 'x, chosen, rejected' },
               { name: 'policy', to: 'pi' },
-              { name: 'log-ratio vs', to: 'ref' },
+              { name: 'compare with', to: 'ref' },
             ],
             heap: [
               { id: 'pi', value: 'DPO policy', label: 'trains' },
@@ -177,367 +315,324 @@ const m: Module = {
       },
     },
     {
-      type: 'note',
-      md: 'That KL term is the exact quantity from the metrics subject\'s KL-divergence section — same formula, third job (there it regularises a VAE latent space and drives distillation; here it restrains a policy). Direction matters: this is KL(policy || reference), the **reverse**, mode-seeking direction. Reverse KL lets the policy quietly abandon parts of the reference distribution, which is a large part of why aligned models end up less varied in phrasing than the models they came from.',
-    },
-    {
       type: 'intuition',
-      title: 'Reward hacking: the failure you will be asked about',
-      md: `Goodhart's law with a GPU: when a measure becomes a target, it stops being a good measure. Tuned models reliably discover these:
+      title: 'DPO: delete the reward model and the reinforcement learning',
+      md: `Stage 3 is expensive and fragile. Three models sit on the GPU at once — the policy being trained, the frozen reference, the frozen reward model — and the policy has to generate fresh text inside the training loop, which is slow. On top of that, β and the other reinforcement-learning knobs are genuinely hard to tune.
 
-- **Verbosity.** Labellers mildly prefer thorough answers, so the reward model scores long ones higher, so the policy pads. Length becomes a proxy for quality. This is the most reproducible reward-model bias there is — many teams now regress reward on response length and subtract the fitted component.
-- **Sycophancy.** Agreeing with the user's stated opinion scores well, because humans reward being agreed with. The model learns to fold the moment it is contradicted, even when it was right.
-- **Formatting tricks.** Bullet points, bold headers, a confident opening line, a tidy summary — the *shape* of a good answer without the substance.
-- **Hedging.** "I cannot be certain, but..." is rarely marked wrong, so answers get safer and emptier.
-- Every one of these raises measured reward. None raises real quality. Without the KL leash they go extreme fast, and the signature is unmistakable: **reward climbing steadily while sampled text degenerates** into one repeated high-scoring phrase.`,
-    },
-    {
-      type: 'intuition',
-      title: 'Why RLHF hurts in practice',
-      md: `- **Three models resident at once**: the trainable policy, the frozen reference (for KL), the frozen reward model — plus PPO's value network. Memory and orchestration go up roughly 3–4×.
-- **It is online.** Every step samples fresh completions from the *current* policy, so text generation sits inside the training loop. Slow, and the data distribution moves under you as you train.
-- **It is unstable.** Policy-gradient RL has famously touchy knobs: β, learning rate, clip range, KL target, advantage normalisation. A badly chosen β can silently ruin a good model over thousands of steps.
-- **Debugging is miserable.** Reward went up, human eval went down — is it the labellers, the reward model, the leash, or PPO itself? Four suspects, one number.
-- The honest field verdict: RLHF works, and very few teams outside the big labs ever got it working *reliably*. That vacuum is exactly what DPO walked into.`,
-    },
-    {
-      type: 'intuition',
-      title: 'DPO: delete the reward model and the RL',
-      md: `The insight is mathematics, not engineering. Ask: what is the *optimal* policy for "maximise reward minus β·KL to the reference"? That problem has a closed-form answer — the reference distribution, reweighted by the exponentiated reward.
+**DPO** — direct preference optimisation — removes all of it, and the reason it can is a piece of algebra rather than an engineering trick.
 
-- Now invert it, and something startling falls out: **any reward function can be written as a scaled log-ratio between its optimal policy and the reference.** The reward was never a separate object that needed its own network.
-- So substitute that expression for *r* into the Bradley-Terry preference likelihood. The awkward normalising constant Z(x) is identical for both answers to the same prompt, so it **cancels**.
-- What survives is a plain **binary classification loss on preference pairs**, computed from four log-probabilities: chosen and rejected, under the policy and under the reference.
-- No reward model. No sampling. No reinforcement learning. Your language model *is* its own implicit reward model.
-- In English the loss says: **raise the log-probability of the chosen answer and lower the rejected one — both measured relative to the reference**, so nothing gets credit for merely having been likely already.`,
-    },
-    {
-      type: 'math',
-      intro: 'The three lines of the derivation, then the loss you actually implement. Line 1 is the closed form; line 2 is line 1 rearranged; line 3 is line 2 dropped into Bradley-Terry with Z(x) cancelling.',
-      latex: [
-        '\\pi^{*}(y \\mid x) \\;=\\; \\frac{1}{Z(x)} \\, \\pi_{\\text{ref}}(y \\mid x) \\, \\exp\\!\\left( \\tfrac{1}{\\beta} \\, r(x, y) \\right) \\qquad \\text{(optimum of the KL-constrained objective)}',
-        'r(x, y) \\;=\\; \\beta \\log \\frac{\\pi^{*}(y \\mid x)}{\\pi_{\\text{ref}}(y \\mid x)} \\;+\\; \\beta \\log Z(x) \\qquad \\text{— the reward IS a log-ratio.}',
-        '\\mathcal{L}_{\\text{DPO}} \\;=\\; -\\,\\mathbb{E}_{(x,\\, y_w,\\, y_l)} \\left[ \\log \\sigma\\!\\left( \\beta \\log \\frac{\\pi_\\theta(y_w \\mid x)}{\\pi_{\\text{ref}}(y_w \\mid x)} \\;-\\; \\beta \\log \\frac{\\pi_\\theta(y_l \\mid x)}{\\pi_{\\text{ref}}(y_l \\mid x)} \\right) \\right]',
-        '\\nabla_\\theta \\mathcal{L}_{\\text{DPO}} \\;\\propto\\; -\\, \\underbrace{\\sigma\\!\\left( \\hat{r}_\\theta(x, y_l) - \\hat{r}_\\theta(x, y_w) \\right)}_{\\text{how wrong we still are}} \\Big[ \\nabla_\\theta \\log \\pi_\\theta(y_w \\mid x) \\;-\\; \\nabla_\\theta \\log \\pi_\\theta(y_l \\mid x) \\Big]',
-      ],
+Ask: for a given reward function, what is the *best possible* policy under "maximise reward minus β times KL from the reference"? That question has an exact answer written down on paper: take the reference probabilities and multiply each one by e raised to (reward divided by β), then rescale so they add to 1.
+
+Now read that backwards. If the best policy is the reference re-weighted by the reward, then the reward is recoverable from the best policy: it is β times the logarithm of (best policy ÷ reference), plus a rescaling term that depends only on the prompt.
+
+That is the whole insight. **The reward was never a separate object needing its own network. It is a ratio between a policy and the reference, in disguise.**
+
+So take the reward-model loss from snippet 1 and substitute that ratio wherever r appears. Both answers in a pair share the same prompt, so the prompt-only rescaling term is the same on both sides of the subtraction and cancels out. What is left is an ordinary loss on preference pairs that needs only four numbers: the log-probability of the chosen and rejected answers under the policy, and the same two under the reference.
+
+In plain English the DPO loss says: **raise the probability of the chosen answer and lower the probability of the rejected one, both measured relative to the reference** — so nothing gets credit for having already been likely before training started.
+
+- What it buys: one model training instead of three, an ordinary supervised loop instead of reinforcement learning, no text generation inside training, and far fewer knobs. It is stable enough to run on a single rented GPU.
+- What it gives up: DPO only ever sees a fixed pile of pairs collected in advance. Stage-3 RLHF samples fresh answers from the *current* policy, so it keeps learning about the mistakes the model is making right now. Offline DPO cannot do that, and strong online RLHF still wins some careful head-to-head comparisons because of it.
+- One more honest weakness: DPO guarantees the *gap* between chosen and rejected, not the *level*. It quite often lowers the absolute probability of both answers while widening the gap between them.`,
     },
     {
       type: 'code',
       lang: 'python',
-      title: 'Bradley-Terry and a DPO loss on toy log-probabilities — 30 lines, no framework',
-      code: `import numpy as np
+      title: 'Snippet 3: the DPO loss on toy log-probabilities',
+      code: `import math
 
 def sigmoid(z):
-    return 1.0 / (1.0 + np.exp(-z))
+    return 1.0 / (1.0 + math.exp(-z))
 
-# 1. Bradley-Terry: two scalar rewards -> P(chosen beats rejected).
-def bt_prob(r_win, r_lose):
-    return sigmoid(r_win - r_lose)          # only the GAP matters
-
-def rm_loss(r_win, r_lose):                 # reward-model loss on ONE pair
-    return -np.log(bt_prob(r_win, r_lose))
-
-print('reward gap   P(chosen wins)   reward-model loss')
-for gap in [-2.0, 0.0, 0.5, 2.0, 5.0]:
-    print('  %+5.1f          %.3f            %.4f' % (gap, bt_prob(gap, 0.0), rm_loss(gap, 0.0)))
-
-# 2. DPO: the SAME Bradley-Terry loss, but the reward is never learned --
-#    it IS beta * (policy log-prob  -  reference log-prob).
 BETA = 0.1
-ref_chosen, ref_rejected = -12.0, -11.0     # the reference PREFERS the rejected reply
-
-def dpo(lp_chosen, lp_rejected):
-    margin = (lp_chosen - ref_chosen) - (lp_rejected - ref_rejected)
-    loss = -np.log(sigmoid(BETA * margin))
-    grad_weight = sigmoid(-BETA * margin)   # how hard this pair still pushes
-    return margin, loss, grad_weight
-
-print('\\npolicy logp(chosen)   margin    DPO loss   gradient weight')
-for lp_chosen in [-13.0, -12.0, -11.0, -8.0, -4.0]:
-    margin, loss, gw = dpo(lp_chosen, lp_rejected=-11.0)
-    print('     %6.1f          %+6.2f     %.4f       %.3f' % (lp_chosen, margin, loss, gw))
+ref_chosen = -12.0                          # reference log-prob of the CHOSEN answer
+ref_rejected = -11.0                        # reference log-prob of the REJECTED answer
+print(' logp(chosen)   margin   DPO loss   push')
+for logp_chosen in [-13.0, -12.0, -11.0, -8.0, -4.0]:
+    logp_rejected = -11.0                   # hold the rejected answer fixed
+    margin = (logp_chosen - ref_chosen) - (logp_rejected - ref_rejected)
+    loss = -math.log(sigmoid(BETA * margin))
+    push = sigmoid(-BETA * margin)          # how hard this pair still pulls
+    print('   %6.1f      %+6.2f    %.4f     %.3f' % (logp_chosen, margin, loss, push))
 
 # ---- real output ----
-# reward gap   P(chosen wins)   reward-model loss
-#    -2.0          0.119            2.1269
-#    +0.0          0.500            0.6931
-#    +0.5          0.622            0.4741
-#    +2.0          0.881            0.1269
-#    +5.0          0.993            0.0067
-#
-# policy logp(chosen)   margin    DPO loss   gradient weight
-#       -13.0           -1.00     0.7444       0.525
-#       -12.0           +0.00     0.6931       0.500
-#       -11.0           +1.00     0.6444       0.475
-#        -8.0           +4.00     0.5130       0.401
-#        -4.0           +8.00     0.3711       0.310`,
+#  logp(chosen)   margin   DPO loss   push
+#     -13.0       -1.00    0.7444     0.525
+#     -12.0       +0.00    0.6931     0.500
+#     -11.0       +1.00    0.6444     0.475
+#      -8.0       +4.00    0.5130     0.401
+#      -4.0       +8.00    0.3711     0.310`,
       annotations: {
-        8: 'Only the difference enters. r and r+5 give identical preferences — which is why one reward number, on its own, tells you nothing.',
-        11: 'Binary cross-entropy on the event "the chosen answer wins". That is the whole reward-model objective: a pile of A>B votes becomes a scalar scorer.',
-        15: 'A gap of just 0.5 already means 62% preferred. Reward models do not need large gaps to be useful — which is also why small biases (like length) move them so easily.',
-        20: 'The interesting setup: the frozen reference gives the REJECTED reply the higher probability. DPO must flip the ordering, not merely raise a level.',
-        23: 'The whole of DPO in one line: chosen minus rejected, each measured RELATIVE to the reference. Drop the reference terms and you are just doing SFT on the chosen answers.',
-        25: 'sigma(-beta * margin): the gradient scales with how wrong the pair still is. Pairs already learned stop pushing, so DPO self-balances without a value network.',
-        43: 'Margin 0 -> loss log 2 = 0.6931, the coin flip — the same number as reward gap 0.0 above, because it is literally the same Bradley-Terry loss in disguise.',
-        46: 'Raise the chosen log-prob by 8 nats: loss falls 0.6931 -> 0.3711 while the gradient weight drops 0.500 -> 0.310. Learning slows down exactly as the pair gets settled.',
+        1: 'Same single import. No numpy, no deep-learning framework: DPO\'s loss really is this small.',
+        3: 'The same sigmoid as snippet 1, because DPO reuses the same loss shape. Only what goes inside it has changed.',
+        4: 'Squashes any number into 0 to 1.',
+        6: 'beta, the same leash knob as before. Here it multiplies the margin, so a small beta makes the loss tolerant of large probability changes.',
+        7: 'The frozen reference model\'s log-probability for the chosen answer. Log-probabilities of whole sentences are large negative numbers; -12.0 is a perfectly ordinary value.',
+        8: 'The reference\'s log-probability for the rejected answer. It is HIGHER than -12.0, meaning the reference actually preferred the rejected answer. DPO has to flip that ordering, not merely nudge it.',
+        9: 'Header row for the table.',
+        10: 'Five candidate values for how likely the policy makes the chosen answer, from worse than the reference to far better.',
+        11: 'Keep the rejected answer\'s policy log-probability fixed so only one thing varies per row.',
+        12: 'The margin, and this single line is all of DPO: chosen minus rejected, with each one measured as a change from the reference. Delete the two reference terms and you are just doing SFT on the chosen answers.',
+        13: 'The same loss as the reward model in snippet 1, with beta times the margin standing in for the reward gap.',
+        14: 'sigmoid(-beta * margin) is how strongly this pair still pushes the weights. Pairs the model already gets right push weakly, so DPO balances itself with no extra machinery.',
+        15: 'One row per candidate. %+6.2f pads to width 6 with two decimals and an explicit sign.',
       },
     },
     {
       type: 'note',
-      md: 'Two things to read off that output. **First**, at margin 0 the DPO loss is log 2 = 0.6931 — identical to the reward model at gap 0, because it is the same loss with the reward swapped for a log-ratio. **Second**, the gradient-weight column is σ(−β·margin): it starts near 0.5 and decays as the margin grows. Also notice how gentle the movement is — β = 0.1 means an 8-nat change in log-probability only moves the loss from 0.69 to 0.37. β is a leash here too: small β makes DPO tolerant of large log-prob changes, large β punishes any drift from the reference hard.',
+      md: 'Two readings from that table. **First**, the middle row: margin 0.00 gives loss 0.6931, which is exactly log 2 — and it is the same 0.6931 you would get from snippet 1 at a reward gap of zero, because it is literally the same loss with a probability ratio substituted for the reward. **Second**, the push column falls from 0.525 to 0.310 as the margin grows, so a pair the policy already handles well stops demanding attention. Notice also how gentle the whole thing is: beta = 0.1 means an eight-unit change in log-probability only moves the loss from 0.6931 to 0.3711. Raising beta makes DPO punish any drift from the reference much harder, which is the same leash idea as in stage 3.',
     },
     {
       type: 'intuition',
-      title: 'Why DPO won, and where PPO still wins',
-      md: `- **One model training** (plus a frozen reference — and the reference log-probs can be precomputed once, since they never change).
-- **A standard supervised loop.** Same trainer, same optimiser, same intuitions as fine-tuning. It runs on hardware an individual can rent for an afternoon.
-- **Stable.** No rollouts, no value function, no advantage estimation. β and learning rate carry most of the tuning.
-- Honest counterpoint, because good interviewers push here: **strong online RLHF still edges DPO out** in careful head-to-heads. The reason is instructive — PPO samples *fresh* completions from the current policy and gets them scored, so it keeps learning about its own current mistakes. DPO only ever sees a fixed offline pile of pairs, possibly generated by an entirely different model.
-- DPO is also **sensitive to the reference model and to data quality**. If the pairs were not sampled from something close to your SFT model, the log-ratios are off-distribution and training can shove probability mass somewhere strange. A documented artefact: DPO often lowers the absolute likelihood of *both* answers — it guarantees the gap, not the level.
-- Where the field settled: **iterative / online DPO** — generate fresh pairs with the current model, label them (increasingly with an LLM judge), retrain, repeat. Cheap loop, most of PPO's benefit.`,
-    },
-    {
-      type: 'note',
-      md: 'The family tree, one line each so the names never ambush you. **IPO** swaps DPO\'s log-sigmoid for a squared loss, because log-sigmoid keeps pushing the margin toward infinity on deterministic preferences and over-fits them. **KTO** drops pairs entirely — it needs only a thumbs-up or thumbs-down per response, which is the feedback real products actually collect. **ORPO** merges SFT and preference tuning into a single stage by adding an odds-ratio penalty to the ordinary SFT loss, so there is no separate alignment run and no reference model at all. **RLAIF / Constitutional AI** changes where the preferences *come from*: a model, prompted with a written constitution of principles, does the comparing instead of a human — vastly cheaper and scalable, and it relocates the values question from "what did the labellers prefer?" to "who wrote the constitution?".',
+      title: 'Worked case: four preference pairs, scored by hand',
+      md: `A team has trained a reward model and wants to check it before spending GPU hours on stage 3. They pull four held-out preference pairs, run the reward model on both answers in each, and get these scores:
+
+1. chosen **2.4**, rejected **0.9**
+2. chosen **1.1**, rejected **1.6**
+3. chosen **0.3**, rejected **0.1**
+4. chosen **5.7**, rejected **4.2**
+
+**Step 1 — accuracy.** Count the pairs where the chosen answer scored higher: pairs 1, 3 and 4. Pair 2 is backwards. That is 3 out of 4, so the reward model agrees with humans 75% of the time. Anything near 50% would mean it learned nothing; published reward models typically land in the 65 to 75% range, so this is normal, not broken.
+
+**Step 2 — turn each gap into a probability.** The gaps are +1.5, −0.5, +0.2 and +1.5.
+
+- sigmoid(+1.5) = 0.818, so the model gives the human verdict an 82% chance on pair 1.
+- sigmoid(−0.5) = 0.378, so on pair 2 it gives the human verdict only a 38% chance.
+- sigmoid(+0.2) = 0.550. On pair 3 it is barely more sure than a coin flip.
+- Pair 4 is +1.5 again, so 0.818, identical to pair 1 despite the scores being 5.7 and 4.2 rather than 2.4 and 0.9. Only gaps matter.
+
+**Step 3 — the loss on each pair.** Loss is −log of those probabilities: 0.201, 0.973, 0.598, 0.201. The average is 0.493.
+
+**Step 4 — read it.** Compare 0.493 against 0.693, which is the loss a model that always said "coin flip" would get. We are below it, so the reward model carries real signal. But pair 2 alone contributes 0.973, roughly double the average — one confidently wrong pair dominates the total. That is the pair worth reading by hand, because there are only two possibilities: the reward model is wrong, or the labeller was.
+
+**Step 5 — the decision.** 75% agreement and a per-pair loss below 0.693 is good enough to proceed to stage 3, but pair 3's gap of 0.2 is a warning. A reward model whose gaps are mostly tiny will be easy to hack, because the policy only needs to find text worth 0.3 of spurious reward to beat a genuine improvement. Set β on the tighter side and watch the sampled text, not just the reward curve.`,
     },
     {
       type: 'intuition',
-      title: 'What alignment buys, and what it costs',
-      md: `Buys — and this is not a polish step, it is most of the perceived quality:
+      title: 'The classic mistake: reading the reward curve and nothing else',
+      md: `Here is the wrong answer, walked into deliberately.
 
-- InstructGPT's **1.3B aligned model was preferred by human raters over the 175B base model**. A 100× smaller model won on helpfulness because it was pointed at the user.
-- Safety behaviour: declining genuinely harmful requests, flagging uncertainty, not parroting the worst of the training corpus.
+A team runs stage 3 for 2,000 steps. The dashboard shows average reward rising from 1.8 to 6.4 — a smooth, beautiful curve with no instability. They conclude the alignment run worked and ship it. Human evaluation then comes back *worse* than the SFT checkpoint they started from.
 
-Costs — naming these is what separates a strong answer from a recited one:
+**What actually happened.** Look back at snippet 2. At β = 0 the hacked policy scores 9.360 and the sane policy scores 2.900. The reward number went up by a factor of three, and the text became *"Sure! Sure! Sure!"*. Rising reward is exactly what reward hacking looks like from the outside. It is not evidence that the run worked; it is compatible with the run working *and* with the run failing completely, so on its own it tells you nothing.
 
-- **The alignment tax.** Aligned models measurably lose some raw capability; the InstructGPT paper reports regressions on standard NLP benchmarks, mitigated (not erased) by mixing pretraining gradients back into the RL update. Sharpening for one distribution of prompts costs you the tails.
-- **Over-refusal.** The most common real user complaint: the model declines a harmless request because it pattern-matches something risky. The pressure is structurally one-way — a refusal is cheap for the reward model to score well and awkward for a labeller to mark wrong.
-- **Reduced diversity.** Reverse KL is mode-seeking, so aligned models converge on one house voice ("Certainly! Here are three things to consider:").
-- **The honest one.** "Aligned" is not a technical absolute. It means *aligned to the preferences of the people who wrote the guidelines and clicked the buttons* — a specific, small, paid group with a specific culture and a specific employer. Whose values, chosen by whom, is a governance question that no loss function answers, and saying so out loud in an interview reads as maturity, not evasion.`,
+**Why the mistake is so easy to make.** In ordinary supervised training, the loss going down really does mean the model is getting better at the thing you measured, because the thing you measured is fixed and true. Here the thing you measured is itself a learned model with flaws, and the policy is actively hunting for those flaws. The moment your objective is a learned approximation, "the objective improved" stops being proof of anything.
+
+**What to look at instead.** Three numbers, together, every time:
+
+- **The KL distance from the reference.** If it is growing without bound, the leash is too loose whatever the reward says. This is the single most diagnostic number in the whole pipeline.
+- **Average response length.** The most reproducible reward-model bias is that longer answers score higher, because labellers mildly prefer thorough ones. If reward rose and length doubled, you have probably bought padding, not quality.
+- **Actual sampled text**, read by an actual human, at several checkpoints. There is no substitute, and it takes ten minutes.
+
+**The general rule.** When a measure becomes a target, it stops being a good measure. That is Goodhart's law, and RLHF is the cleanest demonstration of it in machine learning: the reward model is a measure of quality, the policy turns it into a target, and it stops measuring quality.`,
     },
     {
-      type: 'note',
-      md: 'Where system prompts fit, in one line: alignment bakes behaviour into the **weights** at training time, while a system prompt steers it at **inference** time, per request, for free — the cheap steering wheel bolted on top of the expensive one. It can only move the model within what alignment already made likely, which is why prompting cannot reliably restore a trained-in refusal or remove one.',
+      type: 'intuition',
+      title: 'Practice problems',
+      md: `Work each one before reading the solution below it.
+
+**Problem 1.** Reward model P scores two answers 3.1 and 1.1. Reward model Q scores the same two answers 0.1 and −1.9. Do they disagree?
+
+**Problem 2.** A reward model gives the chosen answer 2.0 and the rejected answer 2.0 on every pair in your validation set. What is the loss, and what has the model learned?
+
+**Problem 3.** You run stage 3 with β = 5.0 and the final model is almost indistinguishable from the SFT checkpoint. Reward barely moved. What is happening and what do you change?
+
+**Problem 4.** You have 50,000 thumbs-up and thumbs-down clicks on individual responses from your product. No pairs. Can you run DPO on this directly?`,
+    },
+    {
+      type: 'intuition',
+      title: 'Practice solutions',
+      md: `**Solution 1.** No — they express the identical preference with identical strength. Both gaps are exactly 2.0, so both give sigmoid(2.0) = 0.881 for the first answer beating the second. Adding a constant to every reward changes no prediction anywhere. This is why a raw reward number is never reportable on its own and why reward scales cannot be compared across two training runs. Q's −1.9 being negative means nothing either; the sign of a reward is not a verdict.
+
+**Solution 2.** The gap is 0 on every pair, so the predicted probability is sigmoid(0) = 0.5 and the loss is −log(0.5) = 0.6931 on every pair. The model has learned nothing about preference at all — it is a coin flip dressed up as a scorer. 0.6931 is therefore the number to compare every reward model against: below it means real signal, at it means none. Feeding this reward model into stage 3 would give the policy pure noise to climb, and the KL leash would be the only thing keeping the output readable.
+
+**Solution 3.** β = 5.0 is a very short leash. Look at the snippet 2 output: at β = 3.0 the sane policy already wins, and it wins by refusing to move. Push β higher and *any* movement from the reference costs more than the reward it earns, so the optimum is simply to stay put. That is what you are seeing. The fix is to lower β, but do it while watching the measured KL distance from the reference rather than guessing — pick a KL budget you are comfortable with and choose the β that lands you there. If lowering β makes the text degrade before the reward gain is worth having, the problem is a weak reward model, not β.
+
+**Solution 4.** Not directly. The DPO loss needs four log-probabilities per training example, and two of them come from the rejected answer to *the same prompt*. A thumbs-down on a response with no corresponding thumbs-up on that prompt gives you half a pair. Three options: (a) construct pairs by matching an up-voted and a down-voted response on the same or a near-identical prompt, which works but usually leaves you with far fewer than 50,000 usable pairs; (b) use KTO, a DPO variant built specifically for unpaired thumbs data — this is the intended tool; (c) run plain SFT on the up-voted responses only, which throws away every thumbs-down but is trivially simple and is a reasonable first checkpoint. Whichever you pick, check first that the thumb signal is not dominated by something irrelevant such as response length or how fast the answer streamed.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Beyond the basics - skip this on your first read',
+      md: `Everything above stands on its own. This section is names and details you will meet later.
+
+- **PPO** is the specific reinforcement-learning algorithm normally used in stage 3. Its distinguishing feature is a clip on the update: no single step is allowed to change the policy by more than a fixed amount, which stops one unlucky batch destroying the model. It also trains a fourth network, the value network, that predicts the reward an answer will get so the updates have lower variance.
+- **The alignment tax.** Aligned models measurably lose some raw ability on standard benchmarks compared with the model they came from. The usual mitigation is to mix a little ordinary pretraining into the alignment updates.
+- **Over-refusal** is the most common real user complaint about aligned models: a harmless request gets declined because it superficially resembles a risky one. The pressure toward it is structural — a refusal is easy for a reward model to score well and awkward for a labeller to mark wrong.
+- **The DPO family, one line each.** IPO replaces DPO's loss shape with a squared one, because DPO keeps pushing the margin larger forever on pairs it already gets right. KTO learns from single thumbs-up/thumbs-down labels instead of pairs. ORPO folds preference tuning into the SFT stage so there is one training run and no reference model at all.
+- **RLAIF and Constitutional AI** change where preferences come from: a model, given a written set of principles, does the comparing instead of a human. Much cheaper and it scales, but it moves the values question from "what did the labellers prefer?" to "who wrote the principles?".
+- **Iterative or online DPO** is where the field mostly settled: generate fresh answer pairs with the current model, label them (increasingly with another model as judge), retrain, repeat. It recovers most of what offline DPO loses without any of the reinforcement-learning machinery.
+- **The honest framing.** "Aligned" is not an absolute. It means aligned to the preferences of a specific, small, paid group of people working from guidelines someone wrote. No loss function decides whose values those should be.`,
+    },
+    {
+      type: 'math',
+      intro: 'The same three ideas in symbols, for when you meet them written this way. sigma is the sigmoid, r is the reward model, pi_theta is the policy and pi_ref the frozen reference.',
+      latex: [
+        'P(\\text{chosen wins}) = \\sigma\\!\\left( r(x, y_w) - r(x, y_l) \\right), \\qquad \\mathcal{L}_{\\text{RM}} = -\\log \\sigma\\!\\left( r(x, y_w) - r(x, y_l) \\right)',
+        '\\max_{\\pi_\\theta} \\; \\mathbb{E}\\big[\\, r(x, y) \\,\\big] \\;-\\; \\beta \\, D_{\\mathrm{KL}}\\!\\left( \\pi_\\theta \\,\\|\\, \\pi_{\\text{ref}} \\right)',
+        '\\mathcal{L}_{\\text{DPO}} = -\\log \\sigma\\!\\left( \\beta \\log \\frac{\\pi_\\theta(y_w \\mid x)}{\\pi_{\\text{ref}}(y_w \\mid x)} - \\beta \\log \\frac{\\pi_\\theta(y_l \\mid x)}{\\pi_{\\text{ref}}(y_l \\mid x)} \\right)',
+      ],
     },
   ],
   quiz: [
     {
-      question: 'Why is preference data collected as pairwise comparisons rather than 1–10 ratings?',
+      question: 'Why is preference data collected as pairwise comparisons rather than ratings out of 10?',
       options: [
-        { text: 'Pairwise labels are cheaper to store', explanation: 'Storage is not remotely the constraint — a rating and a comparison are both a few bytes.' },
+        { text: 'Pairwise labels are cheaper to store', explanation: 'Storage is not the constraint. A rating and a comparison are both a few bytes.' },
         {
           text: 'Humans are far more consistent comparing two items than assigning absolute scores',
-          explanation: 'Correct. Inter-annotator agreement on "A or B?" is much higher than on "rate this 1–10", where one person\'s 7 is another\'s 4 and both drift over a shift.',
+          explanation: 'Correct. One person\'s 7 is another\'s 4, and the same person drifts across a shift. Agreement on "A or B?" is much higher.',
         },
-        { text: 'Bradley-Terry cannot be trained on absolute scores', explanation: 'Backwards. You could regress on scores if you had reliable ones; Bradley-Terry was chosen BECAUSE the data is comparisons, not the other way round.' },
+        { text: 'A reward model cannot be trained on absolute scores', explanation: 'Backwards. You could train on scores if you had reliable ones. Comparisons were chosen because the human data is more trustworthy, not because of a modelling limit.' },
       ],
       correct: 1,
     },
     {
-      question: 'The KL penalty in the PPO stage measures the distance between…',
+      question: 'The KL penalty in stage 3 measures the distance between which two things?',
       options: [
-        { text: 'the policy and the reward model', explanation: 'These are not comparable objects — the reward model emits a scalar, not a distribution over tokens.' },
-        { text: 'the policy and the pretrained base model, before SFT', explanation: 'Close but wrong checkpoint. The reference is the SFT model, the last one we trust to produce well-formatted answers.' },
+        { text: 'The policy and the reward model', explanation: 'These are not comparable. The reward model returns one number; it is not a set of word probabilities.' },
+        { text: 'The policy and the pretrained base model from before SFT', explanation: 'Right idea, wrong checkpoint. The reference is the SFT model, the last one we trust to produce well-shaped answers.' },
         {
-          text: 'the current policy and the frozen SFT reference policy',
-          explanation: 'Correct. π_ref is a frozen copy of the SFT model, and β·KL(π_θ || π_ref) is the leash that keeps the tuned policy near known-good language.',
+          text: 'The current policy and the frozen SFT reference model',
+          explanation: 'Correct. The reference is a frozen copy of the SFT checkpoint, and the penalty is the leash keeping the policy near language we already know is sane.',
         },
       ],
       correct: 2,
     },
     {
-      question: 'During a PPO run the measured reward climbs steadily while sampled text degenerates into a repeated phrase. Most likely diagnosis?',
+      question: 'During stage 3 the measured reward climbs steadily while the sampled text degenerates into one repeated phrase. Most likely diagnosis?',
       options: [
         {
-          text: 'Reward hacking — the policy is exploiting the reward model, with too weak a KL constraint to stop it',
-          explanation: 'Correct. This is the textbook signature: reward up, quality down means the policy found a region where the reward model is wrong, and β was too small to hold it back.',
+          text: 'Reward hacking, with too weak a KL penalty to stop it',
+          explanation: 'Correct. Reward up and quality down means the policy found a region where the reward model is wrong, and beta was too small to hold it back. Snippet 2 shows this exactly: at beta 0 the degenerate policy scores 9.360 against 2.900.',
         },
-        { text: 'The learning rate is too low', explanation: 'A too-low learning rate produces the opposite symptom — reward that barely moves at all.' },
-        { text: 'The reward model was undertrained on chosen answers', explanation: 'A weak reward model makes hacking easier, but the specific pattern of reward rising while text collapses points at the missing leash, not at RM training volume.' },
+        { text: 'The learning rate is too low', explanation: 'A too-low learning rate gives the opposite symptom: reward that barely moves at all.' },
+        { text: 'The reward model was trained on too few pairs', explanation: 'A weak reward model makes hacking easier, but the specific pattern of reward rising while text collapses points at the missing leash.' },
       ],
       correct: 0,
     },
     {
-      question: 'What does DPO eliminate compared with the classic RLHF pipeline?',
+      question: 'What does DPO remove compared with the three-stage RLHF pipeline?',
       options: [
-        { text: 'The need for human preference data', explanation: 'No — DPO consumes exactly the same (x, y_w, y_l) triples. It removes machinery, not labelling cost.' },
+        { text: 'The need for human preference data', explanation: 'No. DPO consumes exactly the same chosen/rejected pairs. It removes machinery, not labelling cost.' },
         {
-          text: 'The separately trained reward model and the whole RL loop',
-          explanation: 'Correct. The closed-form optimum lets you express the reward as a log-ratio, so the preference likelihood becomes a direct classification loss on the policy. No RM, no rollouts, no PPO.',
+          text: 'The separately trained reward model and the whole reinforcement-learning loop',
+          explanation: 'Correct. Because the reward can be rewritten as a ratio between the policy and the reference, the preference loss applies directly to the policy. No reward model, no sampling during training.',
         },
-        { text: 'The reference model', explanation: 'The reference is still required — every term in the DPO loss is measured relative to it. (ORPO is the variant that drops it.)' },
+        { text: 'The reference model', explanation: 'The reference is still needed. Every term in the DPO loss is measured relative to it. ORPO is the variant that drops it.' },
       ],
       correct: 1,
     },
     {
-      question: 'In the DPO loss, why do both the chosen and rejected log-probabilities appear as differences against the reference model?',
-      options: [
-        { text: 'To keep the numbers numerically small', explanation: 'A side effect at best. Log-probabilities of long sequences are large negatives either way.' },
-        { text: 'Because subtraction is faster than division', explanation: 'It IS the division — a ratio in log space. Speed has nothing to do with it.' },
-        {
-          text: 'The derivation defines the implicit reward as β·log(π_θ/π_ref), so the ratio to the reference IS the reward — and it stops the model being credited for answers that were already likely',
-          explanation: 'Correct on both counts. The log-ratio is the reward by construction, and measuring relative to π_ref means only the *change* the policy makes counts.',
-        },
-      ],
-      correct: 2,
-    },
-    {
-      question: 'Reward model A scores two answers +3.1 and +1.1. Reward model B scores the same two answers +0.1 and −1.9. What follows?',
+      question: 'Reward model A scores two answers 3.1 and 1.1. Reward model B scores the same two answers 0.1 and -1.9. What follows?',
       options: [
         {
-          text: 'They express the same preference with the same strength — only differences are identified under Bradley-Terry',
-          explanation: 'Correct. Both gaps are exactly 2.0, so both imply P(A beats B) = σ(2.0) = 0.88. Adding a constant to every reward changes nothing.',
+          text: 'They express the same preference with the same strength, because only differences carry meaning',
+          explanation: 'Correct. Both gaps are exactly 2.0, so both give sigmoid(2.0) = 0.881. Adding a constant to every reward changes nothing.',
         },
-        { text: 'Model A is more confident about A', explanation: 'Absolute reward levels carry no meaning at all — the Bradley-Terry likelihood depends only on the gap.' },
-        { text: 'Model B prefers the second answer', explanation: 'It does not: −1.9 is still below +0.1. The sign of a reward is not a verdict; only the comparison is.' },
+        { text: 'Model A is more confident', explanation: 'Absolute reward levels carry no meaning at all. The predicted probability depends only on the gap.' },
+        { text: 'Model B prefers the second answer', explanation: 'It does not. -1.9 is still below 0.1. The sign of a reward is not a verdict; only the comparison is.' },
       ],
       correct: 0,
     },
     {
-      question: 'What is the "alignment tax"?',
+      question: 'In the DPO loss, why is each answer\'s log-probability measured as a difference against the reference model?',
       options: [
-        { text: 'The extra GPU cost of running RLHF on top of pretraining', explanation: 'That cost is real but it is not what the term means. The tax is a capability loss, not a compute bill.' },
+        { text: 'To keep the numbers numerically small', explanation: 'A side effect at best. Log-probabilities of long answers are large negative numbers either way.' },
         {
-          text: 'A measurable drop on some raw capability benchmarks after alignment tuning',
-          explanation: 'Correct. InstructGPT documented regressions on standard NLP tasks, partly mitigated by mixing pretraining gradients into the RL updates.',
+          text: 'Because the derivation defines the reward as beta times log(policy / reference), so the ratio to the reference IS the reward, and it stops the model being credited for answers that were already likely',
+          explanation: 'Correct on both counts. The log-ratio is the reward by construction, and measuring against the reference means only the change the policy makes counts.',
         },
-        { text: 'The money paid to human labellers for preference data', explanation: 'That is just data cost. The tax specifically refers to capability regression caused by the alignment step.' },
+        { text: 'Because subtraction is faster than division', explanation: 'It IS the division, written in log space. Speed has nothing to do with it.' },
       ],
       correct: 1,
-    },
-    {
-      question: 'Which statement about DPO versus PPO-style RLHF is the honest one?',
-      options: [
-        { text: 'DPO strictly dominates PPO; nobody trains with PPO any more', explanation: 'Overclaiming. The frontier labs still run online RL, and it still wins some careful comparisons.' },
-        { text: 'PPO is the simpler method but needs more preference data', explanation: 'Reversed on both counts — PPO is the complex one, and both methods consume the same kind of preference data.' },
-        {
-          text: 'DPO is simpler and far more stable, but strong online RLHF still edges it out on some benchmarks, partly because it trains on fresh samples from the current policy',
-          explanation: 'Correct. Offline DPO only sees a fixed pile of pairs; online methods keep scoring the policy\'s own current mistakes. Iterative/online DPO exists to close exactly that gap.',
-        },
-      ],
-      correct: 2,
     },
   ],
   interviewQuestions: [
     {
       question: 'Walk me through RLHF end to end. Why does each stage exist?',
       answer:
-        'Three stages. (1) **SFT**: fine-tune the base model on human-written demonstrations with the ordinary next-token loss — this teaches the response FORMAT, because a base model continues documents rather than answering. (2) **Reward model**: humans compare two responses to the same prompt, and a model (usually the SFT model with a scalar head) is trained on those comparisons with the Bradley-Terry objective to output a quality score. Comparisons are used because human absolute ratings are noisy while relative judgements agree well. (3) **PPO**: treat the SFT model as a policy, sample responses, score them with the reward model, and take policy-gradient steps — with a KL penalty against the frozen SFT reference so the policy cannot drift into text that games the reward model. The stage-by-stage logic is a data economics argument: writing demonstrations is expensive so stage 1 is small; choosing between two options is cheap so stages 2–3 scale.',
+        'Three stages. (1) SFT: fine-tune the pretrained model on human-written demonstrations with the ordinary next-word loss. This teaches the shape of an answer, because a pretrained model continues documents rather than answering them. (2) Reward model: humans compare two answers to the same prompt, and a model is trained on those comparisons to output a single quality score. Comparisons are used because human absolute ratings are noisy while relative judgements agree well. (3) Policy optimisation: sample answers from the SFT model, score them with the reward model, and push the model toward higher scores, with a KL penalty against the frozen SFT reference so it cannot drift into text that games the reward model. The split is a data-cost argument: writing demonstrations is expensive so stage 1 stays small, choosing between two answers is cheap so stages 2 and 3 scale.',
       isCaseBased: false,
     },
     {
-      question: 'Why comparisons instead of ratings, and what does Bradley-Terry actually do with them?',
+      question: 'Why comparisons instead of ratings, and how does a comparison become a number?',
       answer:
-        'Human absolute scores are unreliable — different scales between annotators, drift within one annotator across a session. Pairwise agreement is much higher, so the raw data is (prompt, chosen, rejected) with no numbers in it. Bradley-Terry is the bridge from ordinal data to a scalar: it assumes P(y_w beats y_l) = σ(r(y_w) − r(y_l)) and fits r by maximum likelihood, so the reward-model loss is −log σ(r_w − r_l) — plain binary cross-entropy on "did the chosen one win". Key property to mention: only the gap is identified. r and r+c produce identical preferences, so a raw reward value is meaningless in isolation and reward scales are not comparable across training runs. That is also why you never report "our reward model gives 4.2".',
+        'Absolute human scores are unreliable: different scales between annotators and drift within one annotator across a session. Pairwise agreement is much higher, so the raw data is a prompt with a chosen and a rejected answer, with no numbers in it at all. The bridge is to model the probability that a human picks the chosen answer as sigmoid of the difference between the two rewards, then train by minimising minus the log of that probability. That is plain binary cross-entropy on the event "the chosen one won". The property worth naming: only the gap is identified. Adding a constant to every reward produces identical predictions, so a raw reward value is meaningless in isolation and reward scales are not comparable across runs.',
       isCaseBased: false,
     },
     {
-      question: 'What is the KL penalty in RLHF doing, and what happens at the two extremes of β?',
+      question: 'What is the KL penalty doing, and what happens at the two extremes of beta?',
       answer:
-        'It penalises β·KL(π_θ || π_ref) where π_ref is the frozen SFT model, and in implementation it is folded into the per-token reward: r̃ = r_φ − β·log(π_θ/π_ref). Purpose: the reward model is only accurate near the distribution it was trained on, and an RL optimiser will happily seek the region where the reward model is wrong. The KL term is a leash keeping the policy near known-good language. β large: the policy hugs SFT and alignment achieves almost nothing. β → 0: reward climbs while text degenerates — the classic collapse into a repeated high-scoring phrase. Bonus point for noting the direction: this is reverse KL, which is mode-seeking, so aligned models legitimately lose output diversity as a side effect of the leash.',
+        'It charges the policy for moving its word probabilities away from the frozen SFT reference. The reason it is needed: the reward model is only accurate near the text it was trained on, and an optimiser will happily go find the region where the reward model is wrong. The KL term is a leash keeping the policy near language we know is sane. Large beta: the policy hugs the SFT model and alignment achieves almost nothing, because any movement costs more than it earns. Beta near zero: reward climbs while text degenerates into a repeated high-scoring phrase. Worth adding: the direction used is KL of the policy from the reference, which is mode-seeking, so aligned models legitimately lose output diversity as a side effect of the leash.',
       isCaseBased: false,
-    },
-    {
-      question: 'Case: your RLHF run reports average reward up 40% over the previous checkpoint, but the human eval win-rate dropped. Debug it.',
-      answer:
-        'Reward up and quality down is the definition of reward hacking, so start there rather than at the optimiser. (1) Check length: plot response length against reward and against the checkpoint — the most common cause by far is the policy learning that longer scores higher. Fix by length-debiasing the reward (regress reward on tokens, subtract the fitted component) or by length-controlled evaluation. (2) Check KL: measure KL(π_θ || π_ref) over the run. If it grew without bound, β is too small — raise it or add an adaptive KL controller targeting a fixed KL budget. (3) Check the reward model out of distribution: score the current policy\'s samples and hold them next to human judgements on the same samples. If RM-human correlation has collapsed on the new samples, the policy has walked off the RM\'s training distribution and you need fresh preference data collected from the current policy. (4) Check for sycophancy and formatting artefacts with targeted probes. (5) Only after those, look at PPO hyperparameters. Two structural fixes worth naming: iterate the loop (new preference data from the current policy) and ensemble reward models to make hacking harder.',
-      isCaseBased: true,
     },
     {
       question: 'Explain DPO\'s key insight. Why is no reward model needed?',
       answer:
-        'The RLHF objective — maximise reward subject to a KL constraint against a reference — has a known closed-form optimum: π*(y|x) ∝ π_ref(y|x)·exp(r(x,y)/β). Invert it and r(x,y) = β·log(π*(y|x)/π_ref(y|x)) + β·log Z(x): every reward function is a scaled log-ratio between its optimal policy and the reference. Substitute that into the Bradley-Terry preference likelihood and Z(x) cancels, because it depends only on the prompt and both responses share the prompt. What is left is L = −log σ(β·log(π_θ(y_w)/π_ref(y_w)) − β·log(π_θ(y_l)/π_ref(y_l))) — a supervised binary classification loss on preference pairs. The language model is its own implicit reward model, so there is nothing left to train separately and nothing to sample from during training.',
+        'The stage-3 objective, maximise reward minus beta times KL from a reference, has a known exact optimum: the reference probabilities re-weighted by e to the reward over beta, then normalised. Read that backwards and the reward is recoverable from the optimal policy: it equals beta times log of (optimal policy divided by reference), plus a term that depends only on the prompt. Substitute that into the preference loss, and because both answers in a pair share a prompt, the prompt-only term cancels. What is left is an ordinary classification loss on preference pairs computed from four log-probabilities: chosen and rejected, under the policy and under the reference. The language model is its own implicit reward model, so there is nothing separate to train and nothing to sample during training.',
       isCaseBased: false,
     },
     {
-      question: 'When would you choose DPO over PPO, and when the reverse?',
+      question: 'When would you choose DPO over PPO-style RLHF, and when the reverse?',
       answer:
-        'DPO by default: one trainable model plus a frozen reference (whose log-probs can be precomputed), a standard supervised loop, few hyperparameters, and it fits on modest hardware. Choose it for almost any team without a dedicated RL infrastructure group. PPO or online RL when you have the infrastructure and you are chasing the last few points: online methods sample fresh completions from the current policy and score them, so they keep correcting the policy\'s *current* failure modes, whereas offline DPO only sees a fixed pile of pairs possibly generated by another model. Also prefer online when your reward signal is programmatic and cheap to evaluate (unit tests, math verifiers) — there the RM problem disappears and RL shines. The practical middle ground almost everyone ended up at is iterative/online DPO: sample new pairs with the current model, label with humans or an LLM judge, retrain, repeat.',
+        'DPO by default: one trainable model plus a frozen reference whose log-probabilities can be precomputed once, an ordinary supervised loop, few knobs, and it fits on modest hardware. That covers almost any team without dedicated reinforcement-learning infrastructure. Online RL when you have the infrastructure and are chasing the last few points: it samples fresh answers from the current policy and scores them, so it keeps correcting the failures the model has right now, while offline DPO only ever sees a fixed pile of pairs possibly generated by a different model. Also prefer online RL when the reward is programmatic and cheap to check, such as unit tests or a maths verifier, because there the reward model problem disappears. The practical middle ground most teams landed on is iterative DPO: sample new pairs with the current model, label, retrain, repeat.',
       isCaseBased: false,
     },
     {
-      question: 'Case: your product has 50k thumbs-up/thumbs-down events on individual responses — no pairs — and one A100. Design the alignment plan.',
+      question: 'Case: your stage-3 run reports average reward up 40 percent, but the human evaluation win-rate dropped. Debug it.',
       answer:
-        'The data shape decides the method. Thumbs are unpaired binary signals, which is exactly what **KTO** was designed for, so that is the first candidate — no need to synthesise pairs. If you would rather stay on DPO, you can construct pairs by matching an up-voted and a down-voted response to the same or a near-duplicate prompt, but coverage will be thin and the pairing introduces bias. Plan: (1) filter and dedupe, and check the thumb signal is not dominated by one surface property such as length or latency; (2) run a short SFT pass on the up-voted responses first, so the reference model is close to the data distribution — DPO/KTO are sensitive to that; (3) train with LoRA on the A100 in bf16 so policy and reference both fit; the reference log-probs are precomputed in one pass so only the adapter trains; (4) evaluate against the SFT checkpoint on held-out prompts with pairwise win-rate plus a length-controlled version, and separately track a capability benchmark to measure the alignment tax and a refusal-rate probe to catch over-refusal; (5) iterate — sample fresh responses from the new model, ship to a fraction of traffic, harvest new thumbs, retrain. Also worth saying: no reward model gets trained anywhere in this plan, and that is the point.',
+        'Reward up and quality down is the definition of reward hacking, so start there rather than at the optimiser. (1) Check response length against reward across checkpoints. The most common cause by far is the policy discovering that longer answers score higher, because labellers mildly prefer thorough ones. Fix by regressing reward on length and subtracting the fitted component, or by evaluating at matched length. (2) Check the KL distance from the reference over the run. If it grew without bound, beta is too small; raise it, or use a controller that targets a fixed KL budget instead of a fixed beta. (3) Check whether the reward model is still trustworthy on the new samples: score the current policy\'s outputs and put them next to human judgements on the same outputs. If the agreement has collapsed, the policy has walked off the reward model\'s training distribution and you need fresh preference data collected from the current policy. (4) Probe specifically for sycophancy and formatting tricks with targeted prompts. (5) Only after all of that, look at the reinforcement-learning hyperparameters. Two structural fixes worth naming: iterate the loop with new preference data from the current policy, and ensemble several reward models so a flaw in one does not survive.',
       isCaseBased: true,
     },
     {
-      question: 'What is reward hacking? Give concrete examples and the standard defence.',
+      question: 'Case: your product has 50,000 thumbs-up/thumbs-down events on individual responses, no pairs, and one GPU. Design the alignment plan.',
       answer:
-        'Goodhart\'s law applied to a learned reward: the policy optimises the reward model\'s flaws rather than actual quality. Concretely: **verbosity** (labellers mildly prefer thorough answers, so the RM scores length, so the policy pads — the most reproducible bias of all); **sycophancy** (agreeing with the user\'s stated view scores well, so the model folds when contradicted); **formatting tricks** (bullets, bold headers, a confident opener — the shape of a good answer without content); **hedging and refusal** (rarely marked wrong, so the safe empty answer wins). The standard defence is the **KL penalty to the frozen reference**, which bounds how far the policy can travel from language the reference considers plausible. Supporting defences: length-debiasing the reward, ensembling reward models, retraining the RM on samples from the current policy, and adaptive KL controllers that target a fixed KL budget instead of a fixed β.',
-      isCaseBased: false,
+        'The data shape decides the method. Thumbs are unpaired binary signals, which is exactly what KTO was built for, so that is the first candidate: no pairs need to be synthesised. If you would rather stay on DPO, you can construct pairs by matching an up-voted and a down-voted response to the same or a near-identical prompt, but coverage will be thin and the pairing introduces bias. Plan: (1) filter and deduplicate, and check the thumb signal is not dominated by an irrelevant surface property such as length or streaming latency; (2) run a short SFT pass on the up-voted responses first, so the reference model sits close to the data distribution, because both DPO and KTO are sensitive to that; (3) train with a low-rank adapter so the policy and the reference fit on one GPU, and precompute the reference log-probabilities in a single pass since they never change; (4) evaluate against the SFT checkpoint on held-out prompts using pairwise win-rate plus a length-matched version, and separately track a capability benchmark for the alignment tax and a refusal probe for over-refusal; (5) iterate: sample fresh responses from the new model, ship to a slice of traffic, harvest new thumbs, retrain. Worth saying explicitly: no reward model is trained anywhere in this plan, and that is the point.',
+      isCaseBased: true,
     },
     {
       question: 'Case: after alignment, users complain the assistant refuses too many harmless requests. What do you actually do?',
       answer:
-        'First measure, because "too many" needs a number: build a refusal-probe set of benign prompts that superficially resemble risky ones (chemistry homework, security concepts, medical questions, fiction with conflict) and report a false-refusal rate alongside the genuine-harm refusal rate — you are trading along a curve, not fixing a bug. Then diagnose where the bias entered: (1) the guidelines, if labellers were instructed in a way that makes refusal the safe click; (2) the preference data, if refusals systematically won comparisons — check by scoring refusal-vs-helpful pairs with the reward model; (3) the objective, if the safety signal has no counterweight. Fixes in increasing cost: a system prompt that explicitly authorises the benign category (cheap, immediate, but bounded by what alignment made likely); targeted preference pairs where a helpful answer beats an unnecessary refusal, then a DPO pass; relabelling guidelines and re-collecting for the systematic case. Report both numbers every time — a fix that halves false refusals while doubling genuine-harm compliance is not a fix.',
+        'First measure, because "too many" needs a number. Build a probe set of benign prompts that superficially resemble risky ones — chemistry homework, security concepts, medical questions, fiction involving conflict — and report a false-refusal rate alongside the genuine-harm refusal rate. You are moving along a curve, not fixing a single bug, so a change that halves false refusals while doubling genuine-harm compliance is not an improvement. Then find where the bias entered: the labelling guidelines, if refusing was made the safe click; the preference data, which you can test by scoring refusal-versus-helpful pairs with the reward model and seeing which wins; or the objective, if the safety signal has no counterweight at all. Fixes in increasing cost: a system prompt that explicitly authorises the benign category, which is immediate and free but can only steer within what training already made likely; then targeted preference pairs where a helpful answer beats an unnecessary refusal, followed by a short DPO pass; then rewriting the guidelines and re-collecting data, which is the right answer when the bias is systematic. Report both numbers every time.',
       isCaseBased: true,
-    },
-    {
-      question: 'What does alignment cost, quantitatively and conceptually?',
-      answer:
-        'Quantitatively: the **alignment tax** — InstructGPT reported regressions on standard NLP benchmarks after RLHF, partly mitigated by mixing pretraining gradients into the RL update (PPO-ptx). Reduced output diversity is a second measurable cost, and it follows directly from the reverse-KL objective being mode-seeking. Over-refusal is a third, and the pressure toward it is structural rather than accidental: refusals are cheap for a reward model to score highly and awkward for a labeller to penalise. Conceptually, the cost is that "aligned" is not an absolute — the model is aligned to the preferences of a specific, small, paid group of labellers working from guidelines someone wrote. That is a values question, not only a technical one, and RLAIF/Constitutional AI does not remove it, it just moves it to whoever wrote the constitution. Counterweight to state alongside: InstructGPT\'s 1.3B aligned model was preferred over the 175B base model, so alignment buys something like a 100× effective size advantage in perceived helpfulness. The tax is real and it is worth paying.',
-      isCaseBased: false,
-    },
-    {
-      question: 'Name the DPO variants and what each one changes.',
-      answer:
-        '**IPO** replaces the log-sigmoid with a squared loss, because log-sigmoid keeps pushing the margin toward infinity when preferences are deterministic, which over-fits them. **KTO** drops pairs entirely and learns from single thumbs-up/thumbs-down labels — the feedback real products actually collect, so it is the practical choice when you have logs rather than a labelling contract. **ORPO** folds preference tuning into the SFT stage with an odds-ratio penalty on the rejected response, so there is one training run and no reference model at all. **RLAIF / Constitutional AI** changes the source of preferences: a model, prompted with a written constitution, does the comparisons instead of a human — cheap and scalable, and Anthropic\'s original result was that it improves harmlessness without hurting helpfulness. The honest closing line: none of these has decisively beaten a well-tuned DPO across the board, and the biggest real-world lever is still preference data quality, not the loss function.',
-      isCaseBased: false,
-    },
-    {
-      question: 'What is on the GPU during a PPO run versus a DPO run? Be specific.',
-      answer:
-        'PPO: the **trainable policy** (weights + gradients + optimiser state, so roughly 4× weights in mixed precision with Adam), the **frozen reference** for KL (weights only, in inference precision), the **frozen reward model** (weights only), and PPO\'s **value network** (often another trainable head or a full model). Plus generation buffers, since sampling happens inside the loop and needs a KV cache. Call it 3–4 model copies with two of them carrying optimiser state. DPO: the **trainable policy** and the **frozen reference** — and even the reference can be dropped from memory if you precompute its log-probs over the fixed preference dataset in one pass, since they never change. With LoRA you can go further and share one base model between policy and reference by simply disabling the adapter for the reference forward pass, which is the standard trick in TRL. That memory story, more than benchmark scores, is why DPO became the default.',
-      isCaseBased: false,
     },
   ],
   flashcards: [
-    { front: 'Why alignment is needed at all', back: 'Pretraining maximises "likely next token", not "helpful answer". A base model answers a question with more questions because that is what web pages do.' },
-    { front: 'The three RLHF stages', back: '1) SFT on human demonstrations (teaches format). 2) Reward model from pairwise comparisons (Bradley-Terry). 3) PPO against that reward, with a KL leash to the SFT reference.' },
-    { front: 'Why pairwise comparisons, not 1–10 ratings', back: 'Humans agree far better on "A or B?" than on absolute scores. Judging is easier than writing — and cheaper, so stages 2–3 scale.' },
-    { front: 'Bradley-Terry objective', back: 'P(y_w ≻ y_l) = σ(r_w − r_l); loss = −log σ(r_w − r_l). Only the GAP is identified — adding a constant to every reward changes nothing.' },
-    { front: 'What the KL penalty does', back: 'β·KL(π_θ || π_ref) against the frozen SFT model. The reward model is only right near its training distribution; the leash stops the policy hunting the region where it is wrong.' },
-    { front: 'Reward hacking, four examples', back: 'Verbosity (length as a quality proxy), sycophancy, formatting tricks (bullets/bold/confident opener), hedging and over-refusal. All raise reward, none raise quality.' },
-    { front: 'Why RLHF is painful', back: 'Three-plus models resident (policy, reference, reward model, value head), generation inside the training loop, unstable RL hyperparameters, and four suspects when quality drops.' },
-    {
-      front: 'The DPO insight, and the loss in English',
-      back: 'KL-constrained optimum: π* ∝ π_ref·exp(r/β). Invert it: r = β·log(π*/π_ref) + β·log Z. Substituted into Bradley-Terry, Z(x) cancels — leaving a classification loss on pairs, no RM, no RL. In English: raise log P(chosen), lower log P(rejected), both measured RELATIVE to the frozen reference.',
-    },
-    { front: 'DPO honest weaknesses', back: 'Offline, so it never sees its own current mistakes (online RLHF still wins some benchmarks); sensitive to reference model and data quality; often lowers the likelihood of BOTH responses — it guarantees the gap, not the level.' },
-    { front: 'Alignment tax + over-refusal', back: 'Aligned models measurably regress on some raw benchmarks (mitigate by mixing pretraining gradients into RL). Over-refusal is structural: refusals score well and are awkward to penalise.' },
+    { front: 'Why alignment is needed at all', back: 'Pretraining maximises "likely next word", not "helpful answer". Ask a pretrained model how to fix a flat tyre and it replies with three more tyre questions, because that is what an FAQ page looks like.' },
+    { front: 'The three RLHF stages, in and out', back: '1) SFT: demonstrations in, a model that answers in the right shape out. 2) Reward model: preference pairs in, a one-number scorer out. 3) Policy optimisation: SFT model plus reward model in, aligned model out, with a KL leash to the frozen reference.' },
+    { front: 'Why pairwise comparisons, not ratings out of 10', back: 'Humans have no shared meaning for absolute scores and drift within a shift, but agree far more on "A or B?". Judging is also cheaper than writing, which is why stages 2 and 3 scale and stage 1 does not.' },
+    { front: 'The reward-model loss', back: 'P(chosen wins) = sigmoid(r_chosen - r_rejected); loss = -log of that. Only the GAP is learned: scores 0.2 and 0.5 predict exactly the same thing as 10.2 and 10.5.' },
+    { front: 'What the KL penalty is for', back: 'The reward model is only accurate near text it was trained on. The policy is an optimiser and will find where it is wrong. The penalty charges the policy for drifting from the frozen SFT reference. Beta is the leash length.' },
+    { front: 'Reward hacking, concretely', back: 'Reward rises while quality falls. In the toy example, a policy putting 98% of its mass on "Sure! Sure! Sure!" scores 9.360 against a sane policy\'s 2.900 at beta 0 — and loses, -1.855 to 2.880, at beta 3.' },
+    { front: 'The DPO insight', back: 'The KL-constrained optimum is the reference re-weighted by exp(reward/beta). Invert it: reward = beta * log(policy / reference) + a prompt-only term. Substitute into the preference loss and the prompt-only term cancels, leaving a plain classification loss on pairs. No reward model, no RL.' },
+    { front: 'DPO: what it buys and gives up', back: 'Buys: one model training, ordinary supervised loop, no generation in the loop, far fewer knobs, runs on one GPU. Gives up: it is offline, so it never sees its own current mistakes; it is sensitive to the reference and data quality; and it guarantees the gap between answers, not their absolute likelihood.' },
   ],
   mindmapMarkdown: `- Alignment: RLHF, Reward Models & DPO
   - The problem
-    - base LM predicts likely text, not helpful answers
-    - "good answer" has no ground-truth label
+    - pretrained model predicts likely text, not helpful answers
+    - "good answer" has no single correct string to copy
   - Stage 1: SFT
-    - human demonstrations, plain next-token loss
-    - teaches FORMAT; becomes policy AND frozen reference
+    - human demonstrations, ordinary next-word loss
+    - teaches the SHAPE of an answer
+    - kept twice: as policy, and as frozen reference
   - Stage 2: reward model
-    - comparisons beat absolute ratings (humans agree)
-    - Bradley-Terry: loss = -log sigma(r_w - r_l); only the GAP is identified
-  - Stage 3: PPO
-    - policy gradient on RM score, leashed by beta*KL to frozen reference
-    - reverse KL -> mode-seeking -> less diversity
+    - comparisons beat ratings: humans agree on "A or B?"
+    - P(chosen wins) = sigmoid(gap); loss = -log of it
+    - only the GAP is identified, never the level
+  - Stage 3: policy optimisation
+    - push policy up the reward, KL penalty pulls back to reference
+    - beta = leash length; beta 0 -> gibberish, beta huge -> no change
   - Reward hacking
-    - verbosity, sycophancy, formatting, hedging
-    - defence: KL leash, length-debias, RM ensembles
-  - Why RLHF hurts
-    - 3-4 models resident, generation inside the loop
-    - unstable knobs, four suspects when quality drops
+    - reward up, quality down; Goodhart's law
+    - watch KL distance, response length, actual sampled text
   - DPO
-    - closed-form optimum -> reward = beta*log(pi/pi_ref)
-    - Z(x) cancels -> classification loss on pairs; no RM, no RL
-    - offline + reference-sensitive; online DPO closes the gap
-  - Variants
-    - IPO squared loss, KTO thumbs, ORPO one-stage
-    - RLAIF / Constitutional AI: model writes the preferences
-  - Buys and costs
-    - 1.3B aligned beat 175B base on helpfulness
+    - KL-constrained optimum -> reward IS a log-ratio to the reference
+    - prompt-only term cancels -> classification loss on pairs
+    - simpler, cheaper, stabler; but offline and reference-sensitive
+  - Beyond the basics
+    - PPO clipping and the value network
     - alignment tax, over-refusal, reduced diversity
-    - aligned = aligned to WHOSE values
-  - System prompts = inference-time steering on baked-in behaviour`,
+    - IPO / KTO / ORPO / RLAIF; iterative online DPO`,
 }
 
 export default m

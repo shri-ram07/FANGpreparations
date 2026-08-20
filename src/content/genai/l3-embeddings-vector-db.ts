@@ -6,464 +6,554 @@ const m: Module = {
   level: 3,
   title: 'Embeddings, Vector Databases & Semantic Search',
   whyItMatters:
-    'Every RAG system, every "chat with your docs" demo, every product search box that understands paraphrase runs on this one pipeline: chunk, embed, index, retrieve. It is also the part candidates fake worst — they can name Pinecone but cannot say what a chunk should be, why the index is model-specific, or why adding BM25 beats every other tuning knob. Get this module right and you can both build the thing and defend it in an interview.',
-  estMinutes: 50,
+    'You already know that a piece of text can be turned into a list of numbers, and that two similar texts get similar lists. This module answers the next question: you have ten million of those lists, a user just typed one question, and you have to find the closest few before the page finishes loading. Comparing against all ten million is too slow, and this module measures exactly how too slow. Then it builds the two ideas every vector database is made of, and shows you the price you pay for the speed: the answers stop being exactly right, and you get to choose how nearly right they are.',
+  assumes: [
+    'You have read the Deep Learning module *Embeddings: Meaning as Vectors*. That is where a vector for a piece of text comes from, and where cosine similarity is explained. This module uses both and does not re-teach them.',
+    'You have read the Math module *Vectors & the Dot Product (= Similarity)*, so a dot product is not a new word.',
+    'You can read a Python list, a dict, a for loop, and a function definition.',
+    'No database background is needed. Every term used here is defined here.',
+  ],
+  estMinutes: 46,
   sections: [
     {
       type: 'intuition',
-      title: 'From one word to one paragraph',
-      md: `The DL subject's *Embeddings: Meaning as Vectors* module gave every **word** a vector. That is 2013. This module is about giving a whole **passage** one vector, and the retrieval machinery built on top of it.
+      title: 'Ten million documents, one question, and a clock',
+      md: `A company has a help centre with **10,000,000 short documents**. Each one has already been turned into a vector — a list of **768 numbers** — by an embedding model. A user types *"how do I get my money back"*, that question becomes its own list of 768 numbers, and the job is to hand back the handful of documents whose vectors sit closest to the question's vector.
 
-- Feed a passage to a transformer encoder. You get one vector per token — contextual, but n of them.
-- Collapse them into a single vector: **mean pooling** (average all token vectors) or take the **CLS token** (a special prepended token whose final vector is trained to summarise the sequence).
-- That one vector is the passage's address in meaning-space. Two passages saying the same thing in different words land near each other.
-- Store one vector per passage, embed the user's question the same way, return the nearest passages. That is semantic search, complete.
-- Nothing here needs keywords to overlap. "How do I get my money back?" finds a document that only ever says "refund".`,
-    },
-    {
-      type: 'note',
-      md: `**The trap: a raw LLM does not give you good sentence embeddings.** You can mean-pool GPT-2's hidden states and get a vector — it will retrieve badly. A language model is trained to predict the next token, so its states are optimized for *what comes next*, not for *are these two passages about the same thing*. Embedding models are trained on a different objective: **contrastive learning** — pull true (query, passage) pairs together, push random ones apart, usually with the other items in the batch as the negatives. Same architecture, completely different training signal. This is why you use a purpose-built encoder (E5, BGE, GTE, \`text-embedding-3\`, sentence-transformers) and not "the LLM I already have".`,
+- Finding the documents whose vectors sit closest to the query's vector is called **semantic search**: search that matches on meaning rather than on shared words. The user typed "money back" and the right document may only ever say "refund".
+- Each document whose vector is close to the query's vector is called a **nearest neighbour** of the query. "Nearest" means most similar under whatever similarity you chose — for text, almost always cosine similarity.
+- The obvious way to find them: compare the query against document 1, then document 2, then document 3, all the way to document 10,000,000, keep the best few. This is called a **brute-force scan**, or **exact search**, because it looks at everything and therefore cannot be wrong.
+- Count the arithmetic in one such scan. Each comparison multiplies 768 pairs of numbers and adds them up. So one query costs 10,000,000 x 768 = **7,680,000,000** multiply-and-add operations. Nearly eight billion, for one person pressing Enter once.
+- We will run that scan, time a small piece of it, and scale the number up. Then we will spend the rest of the module getting rid of it.`,
     },
     {
       type: 'intuition',
-      title: 'How many numbers per passage?',
-      md: `Embedding dimension is the first knob you will be asked about. The common sizes are not arbitrary — they are the model families people actually ship.
+      title: 'The six documents we will use all the way through',
+      md: `Ten million vectors of 768 numbers are impossible to read. So the whole module uses six documents and three numbers each. The three numbers are made up, but treat them as a real embedding model's output: **position 1 = how much this text is about money, position 2 = how much it is about delivery, position 3 = how much it is about accounts.**
 
-- **384** — small sentence-transformer models (MiniLM class). Fast, tiny index, runs on CPU. Quality is genuinely fine for narrow domains.
-- **768** — base-size encoders. The default middle.
-- **1536 / 3072** — large hosted models (OpenAI \`text-embedding-3-small\` / \`-large\`). Best quality, biggest bill.
-- Cost is linear in d and it is paid **three times**: storage, RAM for the index, and every distance computation at query time. One million passages at d=1536 in float32 is about 6 GB before the index overhead.
-- Bigger is not automatically better on your data — a 384-d model fine-tuned on your domain routinely beats a generic 1536-d one. Measure recall@k on your own queries before paying for dimensions.
-- Modern trick worth naming: **Matryoshka embeddings** are trained so the first 256 or 512 dimensions are usable on their own — you can truncate the vector and trade a little quality for a much smaller index.`,
-    },
-    {
-      type: 'note',
-      md: `**Asymmetric search.** A question and a document are not the same kind of text — "how do I reset my password?" is short and interrogative, the passage answering it is long and declarative. So many models treat them differently: E5 and BGE want literal prefixes (\`query: …\` and \`passage: …\`), instruction-tuned models want a task instruction on the query only, and dense-retrieval systems like DPR go all the way to **two separate encoders** — one for queries, one for documents, trained jointly. Two rules follow. One: whatever prefix or encoder the model documents, use it on *both* sides consistently — mixing them silently destroys recall and is the single most common "my search returns garbage" bug. Two: symmetric tasks (find duplicate tickets, cluster similar sentences) are the case where both sides genuinely are the same kind of text — that is a different model choice, not the same one used loosely.`,
-    },
-    {
-      type: 'intuition',
-      title: 'Cosine similarity, and why the index stores unit vectors',
-      md: `You have a query vector and a million document vectors. How do you score them?
+- \`refund\` — "How do I get a refund?" — vector **[0.9, 0.1, 0.2]**
+- \`package\` — "Where is my package?" — vector **[0.1, 0.9, 0.1]**
+- \`password\` — "Reset my password" — vector **[0.1, 0.0, 0.9]**
+- \`payment\` — "Payment failed at checkout" — vector **[0.8, 0.2, 0.3]**
+- \`delivery\` — "Track my delivery" — vector **[0.2, 0.9, 0.0]**
+- \`email\` — "Change my email address" — vector **[0.0, 0.1, 0.9]**
 
-- **Cosine similarity**: the angle between two vectors, ignoring their lengths. Range −1 to 1; in practice text embeddings crowd into roughly 0 to 1.
-- Why ignore length? Magnitude mostly tracks passage length and token count, not topic. A long rambling document has a big vector and would win on raw dot product **just for being long** — you will see this happen in the code below.
-- Cosine = dot product divided by both norms. That is the math subject's *Vectors & the Dot Product (= Similarity)* module, unchanged.
-- Now the move every vector database makes: **normalize once, at index time**. After normalization both norms are 1, so cosine *is* the plain inner product.
-- That is why "cosine" and "inner product" are usually the same menu option in a vector DB, and why the whole search collapses into one matrix multiply.`,
-    },
-    {
-      type: 'math',
-      intro: 'Cosine, and the identity that lets a database throw the division away.',
-      latex: [
-        '\\text{cos}(a, b) \\;=\\; \\frac{a \\cdot b}{\\lVert a \\rVert \\, \\lVert b \\rVert} \\;=\\; \\frac{\\sum_i a_i b_i}{\\sqrt{\\sum_i a_i^2}\\,\\sqrt{\\sum_i b_i^2}}',
-        '\\hat{a} = \\frac{a}{\\lVert a \\rVert}, \\;\\; \\hat{b} = \\frac{b}{\\lVert b \\rVert} \\;\\;\\Longrightarrow\\;\\; \\text{cos}(a,b) = \\hat{a} \\cdot \\hat{b}',
-        '\\lVert \\hat{a} - \\hat{b} \\rVert_2^2 = 2 - 2\\,\\hat{a}\\cdot\\hat{b} \\quad \\text{(on unit vectors, Euclidean rank} \\equiv \\text{cosine rank)}',
-      ],
-    },
-    { type: 'visual', component: 'AttentionHeatmap', props: {} },
-    {
-      type: 'note',
-      md: `Read this grid as a **retrieval** picture. Every cell is a dot product between two vectors — one number saying how aligned two pieces of meaning are. That is exactly the machinery you met inside self-attention, and it is exactly the machinery a vector database runs: attention scores one token's query against every token's key; semantic search scores one *question's* vector against every *passage's* vector. Take any row here, sort it, keep the largest few entries — you have just done top-k retrieval. The only differences are scale (a million rows instead of twelve) and what happens next: attention softmaxes the row and mixes values, retrieval just returns the top-k identifiers.`,
+The user's question is *"how do I get my money back"*, and the same embedding model turns it into **[0.85, 0.05, 0.15]** — heavily about money, barely about anything else. Everything below is these seven lists of three numbers.`,
     },
     {
       type: 'code',
       lang: 'python',
-      title: 'Toy retrieval in NumPy — and the long-document bug, with real output',
-      code: `import numpy as np
+      title: 'Part 1: cosine similarity, written out with plain loops',
+      code: `def dot(a, b):
+    total = 0.0
+    for i in range(len(a)):
+        total = total + a[i] * b[i]
+    return total
 
-# Toy 4-d "embeddings". Axes: [refunds, payments, python, deployment]
-DOCS = {
-    'refund-policy':    np.array([0.90, 0.30, 0.02, 0.02]),
-    'payments-api':     np.array([0.25, 0.92, 0.20, 0.10]),
-    'deploy-runbook':   np.array([0.03, 0.08, 0.30, 0.95]),
-    'company-handbook': np.array([2.60, 2.40, 2.30, 2.50]),  # long doc: everything, weakly
-}
-query = np.array([0.88, 0.35, 0.05, 0.05])       # "how do I get a refund?"
+def length(a):
+    return dot(a, a) ** 0.5
 
-names = list(DOCS)
-M = np.stack([DOCS[n] for n in names])           # (4 docs, 4 dims) — the entire "index"
+def cosine(a, b):
+    return dot(a, b) / (length(a) * length(b))
 
-def rank(scores, k=None):
-    order = np.argsort(-scores)[:k]
-    return [(names[i], round(float(scores[i]), 3)) for i in order]
+print(round(cosine([0.9, 0.1, 0.2], [0.85, 0.05, 0.15]), 4))
+print(round(cosine([0.1, 0.9, 0.1], [0.85, 0.05, 0.15]), 4))
 
-print('norms:', [(n, round(float(np.linalg.norm(v)), 2)) for n, v in DOCS.items()])
-print('\\nRAW DOT PRODUCT   ', rank(M @ query))
-
-M_n = M / np.linalg.norm(M, axis=1, keepdims=True)   # normalize ONCE, at index time
-q_n = query / np.linalg.norm(query)
-cos = M_n @ q_n                                      # cosine IS the inner product now
-
-print('COSINE (normalized)', rank(cos))
-print('\\ntop-2 retrieved   ', rank(cos, 2))
-
-# ------------------------- real output -------------------------
-# norms: [('refund-policy', 0.95), ('payments-api', 0.98),
-#         ('deploy-runbook', 1.0), ('company-handbook', 4.91)]
-#
-# RAW DOT PRODUCT    [('company-handbook', 3.368), ('refund-policy', 0.899),
-#                     ('payments-api', 0.557), ('deploy-runbook', 0.117)]
-# COSINE (normalized) [('refund-policy', 0.997), ('company-handbook', 0.723),
-#                      ('payments-api', 0.599), ('deploy-runbook', 0.123)]
-#
-# top-2 retrieved    [('refund-policy', 0.997), ('company-handbook', 0.723)]`,
+# ---- real output ----
+# 0.9978
+# 0.1841`,
       annotations: {
-        8: 'The villain: a long document that touches every topic weakly. Its norm is 4.91 — five times the others — purely because it is long.',
-        13: 'One matrix of shape (n, d) IS the index. Everything a vector database adds is about not scanning all n rows.',
-        16: 'argsort on the negated scores = descending order; slicing gives top-k. This is an exact scan — O(n·d) — the thing ANN indexes exist to avoid.',
-        20: 'Raw dot product: the handbook wins at 3.368, almost 4x the actually-correct answer. It is not more relevant, it is just longer.',
-        22: 'Normalize once when writing to the index, never again at query time. This single line is what every vector DB does under "metric: cosine".',
-        24: 'After normalization the division is gone: cosine collapses to a bare inner product, one matmul for the whole corpus.',
-        35: 'The fix in real numbers: refund-policy climbs to 1st at 0.997 and the handbook drops to 2nd. Same vectors, same query — only normalization changed.',
+        1: 'Defines a function taking two lists of numbers, a and b, of the same length.',
+        2: 'A running total, starting at 0.0. Written as 0.0 rather than 0 to make clear it accumulates decimals.',
+        3: 'len(a) is how many numbers are in the list — 3 here. range(len(a)) gives the positions 0, 1, 2.',
+        4: 'Multiply the two numbers sitting at the same position and add the product to the total. Doing this for every position is what a dot product is.',
+        5: 'Hand back the accumulated total.',
+        7: 'Defines the length of a vector — how far its arrow reaches from the origin.',
+        8: 'A vector dotted with itself gives the sum of its squares, and ** 0.5 raises that to the power one half, which is a square root. This is Pythagoras in as many dimensions as you like.',
+        10: 'Defines cosine similarity, the similarity measure the Deep Learning embeddings module introduced.',
+        11: 'Dot product divided by both lengths. Dividing by the lengths removes the effect of size, so only direction is left: 1.0 means the two vectors point the same way, 0.0 means unrelated.',
+        13: 'Score the refund document against the query. round(x, 4) cuts the float to 4 decimal places so it prints readably.',
+        14: 'Score the package document against the same query. Refund gets 0.9978 and package gets 0.1841 — the numbers agree with what you would say by eye.',
+      },
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Part 2: the brute-force scan, all six documents, ranked',
+      code: `docs = ['refund', 'package', 'password', 'payment', 'delivery', 'email']
+vecs = [[0.9, 0.1, 0.2], [0.1, 0.9, 0.1], [0.1, 0.0, 0.9],
+        [0.8, 0.2, 0.3], [0.2, 0.9, 0.0], [0.0, 0.1, 0.9]]
+query = [0.85, 0.05, 0.15]
+
+scored = []
+for i in range(len(docs)):
+    scored.append((cosine(vecs[i], query), docs[i]))
+
+scored.sort(reverse=True)
+for score, name in scored:
+    print(name, round(score, 4))
+
+# ---- real output ----
+# refund 0.9978
+# payment 0.9688
+# password 0.281
+# delivery 0.2697
+# package 0.1841
+# email 0.1788`,
+      annotations: {
+        1: 'The six document names, in a fixed order. Position i in this list and position i in the next list describe the same document.',
+        2: 'The six vectors. A list whose items are themselves lists — vecs[0] is the whole three-number vector for refund, and vecs[0][1] is its second number.',
+        3: 'This is the same line 2 continued. Python allows a list to run across several lines while a square bracket is still open, purely so it fits on the page.',
+        4: 'The query vector, produced by the same embedding model from the user\'s question.',
+        6: 'An empty list that will collect one entry per document.',
+        7: 'Walk every document position: 0, 1, 2, 3, 4, 5. This loop is the brute-force scan in full — it skips nothing.',
+        8: 'append adds one item to the end of the list. The item is a tuple, written with round brackets: two values glued together as one, here the score and the name. Score comes first on purpose — see the next line.',
+        10: 'sort rearranges the list in place. Sorting a list of tuples compares first items first, so this sorts by score; reverse=True makes it highest-first instead of lowest-first.',
+        11: 'Tuple unpacking: each item is a (score, name) pair, and this splits it into two named variables in one step.',
+        12: 'Print the document name and its score to 4 decimal places. The order of the output IS the search result.',
+      },
+    },
+    {
+      type: 'note',
+      md: `Read the ranking. \`refund\` at 0.9978 and \`payment\` at 0.9688 are both about money and both come back high, even though the user typed neither word. Then there is a cliff: everything else sits below 0.29. That cliff is what makes semantic search useful — the meaningful matches separate themselves from the rest. This result is also **exact**: we compared against every document, so nothing better can be hiding anywhere. Remember this exact ranking. It is the yardstick we measure every faster method against for the rest of the module.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Why the scan does not scale: measure a small one and multiply',
+      code: `import time
+
+query = []
+for j in range(768):
+    query.append(0.01 * (j % 100))
+
+library = []
+for i in range(2000):
+    library.append(query)
+
+start = time.time()
+for v in library:
+    dot(v, query)
+seconds = time.time() - start
+print(round(seconds, 3), 'seconds for 2,000 documents')
+print(round(seconds * 5000 / 60, 1), 'minutes for 10,000,000 documents')
+
+# ---- real output (one run on a laptop) ----
+# 0.05 seconds for 2,000 documents
+# 4.2 minutes for 10,000,000 documents`,
+      annotations: {
+        1: 'time is part of Python itself. It gives us a clock.',
+        3: 'Start an empty list that will become one realistic 768-number query vector.',
+        4: 'Loop 768 times, once per position in the vector.',
+        5: 'Put some number in each position. j % 100 is the remainder when j is divided by 100, so the values cycle 0.00, 0.01, ... 0.99. The actual values do not matter — only how many multiplications they cause.',
+        7: 'An empty list that will hold 2,000 document vectors.',
+        8: 'Loop 2,000 times.',
+        9: 'Append the same query vector 2,000 times. Every one is 768 numbers long, which is all the timing depends on. Building 2,000 genuinely different vectors would only add setup time, not measurement.',
+        11: 'time.time() returns the current clock reading in seconds. Save it before the work starts.',
+        12: 'Walk all 2,000 document vectors — a brute-force scan, same as before, just bigger.',
+        13: 'Compute the dot product and throw the result away. We are timing the arithmetic, not using it.',
+        14: 'Clock reading now, minus the reading from before: how long the scan took.',
+        15: 'Print the measured time for 2,000 documents.',
+        16: '10,000,000 divided by 2,000 is 5,000, so multiply the measured time by 5,000 to get the time for the full library, then divide by 60 to read it in minutes.',
       },
     },
     {
       type: 'intuition',
-      title: 'Chunking: the part everyone gets wrong',
-      md: `You cannot embed a 200-page PDF into one vector — the average would mean nothing. So you split it. **How you split is the highest-variance decision in the whole pipeline**, and it gets less attention than the model choice.
+      title: 'What that number means, and the word for the fix',
+      md: `Four minutes per query, for one user. Pure Python is slow, and real systems use optimised numeric code that is roughly a hundred times faster — call it **two to three seconds** per query. That is still far too slow for a search box, and it is per query: a hundred users at once means a hundred times the work.
 
-- **Fixed-size with overlap.** Cut every N tokens, overlap by ~10–20% so a sentence cut in half survives in the neighbouring chunk. Trivial to implement, and it will happily slice a table down the middle.
-- **Sentence / paragraph-aware.** Split on real boundaries, then pack sentences up to a size budget. Better chunks for one extra library call. This is the sane default.
-- **Semantic chunking.** Embed sentence by sentence, start a new chunk where consecutive similarity drops — split where the topic actually shifts. Best boundaries, costs an embedding pass over the corpus, and the threshold is one more thing to tune.
-- **Hierarchical / parent-document retrieval.** Embed *small* chunks so matching is precise, but return the *parent* section to the LLM so it has context. You get precision and context instead of choosing.
-- The tension, stated plainly: **small chunks retrieve precisely but lose context; big chunks carry context but dilute the embedding.** A 2000-token chunk about five topics has a vector that is near none of them.`,
-    },
-    {
-      type: 'note',
-      md: `Starting numbers, not laws: **256–512 tokens per chunk with 10–20% overlap** is a reasonable first setting for prose, and short FAQ-style content wants smaller. Then the rule that matters more than any number: **chunk boundaries must respect document structure.** Never split inside a code block, a table, or a markdown heading's section — carry the heading path ("Billing > Refunds > EU customers") into the chunk text so an isolated fragment still says what it is about. Two failure modes to recognise: a chunk that is half of a table is retrieved and is unreadable; a chunk that ends mid-sentence gets an embedding for a fragment nobody would ever search for. Evaluate chunking the way you evaluate a model — build 30 real queries with known correct answers and measure recall@k across two or three chunking configs. It is a couple of hours and it usually moves the metric more than upgrading the embedding model.`,
-    },
-    {
-      type: 'note',
-      md: `**Store metadata beside every chunk, and filter on it.** Minimum: source document id, section/heading path, created or updated date, and — if your data is not public — the permissions or tenant id. Why it matters as much as similarity: (1) *correctness* — the 2019 policy and the 2024 policy are near-identical vectors, and only a date filter picks the right one; (2) *security* — similarity has no concept of "this user may not see that document", so filtering is your only access control, and it must run in the database, not after you get results back; (3) *citations* — you cannot show a source link you did not store. Note the engineering wrinkle interviewers probe: **filtered ANN search is harder than it looks.** Filter after the search and a restrictive filter can leave you zero results out of the top 100; filter before and you may be scanning outside the index. Good vector DBs implement filtered search inside the graph traversal — check that yours does before you rely on it.`,
+- The problem is the shape of the cost, not the language. Doubling the library doubles the time. Ten million documents cost ten million comparisons. That relationship never improves.
+- The fix is to build a data structure, in advance, that lets a query rule out most of the collection without scoring it. Such a structure is called an **index**. A phone book is an index: sorted by surname, so you never read the whole book.
+- A database whose job is storing vectors and answering nearest-neighbour queries against them with such an index is a **vector database**.
+- Here is the catch, and it is the point of this module. For vectors of a few hundred numbers, nobody knows how to build an index that is both much faster than the scan and guaranteed correct. You get to pick one.
+- So real indexes give up the guarantee. **Approximate nearest neighbour search**, usually written **ANN**, returns *most* of the true nearest neighbours, most of the time, in a small fraction of the time.
+- The measure of how much it returns is **recall**. Ask for the top 10; if 9 of the 10 the brute-force scan would have returned are in your answer, the **recall@10** for that query is 9/10 = 0.9. Averaged over many queries, that is the number a vector database is judged by.
+
+Two ideas dominate the field. Both are simple enough to build in a dozen lines, and we will build both.`,
     },
     {
       type: 'intuition',
-      title: 'Scale: when the honest scan stops working',
-      md: `The code above scored all four documents. Scoring all n documents is **exact k-NN**, and it is not stupid.
+      title: 'Idea 1: IVF — sort the documents into buckets, search a few buckets',
+      md: `The plain-words version, before any code. Imagine a library where books are shelved by topic. Someone asks for a book about money. You do not read every shelf; you walk to the money shelf and read only that one.
 
-- Cost is **O(n·d)** per query: one dot product per document. On modern hardware a numpy or FAISS flat scan over ~100k vectors at d=768 is milliseconds.
-- So the honest advice: up to roughly a hundred thousand vectors, brute force and stop optimizing. You get 100% recall, instant updates and deletes, and no index to rebuild.
-- Past that, latency grows linearly with the corpus and you switch to **ANN — approximate nearest neighbour**.
-- ANN gives up exactness. It might return the 1st, 2nd, 3rd and 5th best neighbours instead of the true top-4. In exchange, queries stop scanning the corpus.
-- The trade in one sentence: **a few percent of recall for orders of magnitude of speed.** For search-and-summarise workloads, missing the 4th-best passage is usually invisible; a 3-second query is not.`,
+- Before any query arrives, pick a set of **centroids** — a handful of vectors spread through the collection, each meant to sit in the middle of a group of similar documents. Clustering algorithms produce these; k-means is the usual one, and you have seen it in the ML subject.
+- Assign every document to the centroid it is closest to. Each centroid now owns a **bucket** of documents. This is done once, when the index is built, not per query.
+- When a query arrives, compare it against the centroids only — there are a few thousand of them, not ten million. Find the closest centroid, and scan only that bucket.
+- This design is called **IVF**, short for inverted file index. The number of buckets you scan is a knob called **nprobe**: nprobe=1 scans the single nearest bucket, nprobe=8 scans the eight nearest.
+- The arithmetic, on the real numbers: 10,000,000 documents split into 4,096 buckets averages about 2,441 documents per bucket. With nprobe=8 you score 4,096 centroids plus 8 x 2,441 = 19,528 documents — about 23,600 comparisons instead of 10,000,000. That is **424 times less work**.
+- And here is what it costs you. A document sitting near the edge between two buckets can be a genuine nearest neighbour of the query while living in a bucket you did not open. You will never see it, and nothing warns you.`,
     },
     {
-      type: 'intuition',
-      title: 'The three ANN ideas worth knowing',
-      md: `Interviewers expect you to name these and say what each trades.
+      type: 'code',
+      lang: 'python',
+      title: 'IVF on the six documents, and the neighbour it loses',
+      code: `centroids = [[0.85, 0.15, 0.25], [0.10, 0.50, 0.50]]
+buckets = [[], []]
+for i in range(len(docs)):
+    c = 0 if cosine(vecs[i], centroids[0]) > cosine(vecs[i], centroids[1]) else 1
+    buckets[c].append(i)
+print(buckets)
 
-1. **HNSW** (Hierarchical Navigable Small World) — the default in most vector DBs. Build a multi-layer graph where each vector links to its neighbours; upper layers are sparse "highways", the bottom layer is dense. A query enters at the top, greedily walks toward the query vector, drops a layer, repeats. Roughly log-time hops instead of a full scan.
-   - Two knobs: **M** (links per node — build-time, more links = better recall and a bigger index) and **ef** (how wide the search beam stays — query-time, higher = better recall, slower). \`ef_search\` is the dial you actually turn in production.
-   - Cost: the whole graph lives in RAM, and it is memory-hungry — often more than the raw vectors.
-2. **IVF** (Inverted File) — cluster all vectors with k-means into \`nlist\` buckets, keep each centroid. At query time compare against the centroids, then scan only the \`nprobe\` nearest buckets. Cheap to build, small memory footprint, and \`nprobe\` is a clean recall/speed dial. Weakness: a true neighbour sitting just across a cluster boundary gets missed.
-3. **Product quantization (PQ)** — compression, not search. Split each vector into m sub-vectors, replace each with the id of its nearest centroid from a small learned codebook. A 1536-d float32 vector (6 KB) becomes ~96 bytes. Distances are then computed on the codes via lookup tables. Massive memory savings, some accuracy loss, and it composes with the others — \`IVF-PQ\` and \`HNSW-PQ\` are standard FAISS recipes.`,
+best_c = 0 if cosine(query, centroids[0]) > cosine(query, centroids[1]) else 1
+print('searching bucket', best_c, 'only')
+for i in buckets[best_c]:
+    print(docs[i], round(cosine(vecs[i], query), 4))
+
+# ---- real output ----
+# [[0, 3], [1, 2, 4, 5]]
+# searching bucket 0 only
+# refund 0.9978
+# payment 0.9688`,
+      annotations: {
+        1: 'Two centroids, chosen by hand here to keep it readable. The first points at money, the second sits between delivery and accounts. In a real index these come out of a clustering run over the documents.',
+        2: 'A list holding two empty lists — one bucket per centroid. They will fill with document positions.',
+        3: 'Walk every document once. This is the build step, and it happens before any query exists.',
+        4: 'Compare this document to both centroids and pick the closer one. "0 if test else 1" is Python\'s conditional expression: it evaluates the test and the whole line becomes 0 when the test is true, 1 when it is false.',
+        5: 'Put this document\'s position number into the winning bucket.',
+        6: 'Print the finished index. [[0, 3], [1, 2, 4, 5]] means bucket 0 holds documents 0 and 3 — refund and payment — and bucket 1 holds the other four.',
+        8: 'Now a query arrives. Same comparison, but for the query vector: which centroid is it closest to? Two comparisons, not six.',
+        9: 'Announce the choice so the output is readable.',
+        10: 'Loop over only the positions in the chosen bucket. The four documents in the other bucket are never touched — that is the entire saving.',
+        11: 'Score and print each document we did look at. The result is refund then payment: correct, and found by scoring 2 documents plus 2 centroids instead of 6 documents.',
+      },
     },
     {
       type: 'note',
-      md: `**The number you tune is recall@k**, defined against the exact answer: run brute force on a sample of real queries to get the true top-k, then measure what fraction of it your ANN index returns. Targeting recall@10 of 0.95–0.99 is normal. Say this in an interview and you separate yourself instantly, because the alternative answer — "we set ef to 100 because the docs said so" — is what most candidates give. Three related facts worth carrying: recall is measured per index configuration and does not transfer between datasets; latency and recall trade smoothly, so plot the curve once and pick a point against your latency budget; and there is no point tuning ANN recall to 0.99 while your *chunking* is losing 30% of the answers — fix the pipeline in cost order.`,
+      md: `Now compare against the yardstick. The exact ranking was **refund, payment, password**. IVF with nprobe=1 returned **refund, payment** and stopped, because \`password\` lives in bucket 1 and bucket 1 was never opened. If the user asked for the top 3, the true top 3 contains 3 documents and we found 2 of them, so **recall@3 = 2/3 = 0.667**. Nothing crashed, no warning appeared, and the two results we did return are perfectly good. That is exactly why this failure mode is easy to miss. Raise nprobe to 2 and both buckets get scanned: recall@3 goes to 1.0 and the work doubles. That single trade — turn nprobe up for accuracy, down for speed — is the whole tuning story for IVF.`,
     },
     {
-      type: 'intuition',
-      title: 'Hybrid search: the highest-value upgrade you can ship',
-      md: `Dense embeddings have one systematic blind spot, and keyword search has the mirror-image one.
-
-- Dense retrieval **misses exact tokens**: part numbers ("MX-7741-B"), person names, error codes, rare internal jargon, anything the embedding model never learned. It returns things that are *about the same topic* instead of the thing you literally named.
-- **BM25** (the classic keyword ranking function — term frequency, damped, weighted by how rare the term is across the corpus) nails those exactly, and completely misses paraphrase: it cannot connect "money back" to "refund".
-- The blind spots barely overlap. So run both and fuse the results. That is **hybrid search**.
-- Fuse with **Reciprocal Rank Fusion (RRF)**: score each document by summing 1/(k + rank) over the two result lists, k ≈ 60. It uses only *ranks*, so you never have to make a BM25 score and a cosine score comparable — which is exactly the part that goes wrong when people try to blend raw scores.
-- Practical framing for interviews: for most real corpora, adding BM25 + RRF to a working dense pipeline buys more than swapping in a bigger embedding model, and costs an afternoon.`,
-    },
-    {
-      type: 'math',
-      intro: 'RRF — the entire fusion algorithm. r(d) is the document\'s rank in one retriever\'s list; k damps how much the top spots dominate.',
-      latex: [
-        '\\text{RRF}(d) \\;=\\; \\sum_{r \\in R} \\frac{1}{k + \\text{rank}_r(d)}, \\qquad k \\approx 60',
-        '\\text{rank } 1 \\to \\tfrac{1}{61} = 0.0164, \\quad \\text{rank } 2 \\to \\tfrac{1}{62} = 0.0161, \\quad \\text{rank } 50 \\to \\tfrac{1}{110} = 0.0091',
-        '\\text{Ranks only} \\Rightarrow \\text{no calibration between a BM25 score and a cosine score.}',
-        '\\text{A doc ranked well by } \\textbf{both} \\text{ retrievers beats a doc ranked 1st by only one.}',
-      ],
+      type: 'visual',
+      component: 'KMeansStepper',
+      props: { k: 4 },
     },
     {
       type: 'note',
-      md: `**The vector-DB landscape, honestly.** \`pgvector\` is a Postgres extension — your vectors live in the same database as your rows, so joins, transactions, permissions and backups all just work; it does HNSW and IVFFlat and scales comfortably into the millions. **FAISS** is a Meta library, not a server: the fastest local index, no persistence or filtering story of its own, ideal when you own the process. **Qdrant**, **Weaviate** and **Milvus** are dedicated open-source vector databases with real filtering, hybrid search and horizontal scaling built in; **Pinecone** is the managed-service version of the same. The advice: **start with pgvector if you already run Postgres, or FAISS if you just need an in-process index** — and move to a dedicated vector DB when you can name the reason (tens of millions of vectors, complex metadata filtering at speed, or you need someone else to operate the sharding). "We chose Pinecone" as an opening move on a 50k-chunk corpus is the answer that gets follow-up questions you do not want.`,
+      md: `That is the clustering step of IVF, running. Each coloured group becomes one bucket, and the marker at the centre of each group is its centroid. Step it and watch the centroids settle. Two things to notice for retrieval: the points near where two colours meet are the ones a nprobe=1 search will lose, and the buckets do not come out the same size — a lopsided cluster means one unlucky bucket is slow to scan.`,
     },
     {
       type: 'intuition',
-      title: 'The operational realities nobody demos',
-      md: `The demo is a weekend. Running it is the job.
+      title: 'Idea 2: HNSW — a graph with express lanes',
+      md: `The other dominant index does not cut the collection into pieces at all. It joins the documents up into a network and walks it.
 
-- **Your index is model-specific.** Vectors from two different models — or two *versions* of one model — are not comparable at all. Change the embedding model and you must **re-embed the entire corpus**, which means budgeting a full re-index pass and running the old and new indexes side by side during the swap. Store the model name and version as metadata on every chunk, on day one.
-- **Index build is not free.** HNSW construction is roughly O(n log n) with a large constant; millions of vectors take hours and a lot of RAM. Plan it as a batch job, not something that happens in a request.
-- **Updates and deletes are awkward.** Graph indexes handle appends well and deletes badly — most implementations tombstone the entry and only truly remove it on a rebuild, so a heavily-churning corpus needs periodic re-indexing. If a document changes, re-chunk and re-embed the whole document, not one chunk, because the boundaries move.
-- **Cost has three lines**, and people forget two: the one-off embedding pass over the corpus, the per-query embedding of the question (small but constant), and the standing RAM bill for the index (the big one — HNSW in memory often exceeds the vectors themselves).
-- **Staleness is a correctness bug.** If your source of truth updates and the index does not, retrieval confidently returns last quarter's answer. Wire the index to the same pipeline that updates the documents.`,
+- Build a **graph**: every document is a node, and each node is joined to a few of its nearest neighbours by edges. Then search by **greedy walking** — stand on a node, look at the nodes it is joined to, step to whichever is closest to the query, and repeat until no neighbour is closer than where you stand.
+- On one flat graph that works, but slowly, because each step is small. From a random starting point on the far side of a ten-million-node graph, you take a great many small steps to arrive.
+- So build **several layers of the same graph**. The bottom layer contains every document, densely joined, so steps there are fine and precise. Each layer above holds a random small sample of the layer below — perhaps one node in sixteen — joined to *its* nearest neighbours. Because the top layer is sparse, its edges span huge distances. One step up there covers ground that would take a hundred steps at the bottom.
+- Search runs top-down. Greedy-walk the sparse top layer until you cannot improve, then drop to the layer below and continue from where you landed, then the layer below that, until you finish on the bottom layer. Big jumps first, fine steps last.
+- This is **HNSW**: hierarchical navigable small world. The reason it is fast is that each layer roughly divides the remaining distance, so the number of steps grows like the *logarithm* of the collection size, not like the size. Ten times more documents costs a few more steps, not ten times more.
+- What it costs: greedy walking can stop at a node that is better than all its neighbours but is not the true nearest — a dead end from which every direction looks worse. The knob that fixes this is called **efSearch**: instead of tracking one current node, track the best efSearch candidates at once, so a dead end is not fatal because other candidates are still live. Larger efSearch means higher recall and more work.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Part 1: the greedy walk itself',
+      code: `def greedy(graph, start, query):
+    node = start
+    while True:
+        best = node
+        for n in graph[node]:
+            if cosine(vecs[n], query) > cosine(vecs[best], query):
+                best = n
+        if best == node:
+            return node
+        node = best`,
+      annotations: {
+        1: 'graph says which nodes are joined to which, start is the node we begin standing on, query is the vector we are hunting for.',
+        2: 'Remember where we are standing right now.',
+        3: 'while True loops forever until something inside returns. We do not know in advance how many steps the walk needs.',
+        4: 'Assume for now that where we stand is the best we have seen.',
+        5: 'graph[node] looks up this node\'s neighbour list in the dict — the nodes we are allowed to step to from here.',
+        6: 'Score each neighbour against the query and compare it with the best score so far. Higher cosine means closer.',
+        7: 'Found a better neighbour, so it becomes the new best candidate.',
+        8: 'After checking every neighbour: if the best one is still where we stand, no direction improves anything.',
+        9: 'So the walk is finished. Hand back this node.',
+        10: 'Otherwise take the step, and the while loop runs again from the new position.',
+      },
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Part 2: two layers, walked one after the other',
+      code: `top = {2: [4, 3], 4: [2, 3], 3: [2, 4]}
+bottom = {0: [3, 1], 1: [0, 4], 2: [0, 5], 3: [0, 4], 4: [1, 3], 5: [2]}
+
+entry = greedy(top, 2, query)
+print('layer 1 stopped at', docs[entry])
+final = greedy(bottom, entry, query)
+print('layer 0 stopped at', docs[final])
+
+# ---- real output ----
+# layer 1 stopped at payment
+# layer 0 stopped at refund`,
+      annotations: {
+        1: 'The sparse upper layer. A dict: the key is a node, the value is its list of neighbours. Only three of the six documents appear here — 2 (password), 4 (delivery), 3 (payment) — and they are all joined to each other, so any one step can cross the whole collection.',
+        2: 'The dense bottom layer. All six documents appear, and each is joined to two genuinely similar ones. Steps here are small and precise.',
+        4: 'Start the search at node 2 (password) in the top layer. In a real HNSW index the entry point is fixed when the index is built; here it is deliberately a poor starting guess, to show the walk fixing it.',
+        5: 'Print where the top-layer walk finished. From password it stepped to payment, because among the three top-layer nodes payment is by far the closest to a money query.',
+        6: 'Drop to the bottom layer and keep walking from exactly where layer 1 left off. That handover is the whole trick: the coarse layer supplies a good starting point so the fine layer has almost no work left.',
+        7: 'Print the final answer: refund, which is the true nearest neighbour. Trace it yourself — from payment (node 3) the neighbours are 0 and 4; node 0 scores 0.9978 so we step there; node 0\'s neighbours are 3 and 1, both worse, so the walk stops.',
+      },
     },
     {
       type: 'note',
-      md: `Where this goes next: retrieval is the *input* to generation. The next module wires it end to end — load, chunk, embed, retrieve, **rerank** (a cross-encoder re-scores the top ~50 candidates by reading the query and passage together, far more accurately than any single-vector comparison can), then generate with citations. Keep the split clear in your head: the embedding index is a fast, approximate, high-recall filter over millions of chunks; the reranker is a slow, accurate ordering over the few dozen that survive. Building a two-stage retriever and being able to say why each stage exists is the difference between "I did the LangChain tutorial" and "I built this".`,
+      md: `With six documents the saving looks silly — we scored about as many nodes as a full scan. The shape is what matters. Give the bottom layer ten million nodes and the walk still visits a few hundred, because each layer above cuts the distance rather than shaving a constant off it. In practice HNSW gives higher recall than IVF at the same speed and is the usual default; IVF wins when memory is tight, because HNSW must store every node's neighbour lists and that can cost more memory than the vectors themselves.`,
+    },
+    {
+      type: 'intuition',
+      title: 'What recall@10 = 0.95 actually means for the person searching',
+      md: `Every ANN index is sold with a recall number, and it is easy to nod at "0.95" without asking what a user experiences. So spell it out. Recall@10 of 0.95 means: **average over many queries, 9.5 of the 10 documents the exact scan would have returned are in what you returned.** In practice, for a single query, you got 9 or 10 of them.
+
+- The missing one is almost never the top result. The nearest neighbour is nearest by a margin and every method finds it; what gets lost is a document sitting at position 8 or 9, roughly as good as the ones at 10 and 11 that took its place.
+- So for a search box, a user usually cannot tell. They wanted a good answer near the top, and they got one.
+- For a question-answering system that feeds the retrieved documents to a language model, the same 0.95 can matter much more, because the one missing document may be the only one containing the actual answer. When the answer lives in exactly one document, missing it means a wrong reply, not a slightly worse list.
+- The honest way to pick is to measure. Take a few hundred real queries, compute the exact answer once with a brute-force scan, then re-run them through the index at several settings of nprobe or efSearch and see what recall each setting buys and what it costs in milliseconds.
+- The relationship is reliably lopsided. Going from recall 0.80 to 0.95 is usually cheap; going from 0.95 to 0.99 often costs several times more work than the whole jump before it. That is why 0.95 is the number everybody quotes — it is where the curve bends.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Metadata filtering, and why it fights the index',
+      md: `Real queries are rarely just "find similar text". They are "find similar text **written in the last 30 days, in English, that this user is allowed to see**". Those extra conditions are called **metadata filters**: ordinary field conditions on data stored alongside each vector.
+
+- The awkwardness is that the ANN index was built from vectors alone. It knows nothing about dates or languages, so it cannot avoid returning documents the filter will throw away.
+- **Filter afterwards.** Ask the index for the top 10, then drop the ones failing the filter. Fast, and fine when the filter keeps most documents. But if the filter keeps 1 in 1,000, the top 10 will almost certainly contain zero survivors and you return an empty page.
+- **Filter first, then scan.** Find every document passing the filter, then brute-force scan just those. Exactly correct, and fine when the filter is very restrictive — 5,000 survivors is a quick scan. Useless when the filter keeps millions.
+- **Filter during the search.** Real vector databases do this: walk the HNSW graph or the IVF buckets as usual, but skip non-matching documents when collecting results. It works, and it silently gets slower and less accurate as the filter gets stricter, because the walk keeps stepping through nodes it is not allowed to keep, and the graph's edges may not lead anywhere useful among the survivors.
+- The practical rule: a filter that keeps most documents is free, a filter that keeps almost none should be a plain scan, and the middle is where you must measure rather than assume. If one filter value dominates your traffic — one tenant, one language — the usual fix is to build that subset its own index, so no filtering is needed at query time.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Worked case: sizing an index by hand',
+      md: `A support team has **2,000,000 documents**, vectors of **384 numbers** each stored as 4-byte floats. They want the top 10 results in under 50 milliseconds. Work it out on paper before touching a library.
+
+- **Memory for the raw vectors.** 384 numbers x 4 bytes = 1,536 bytes per document. Times 2,000,000 = 3,072,000,000 bytes, which is about **3.07 GB**. It fits in RAM on one ordinary machine, so no sharding across machines is needed.
+- **Cost of the exact scan.** 2,000,000 x 384 = 768,000,000 multiply-and-adds per query. Optimised numeric code does very roughly a billion of those per second per core, so about **0.77 seconds** on one core. The target is 0.05 seconds, so brute force misses by more than fifteen times. An index is required — this is the arithmetic that proves it, and it is the arithmetic to do first.
+- **Sizing IVF.** A common starting rule is about the square root of the document count for the number of buckets: the square root of 2,000,000 is about 1,414, so round to 1,024 or 2,048. Take 2,048 buckets, averaging 977 documents each.
+- **Cost with nprobe=16.** Score 2,048 centroids, then 16 x 977 = 15,632 documents: 17,680 comparisons versus 2,000,000. That is **113 times less work**, so roughly 6.8 milliseconds. Comfortably inside 50, with room for the filter and the network.
+- **The recall check that must follow.** Take 300 real queries. Compute the exact top 10 for each with a brute-force scan — slow, but done once, offline. Run the same 300 through the index at nprobe = 4, 8, 16, 32 and count overlaps. Suppose nprobe=16 averages 9.4 of the 10 exact results: recall@10 = **0.94**.
+- **Reading the result.** If this feeds a human-facing search box, 0.94 at 6.8 ms is a good deal — ship it. If it feeds a language model that must answer from one specific document, try nprobe=32: if that gives 0.97 at 13 ms, it is still inside budget and worth the extra work.
+
+Notice the order. Compute the memory, prove the scan is too slow, size the index from the document count, then measure recall against the exact answer. Nothing here needed a library, and every number came from the two facts at the top: two million documents, 384 dimensions.`,
+    },
+    {
+      type: 'intuition',
+      title: 'The classic mistake, walked into on purpose',
+      md: `A team builds document search over 5,000,000 documents with HNSW at default settings. It works well. Six months later someone asks a different question: *"give me every document about the 2023 refund policy, we have to review them all"*. They run it as a search with k set to 500 and take the result as the complete list.
+
+- The review is done. Two months later an auditor finds refund-policy documents that were never reviewed. They were in the index. They were never returned.
+- The diagnosis: **an ANN index does not return the true nearest neighbours, and the team treated its output as if it did.** Their index measures at recall@500 of about 0.93. So of the roughly 500 documents that a brute-force scan would have ranked highest, about 35 were missing from the answer. There was no error and no warning — a short list is exactly what a search index is supposed to return.
+- Why the everyday search box never exposed this: a user looks at the top few results, and the top few are almost always right. Recall is lost in the tail. The moment you use the tail as an answer instead of a suggestion, the missing 7% becomes the whole problem.
+- The second thing that went wrong is the shape of the question. "Every document about the 2023 refund policy" has a definite, checkable answer. Similarity search has no answer at all — it has a ranking, and it never says "and that is all of them". No value of k turns a ranking into a complete set.
+- The fix is to use the right tool for the question. Completeness comes from an exact scan over a filtered subset: filter by date and category with ordinary database conditions, then brute-force scan the survivors. If that is 40,000 documents, the scan takes under a second and is guaranteed correct. Slower, and right.
+
+The general rule to carry away: **use ANN when a good answer near the top is enough, and an exact scan when missing something is a real cost.** Approximate is a promise about the top of a ranking. It is never a promise about a set.`,
+    },
+    {
+      type: 'note',
+      md: `A second mistake worth naming, because it produces no error either. Someone re-embeds half the library with a newer, better embedding model and leaves the other half alone. Cosine similarity happily compares a vector from model A with a vector from model B and returns an ordinary-looking number — using our numbers, a query at [0.85, 0.05, 0.15] against a differently-produced [0.2, 0.9, 0.1] scores about **0.287**. Nothing is out of range, nothing crashes, and the ranking is meaningless, because two models put the same meaning in completely different directions. **One index, one embedding model, one version of it.** Changing the model means re-embedding every document, and it means re-embedding queries with the same model too.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Practice problems',
+      md: `Pen and paper. The arithmetic is deliberately small.
+
+1. A library has 4,000,000 documents with 512-number vectors. How many multiply-and-add operations does one exact scan cost? If a machine does 1,000,000,000 of them per second, how long is one query?
+2. The same library is indexed with IVF using 2,000 buckets and nprobe=10. About how many document comparisons does one query cost now, including the centroid comparisons, and how many times less work is that?
+3. A query's true top 5 are documents A, B, C, D, E. The index returns B, A, F, C, G. What is recall@5? Would a user of a search box notice?
+4. You have vectors from two embedding models mixed in one index. Cosine similarity still returns numbers between -1 and 1 and nothing errors. Explain in two sentences why the results are still wrong.
+5. A query must be filtered to one customer's documents, and the average customer owns 800 of the 3,000,000 documents. Which of the three filtering strategies fits, and why do the other two fail?`,
+    },
+    {
+      type: 'intuition',
+      title: 'Worked solutions',
+      md: `Check every step, not only the final number.
+
+1. Each comparison is 512 multiply-and-adds, and there are 4,000,000 of them: 4,000,000 x 512 = **2,048,000,000** operations. At a billion per second that is **about 2.05 seconds** per query — far too slow for a search box, which is what proves an index is needed.
+2. 4,000,000 documents in 2,000 buckets averages 2,000 documents per bucket. nprobe=10 scans 10 x 2,000 = 20,000 documents, plus 2,000 centroid comparisons, giving **22,000** comparisons. 4,000,000 / 22,000 = **about 182 times less work**, so roughly 11 milliseconds instead of 2.05 seconds.
+3. Of the true top 5 (A, B, C, D, E), the returned list contains A, B and C — three of them. **recall@5 = 3/5 = 0.6.** A search-box user probably would not notice, because A and B, the two best results, are both present and near the top. A system that needs a specific fact from D or E gets a wrong answer and never learns why. Note also that 0.6 is poor for an ANN index; recall this low usually means nprobe or efSearch is set too low.
+4. Two embedding models are trained separately, so each invents its own directions in the vector space — model A might put "money" along position 1 while model B spreads it across several positions. A cosine between vectors from the two spaces is therefore comparing coordinates that mean different things, and the score it returns is arithmetic performed on unrelated numbers, which is why it looks reasonable and ranks nothing correctly.
+5. 800 out of 3,000,000 keeps about 1 document in 3,750, so **filter first, then brute-force scan the survivors**. 800 comparisons is instant. Filtering afterwards fails because the unfiltered top 10 would essentially never contain that customer's documents, returning an empty page. Filtering during the search technically works, but the graph walk would spend nearly all its steps on documents it must discard, making it slower than the 800-document scan and less accurate too. Better still, give each customer their own small index.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Beyond the basics - skip this on your first read',
+      md: `Everything above stands alone. This section names ideas you will meet later so the words are not new when you do.
+
+- **Quantization.** Storing each number as a 4-byte float is expensive: our six-document toy used 12 bytes per document, but 10,000,000 documents at 768 numbers costs 30 GB. Product quantization replaces each vector with a short code, cutting memory by 10 to 30 times at the cost of approximate distances. It is how billion-vector indexes fit on one machine, and it lowers recall further, on top of whatever the index already lost.
+- **Hybrid search.** Semantic search fails on exact tokens — a part number, a person's surname, an error code — because those carry little meaning to an embedding model. Keyword search handles them perfectly. Running both and combining the two rankings is called hybrid search, and it is usually the single largest quality improvement available after the index works at all.
+- **Reranking.** Retrieval returns 50 candidates fast and roughly; a slower, more accurate model then re-scores just those 50 and reorders them. Cheap, because it only ever sees 50 documents. This belongs to the retrieval pipeline and is covered in *RAG End to End: Retrieve, Rerank, Generate*.
+- **Chunking.** Long documents must be cut into pieces before embedding, because one vector cannot represent twenty pages. How to cut them is a genuinely consequential decision with its own trade-offs, and it is taught in *RAG End to End: Retrieve, Rerank, Generate*, not here.
+- **Updates and deletes.** Adding a vector to an HNSW graph is straightforward. Deleting one is not, because other nodes' neighbour lists point at it; implementations usually mark it deleted and rebuild the index periodically. If your data changes constantly, ask how the index handles that before you choose it.`,
     },
   ],
   quiz: [
     {
-      question: 'Why should you not just mean-pool a chat LLM\'s hidden states and use them as sentence embeddings?',
+      question: 'A library has 10,000,000 documents with 768-number vectors. Why is a brute-force scan a problem, even though it is guaranteed correct?',
       options: [
         {
-          text: 'The vectors would be too high-dimensional to store',
-          explanation: 'Dimension is a cost issue, not a quality issue — and you could always project it down. This is not the reason.',
+          text: 'It costs 10,000,000 x 768 = about 7.68 billion multiply-and-adds for one query, and that cost grows in direct proportion to the library size',
+          explanation: 'Correct. The cost is proportional to the number of documents, so it can never be made acceptable by tuning — only by not looking at every document.',
         },
-        {
-          text: 'A next-token objective optimizes states for predicting what follows, not for "are these two passages about the same thing" — embedding models are trained contrastively for exactly that',
-          explanation: 'Correct. Same architecture, different training signal. Contrastive training pulls true query-passage pairs together and pushes random ones apart; that objective is what makes a vector retrievable.',
-        },
-        {
-          text: 'LLM hidden states are not real-valued vectors',
-          explanation: 'They are perfectly ordinary float vectors. You can pool them; they just retrieve poorly.',
-        },
-      ],
-      correct: 1,
-    },
-    {
-      question: 'A vector database advertises "cosine similarity" but internally computes a plain inner product. Is that a bug?',
-      options: [
-        {
-          text: 'No — it normalizes vectors to unit length at index time, and on unit vectors cosine IS the inner product',
-          explanation: 'Correct. cos(a,b) = â·b̂ once both norms are 1, so the division is done once at write time instead of on every comparison. This is why the two options are usually interchangeable in a vector DB.',
-        },
-        {
-          text: 'Yes — inner product ranks long documents higher, so results will be wrong',
-          explanation: 'That is exactly what happens on UN-normalized vectors (see the handbook at 3.368 in the code). Normalizing first removes it.',
-        },
-        {
-          text: 'No — cosine and inner product always give the same ranking regardless of normalization',
-          explanation: 'They do not. Without normalization, magnitude (i.e. document length) contributes to the score and can reorder results.',
-        },
+        { text: 'Cosine similarity is inaccurate at high dimensions, so the ranking would be wrong', explanation: 'The scan\'s ranking is exact by construction — it is the yardstick everything else is measured against. Speed is the only problem.' },
+        { text: 'Storing 10,000,000 vectors is impossible on one machine', explanation: '768 numbers at 4 bytes each is about 3 KB per document, so 10,000,000 documents is roughly 30 GB. Large, but not impossible, and not why the scan is slow.' },
       ],
       correct: 0,
     },
     {
-      question: 'Your chunks are 2000 tokens each. Retrieval returns documents that are vaguely on-topic but rarely contain the specific answer. Most likely cause?',
+      question: 'In the six-document example, IVF with nprobe=1 returned refund and payment but not password, which the exact scan ranked third. What happened?',
       options: [
+        { text: 'password\'s vector was corrupted when the index was built', explanation: 'Nothing was corrupted. password was scored normally during the build and placed in bucket 1; the query simply never opened that bucket.' },
         {
-          text: 'The embedding model is too small — upgrade to a 1536-d model',
-          explanation: 'More dimensions will not un-blend a chunk that covers five topics. The averaging happened before the model ever mattered.',
+          text: 'password was assigned to the other bucket, and nprobe=1 opened only the single nearest bucket, so it was never scored against the query',
+          explanation: 'Correct, and note that nothing failed loudly. A genuine neighbour sitting in an unopened bucket is invisible, which is why recall must be measured rather than assumed.',
         },
+        { text: 'Its cosine score of 0.281 was below a similarity threshold', explanation: 'There is no threshold anywhere in the code. The only filter applied was which bucket was scanned.' },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'What does recall@10 = 0.95 mean?',
+      options: [
+        { text: '95% of the documents returned are relevant to the user', explanation: 'That describes precision against human judgements of relevance. Recall here compares against the exact scan\'s output, which may itself contain irrelevant documents.' },
+        { text: 'The system answers within 95% of the target latency', explanation: 'Recall says nothing about time. It is purely a comparison of two lists of documents.' },
         {
-          text: 'ANN recall is too low — raise ef_search',
-          explanation: 'Worth checking, but ANN misses are near-neighbour errors. Consistently vague results point at what the vectors represent, not at whether the index found them.',
-        },
-        {
-          text: 'Chunks that large cover several topics, so each vector is an average that sits near none of them — dilution',
-          explanation: 'Correct. This is the core chunking tension: big chunks carry context but dilute the embedding. Smaller chunks, or hierarchical retrieval (embed small, return the parent), is the fix.',
+          text: 'Averaged over many queries, 9.5 of the 10 documents a brute-force scan would have returned are present in the index\'s answer',
+          explanation: 'Correct. The exact scan is the reference, and recall counts the overlap between the approximate answer and that reference.',
         },
       ],
       correct: 2,
     },
     {
-      question: 'You have 60,000 chunks and a 200ms latency budget. What index should you start with?',
+      question: 'Why does HNSW use several layers instead of one large graph?',
       options: [
         {
-          text: 'Exact brute-force scan — O(n·d) over 60k vectors is milliseconds, and you get 100% recall with instant updates',
-          explanation: 'Correct. Below roughly 100k vectors, ANN buys you nothing but complexity, an index build step, and awkward deletes. Reach for ANN when latency actually grows into your budget.',
+          text: 'Upper layers hold a sparse sample, so their edges span long distances and cover ground quickly; the search takes big jumps first and fine steps last',
+          explanation: 'Correct. Each layer roughly divides the remaining distance, which makes the number of steps grow like the logarithm of the collection size rather than its size.',
         },
-        {
-          text: 'HNSW with a large M, to be safe',
-          explanation: 'You pay the RAM, the build time and the tombstoned-delete problem to solve a latency problem you do not have yet.',
-        },
-        {
-          text: 'IVF-PQ, since compression is always worth it',
-          explanation: 'PQ trades accuracy for memory. At 60k vectors memory is not the constraint, so you would be losing recall for free.',
-        },
+        { text: 'Each layer stores a different embedding model, so the layers can be compared', explanation: 'Every layer holds the same vectors from the same model. Mixing models in one index is a bug, not a design.' },
+        { text: 'Layers split the vectors across machines so no machine holds them all', explanation: 'That is sharding, a separate concern. HNSW layers are all part of one index and the bottom layer already contains every document.' },
       ],
       correct: 0,
     },
     {
-      question: 'Users search for the exact part number "MX-7741-B" and your dense-only search returns other, similar-sounding products. Best fix?',
+      question: 'A filter keeps about 1 document in 3,750. Which strategy fits?',
       options: [
+        { text: 'Ask the ANN index for the top 10, then discard the ones failing the filter', explanation: 'The unfiltered top 10 would almost never contain a survivor at that ratio, so the user gets an empty page.' },
         {
-          text: 'Increase the number of retrieved results k',
-          explanation: 'If the embedding never encoded that exact token, the right document may not be in the top 100 either. More results dilute the context window without fixing the blind spot.',
+          text: 'Find every document passing the filter first, then brute-force scan those',
+          explanation: 'Correct. The survivors are few, so an exact scan over them is both fast and guaranteed correct — the ANN index is not needed at all.',
         },
-        {
-          text: 'Add BM25 keyword retrieval alongside the dense search and fuse the two lists with reciprocal rank fusion',
-          explanation: 'Correct. Exact rare tokens are dense retrieval\'s systematic blind spot and BM25\'s strength; the blind spots barely overlap. Hybrid + RRF is the standard, highest-value fix.',
-        },
-        {
-          text: 'Fine-tune the embedding model on your catalogue',
-          explanation: 'It helps somewhat and costs a great deal. It also cannot generalize to a part number added tomorrow — keyword matching can, for free.',
-        },
+        { text: 'Rebuild the index with a larger nprobe so the filter has more candidates', explanation: 'Raising nprobe increases work everywhere for every query and still gives no guarantee the survivors are reached. It treats the symptom.' },
       ],
       correct: 1,
     },
     {
-      question: 'Reciprocal Rank Fusion combines two retrievers using 1/(k + rank). Why ranks rather than the raw scores?',
+      question: 'A team uses an ANN search with k=500 to produce a complete list of documents on a topic for a compliance review. What is wrong?',
       options: [
+        { text: 'k=500 is too small; k=5,000 would return the complete set', explanation: 'No value of k makes a ranking complete. A larger k returns more documents and still offers no guarantee that none were skipped.' },
         {
-          text: 'Ranks are cheaper to compute than scores',
-          explanation: 'The scores already exist — producing the ranks requires sorting them. Cost is not the argument.',
+          text: 'ANN returns most of the top-ranked documents, not all of them, so at recall@500 of 0.93 roughly 35 genuine matches are silently absent',
+          explanation: 'Correct. Completeness needs an exact scan over a filtered subset. Similarity search produces a ranking, and a ranking never says "and that is all of them".',
         },
-        {
-          text: 'A BM25 score and a cosine score live on incomparable scales, so blending them directly requires calibration that ranks make unnecessary',
-          explanation: 'Correct. BM25 is unbounded and corpus-dependent; cosine sits in roughly [0,1]. RRF sidesteps normalization entirely and rewards documents that both retrievers rank well.',
-        },
-        {
-          text: 'Ranks preserve more information than scores',
-          explanation: 'Backwards — ranks discard the magnitude of the gap between results. RRF accepts that loss deliberately in exchange for needing no calibration.',
-        },
+        { text: 'Cosine similarity is the wrong measure for compliance topics', explanation: 'The similarity measure is not the issue. The issue is treating an approximate ranking as an exhaustive set.' },
       ],
       correct: 1,
-    },
-    {
-      question: 'You upgrade from a 768-d embedding model to a 1536-d one. What must happen to your existing index?',
-      options: [
-        {
-          text: 'Nothing — you can pad the old vectors to the new dimension',
-          explanation: 'Padding produces numbers, not meaning. The two models place concepts in entirely unrelated coordinate systems; the dimension mismatch is the least of it.',
-        },
-        {
-          text: 'Only new documents need the new model; old ones can keep their vectors',
-          explanation: 'This is the dangerous answer. Vectors from different models are not comparable at all, so a mixed index returns effectively random rankings across the two halves.',
-        },
-        {
-          text: 'The entire corpus must be re-embedded and re-indexed — vectors are only comparable within one model version',
-          explanation: 'Correct. Budget a full re-embedding pass, run old and new indexes side by side during the cutover, and store the model name and version as chunk metadata so you always know what an index contains.',
-        },
-      ],
-      correct: 2,
-    },
-    {
-      question: 'Why is metadata filtering in a vector database more than a convenience?',
-      options: [
-        {
-          text: 'It is a correctness and security requirement — similarity cannot tell a 2019 policy from the 2024 one, and it has no concept of who is allowed to see a document',
-          explanation: 'Correct. Near-duplicate versions have near-identical vectors, so only a date filter disambiguates them; and access control has to run inside the search, not as a post-filter, or a restrictive filter can empty your top-k.',
-        },
-        {
-          text: 'It speeds up the ANN graph traversal',
-          explanation: 'Usually the opposite — filtered ANN search is harder than unfiltered, and naive implementations degrade badly when the filter is restrictive.',
-        },
-        {
-          text: 'It replaces the need for reranking',
-          explanation: 'Different jobs. Filtering removes ineligible candidates; reranking reorders the eligible ones by relevance.',
-        },
-      ],
-      correct: 0,
     },
   ],
   interviewQuestions: [
     {
-      question: 'Walk me through how semantic search works, end to end, for a set of internal documents.',
+      question: 'Why can you not just compare a query vector against every document vector?',
       answer:
-        'Offline: load the documents, split them into chunks that respect structure (headings, code blocks, tables intact), embed each chunk with a purpose-built encoder into a fixed-length vector, normalize to unit length, and write it to an index alongside metadata — source id, heading path, date, permissions. Online: embed the query with the same model and the same prefix convention, search the index for the nearest vectors by cosine (which on normalized vectors is a plain inner product), apply metadata filters inside the search, and return the top-k chunks with their sources. Then the two upgrades worth naming unprompted: run BM25 in parallel and fuse with RRF, because dense retrieval misses exact tokens; and rerank the top ~50 with a cross-encoder before handing anything to an LLM. Close on the honest bit: chunking and hybrid search move recall more than the embedding model choice does.',
+        'You can, and it is exactly correct — it is the yardstick everything else is measured against. The problem is that the cost grows in direct proportion to the collection. Ten million documents with 768-number vectors is 7.68 billion multiply-and-adds for a single query. Optimised numeric code gets that to roughly two or three seconds on a core, which is far outside a search box\'s budget, and it is per query, so concurrent users multiply it. Nothing about that improves with tuning; the only fix is to avoid scoring most of the collection, which means building an index in advance. And since no index for high-dimensional vectors is both much faster and guaranteed correct, the index you build is approximate, and you accept a measured loss of recall in exchange.',
       isCaseBased: false,
     },
     {
-      question: 'Why do we normalize embedding vectors, and what specifically goes wrong if we do not?',
+      question: 'Explain HNSW to someone who has not seen it.',
       answer:
-        'Magnitude in a text embedding mostly tracks how long the passage is, not what it is about — so raw dot product gives long documents a systematic advantage independent of relevance. Concretely: a "company handbook" chunk that touches every topic weakly can have a norm five times a focused chunk\'s, and it will outrank the correct answer on raw inner product by a wide margin while sitting second on cosine. Cosine divides out both norms so only the angle counts. The engineering move is to normalize once at index time: after that both norms are 1, cosine equals the inner product, and the whole search is one matrix multiply with no per-query division — which is precisely why "cosine" and "inner product" are the same option in most vector databases. Bonus point: on unit vectors, Euclidean distance is a monotone function of cosine (‖â−b̂‖² = 2 − 2â·b̂), so the two metrics produce identical rankings there.',
+        'Join every document to a few of its nearest neighbours so the collection becomes a graph. To search, stand on some node, look at the neighbours it is joined to, step to whichever is closest to the query, and repeat until no neighbour is better. On one flat graph that works but each step is small, so arriving takes many steps. So build layers: the bottom layer has every document, densely joined; each layer above holds a random sample of the one below, perhaps one node in sixteen, joined to its own nearest neighbours. Because upper layers are sparse, their edges span long distances. Search runs top-down — walk the sparse layer for big jumps, drop a layer, continue from where you landed, finish precisely at the bottom. Each layer roughly divides the remaining distance, so steps grow like the logarithm of the collection size. The failure mode is a greedy walk stopping at a node better than all its neighbours but not the true nearest, and efSearch fixes it by tracking several candidates at once.',
       isCaseBased: false,
     },
     {
-      question: 'Case: RAG over a 40,000-page technical manual. Retrieval returns plausible but useless passages. Design your chunking strategy and justify each decision.',
+      question: 'Explain IVF, and say honestly what it gets wrong.',
       answer:
-        'Diagnose first — "plausible but useless" is the dilution signature: chunks too large, each vector averaging several topics. Design: (1) Parse structurally, not by character count — a technical manual has headings, procedures, tables and code blocks, and splitting inside any of them produces an unreadable chunk. (2) Chunk at section granularity, then split oversized sections at paragraph boundaries into 256–512 token pieces with ~15% overlap so a procedure spanning a boundary survives. (3) Prepend the heading path ("Chapter 7 > Hydraulics > Pressure test") to every chunk\'s text so an isolated fragment still declares its subject — this alone measurably improves retrieval. (4) Use parent-document retrieval: embed the small chunks for precise matching but return the enclosing section to the LLM, which resolves the precision-versus-context tension instead of picking a side. (5) Keep tables and code blocks whole even if oversized, and consider a short LLM-written summary as the embedded text for a table whose raw form embeds poorly. (6) Store metadata: manual version, chapter, page, revision date — version filtering is essential when three editions of the same manual are indexed. Then validate: 30 real questions with known answers, measure recall@10 across two or three configurations, pick by number. Say explicitly that you would test before shipping — that is what separates this answer from a list of tactics.',
+        'Before any query arrives, cluster the vectors and pick a centroid per cluster; assign every document to its nearest centroid so each centroid owns a bucket. At query time, compare the query against the centroids only — a few thousand comparisons — then scan the nearest few buckets. The number scanned is nprobe. On real numbers: ten million documents in 4,096 buckets averages 2,441 per bucket, so nprobe=8 costs about 23,600 comparisons instead of ten million, roughly 424 times less work. What it gets wrong is boundary cases. A document sitting near the edge between two buckets can be a genuine nearest neighbour while living in a bucket you did not open, and it is silently absent — nothing errors, and the results you did return look fine. Raising nprobe opens more buckets and recovers those neighbours, at proportionally more work. Compared with HNSW, IVF usually gives lower recall at the same speed but uses much less memory, because it stores no neighbour lists.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Case: your search team must serve top-10 results over 2,000,000 documents with 384-dimension vectors in under 50 ms. Size it.',
+      answer:
+        'Memory first: 384 numbers at 4 bytes is 1,536 bytes per document, times 2,000,000 is about 3.07 GB — one machine, no sharding. Then prove an index is needed: an exact scan is 2,000,000 x 384 = 768 million multiply-and-adds, roughly 0.77 seconds on one core at a billion operations per second, which misses the 50 ms budget by more than fifteen times. Size IVF from the document count using the square-root rule: the square root of two million is about 1,414, so take 2,048 buckets averaging 977 documents each. With nprobe=16 that is 2,048 centroid comparisons plus 15,632 document comparisons, about 17,680 in total, roughly 113 times less work, so around 6.8 ms — comfortably inside budget with room for filtering and network time. Then measure rather than assume: take 300 real queries, compute their exact top 10 once offline with a brute-force scan, and re-run them at nprobe = 4, 8, 16, 32. If nprobe=16 gives recall@10 of 0.94 for a human-facing search box, ship it. If the results feed a language model that must answer from one specific document, check whether nprobe=32 buys 0.97 at 13 ms, which is still inside budget.',
       isCaseBased: true,
     },
     {
-      question: 'Explain HNSW to someone who knows what a graph is. Then tell me what the knobs do.',
+      question: 'Case: a compliance team used your ANN search with k=500 to build "every document about the 2023 refund policy". An auditor found documents that were never reviewed. Diagnose it.',
       answer:
-        'Build a graph over the vectors where each node links to its approximate nearest neighbours, arranged in layers: the top layer is sparse and spans long distances, each layer down is denser, and the bottom layer contains everything. A query enters at the top and greedily moves to whichever neighbour is closer to the query vector; when it cannot improve, it drops a layer and repeats with finer links. Long hops first, short hops last — like taking the motorway before the side streets — so you touch a logarithmic-ish number of nodes instead of scanning n. Knobs: M is the number of links per node, set at build time; higher M means better recall and a larger, slower-to-build index. ef_construction controls how hard the builder searches for good neighbours — build-time quality. ef_search is the query-time beam width: how many candidates stay in play during descent; raise it for recall, lower it for latency, and this is the one you actually tune in production. The cost to name honestly: the graph is RAM-resident and often larger than the raw vectors, and deletions are typically tombstones that only clear on a rebuild.',
-      isCaseBased: false,
-    },
-    {
-      question: 'When is approximate nearest neighbour search NOT worth it?',
-      answer:
-        'Below roughly 100k vectors, an exact flat scan is O(n·d) and lands in single-digit or low-double-digit milliseconds — FAISS IndexFlat or even numpy. You get 100% recall, instant inserts and deletes with no rebuild, no index to tune, and no tombstone garbage. ANN would buy latency you were not spending and cost you a build pipeline, a RAM bill, a recall metric to monitor and awkward deletes. Also skip ANN when correctness is contractual — legal or compliance retrieval where a missed document is a real problem — or when your query volume is low enough that per-query cost simply does not matter. The threshold moves with d and your latency budget, so the right framing is: measure the flat scan on your actual data first, and adopt ANN when the measurement says you need it. Volunteering "we started with brute force" is a strong signal in an interview; most candidates jump straight to a vector DB.',
-      isCaseBased: false,
-    },
-    {
-      question: 'What is hybrid search, why does it work, and how do you combine the two result lists?',
-      answer:
-        'Hybrid search runs dense (embedding) retrieval and sparse (BM25/keyword) retrieval in parallel and merges the results. It works because their failure modes are almost disjoint: dense retrieval understands paraphrase — "money back" finds "refund" — but systematically misses exact rare tokens like part numbers, error codes, person names and internal jargon that the encoder never learned; BM25 nails those exactly and cannot bridge a paraphrase at all. Combine with Reciprocal Rank Fusion: score each document as the sum over retrievers of 1/(k + rank), with k around 60, then sort. Using ranks rather than scores is the point — a BM25 score is unbounded and corpus-dependent while cosine sits near [0,1], so blending raw scores needs calibration that RRF makes unnecessary; a document ranked decently by both beats one ranked first by only one. Alternatives exist (learned weighted fusion, or a cross-encoder reranker over the union) but RRF is the default because it has essentially one hyperparameter and no training. Worth stating outright: on most real corpora this is a bigger win than upgrading the embedding model, and it takes an afternoon.',
-      isCaseBased: false,
-    },
-    {
-      question: 'Case: your team wants to switch embedding models to improve quality. You have 8 million indexed chunks in production. Plan the migration.',
-      answer:
-        'Start by naming the constraint: vectors from two models are not comparable, so this is a full re-embedding of all 8M chunks, not an incremental change — and if the dimension changes, a new index schema too. Plan: (1) Justify it first — evaluate the candidate model offline on a held-out query set with recall@k and end-to-end answer quality, because a full re-index is expensive and the win is often smaller than a chunking fix. (2) Estimate cost and time: 8M chunks through a hosted API is a real invoice and hours-to-days of throughput; a self-hosted model on GPUs may be cheaper at this volume. Include the index build itself — HNSW over 8M vectors is hours and a large RAM peak. (3) Build the new index alongside the old one; never mutate in place. Batch, checkpoint, and make the job resumable — it will fail partway. (4) Cut over behind a flag with shadow traffic first: send real queries to both, compare top-k overlap and rerank scores, and watch for regressions on query classes the old index handled well. (5) Roll out gradually, keep the old index warm for a fast rollback, and only then decommission. (6) Fix the root cause going forward: store the model name and version as metadata on every chunk, and version the index name itself, so "which model is this index?" is never a guess. The tradeoff to state: you are paying double storage and double embedding cost during the transition, and that redundancy is what buys you a safe rollback.',
+        'The index did what it is designed to do; the question asked of it was the wrong shape. ANN returns most of the top-ranked documents, not all of them. If the index measures recall@500 of about 0.93, then roughly 35 of the 500 documents an exact scan would have ranked highest are absent from the answer, with no error and no warning. The everyday search box never revealed this because recall is lost in the tail and users only look at the top few results — the moment the tail becomes the answer, the missing 7% becomes the whole problem. There is also a deeper mismatch: "every document about X" has a definite, checkable answer, while similarity search produces a ranking and never claims to be exhaustive. No value of k converts a ranking into a complete set. The fix is to answer it as a filter plus an exact scan: select by date and category with ordinary database conditions, then brute-force scan the survivors. Forty thousand documents scan in under a second and the result is guaranteed. The rule going forward is that ANN serves questions where a good answer near the top is enough, and exact scans serve questions where a miss has a real cost.',
       isCaseBased: true,
     },
     {
-      question: 'How do you pick an embedding dimension, and what does the choice actually cost?',
+      question: 'Case: retrieval quality collapsed on one customer\'s tenant after you shipped a new embedding model. What do you check first?',
       answer:
-        'By measuring recall@k on your own queries, not by picking the biggest number available. The realistic ladder is 384 (MiniLM-class, CPU-friendly, small index), 768 (base encoders, the sensible middle), and 1536–3072 (large hosted models, best generic quality). Cost is linear in d and you pay it three times: disk, RAM for the index, and every distance computation at query time — 1M vectors at d=1536 in float32 is about 6 GB before HNSW overhead, versus about 1.5 GB at 384. The non-obvious point: a smaller model fine-tuned on your domain often beats a larger generic one, so the dimension question and the model-quality question are not the same question. Two more levers worth naming: Matryoshka-trained embeddings let you truncate to the first 256 or 512 dimensions and trade a little quality for a much smaller index, and product quantization compresses in a different direction (1536-d float32 down to roughly 96 bytes) if memory rather than quality is your binding constraint.',
-      isCaseBased: false,
-    },
-    {
-      question: 'What is asymmetric search, and what breaks when you get it wrong?',
-      answer:
-        'A query and a passage are different kinds of text — one short and interrogative, the other long and declarative — so many retrieval models encode them differently. That ranges from required literal prefixes (E5 and BGE want "query: " and "passage: "), through instruction prefixes applied only to the query, all the way to two entirely separate encoders trained jointly, as in DPR. What breaks: if you embed documents with the passage convention and queries with the passage convention too — or drop the prefixes entirely — recall degrades quietly. Nothing errors, results are merely worse, and you will blame the chunking. It is one of the most common causes of "my semantic search returns garbage". Two operational rules: read the model card and apply its exact convention on both sides, and sanity-check by embedding an identical string through both code paths and confirming cosine is essentially 1.0. Also note the contrast — symmetric tasks like duplicate-ticket detection or sentence clustering compare like with like, and that is a different model choice, not the same model used loosely.',
-      isCaseBased: false,
-    },
-    {
-      question: 'Which vector database would you choose, and what would make you change your mind?',
-      answer:
-        'Default: pgvector if the team already runs Postgres, because the vectors live beside the relational data — joins, transactions, existing permissions, existing backups, one system to operate — and it supports HNSW and IVFFlat comfortably into the millions of rows. If I need an in-process index with no server, FAISS: fastest local search, but it is a library, so persistence, filtering and distribution are my problem. What would change my mind, in order: tens of millions of vectors or more; heavy metadata filtering where I need filtering fused into the graph traversal rather than applied after; built-in hybrid search and reranking I would otherwise write myself; or an operations constraint where I want sharding and replication handled for me — that is when Qdrant, Weaviate or Milvus earn their keep, and Pinecone if I would rather buy the operations than run them. The framing that matters: name the trigger, do not name the brand. "We picked Pinecone" for a 50k-chunk corpus invites the follow-up question you cannot answer.',
-      isCaseBased: false,
-    },
-    {
-      question: 'Case: an internal RAG search over company documents. Users report it sometimes surfaces documents they should not be able to see, and answers occasionally cite superseded policies. Diagnose and fix.',
-      answer:
-        'Two distinct bugs; separate them, because one is a security incident and the other is a freshness bug. Permissions: similarity has no notion of authorization, so the only defence is metadata filtering — and if it is applied as a post-filter after retrieval, results the user may not see were already read from the index, and a restrictive filter can also empty the top-k. Fix: store tenant/ACL identifiers on every chunk at ingestion, push the filter into the vector search itself (pre-filtered or filtered-traversal ANN), and verify that the ACL is re-checked at read time rather than baked in at index time — permissions change after indexing. Treat any leak as an incident: audit which queries returned which documents. Superseded policies: near-identical versions of a document produce near-identical vectors, so similarity alone cannot pick the current one. Fix: store effective and expiry dates plus a version field, filter to the current version by default, and if history is needed, make it an explicit query mode. Then look upstream at whether the index is stale at all — if the pipeline updating documents does not also update the index, retrieval returns last quarter\'s answer with full confidence. Finally, hardening for both: show source and date on every citation so users can see what was used, and add a small regression suite of queries with known-correct documents that runs on every re-index.',
+        'First hypothesis: the library is now a mixture of two embedding spaces. Rolling out a new model usually means re-embedding, and if the job was partial — one tenant missed, a backfill that timed out, new documents written by the new model while old ones kept the old vectors — then some documents live in the old space and some in the new. Cosine similarity between vectors from two separately-trained models still returns an ordinary number in range, because the arithmetic works fine on unrelated coordinates; on our toy numbers a query at [0.85, 0.05, 0.15] against a differently-produced [0.2, 0.9, 0.1] scores about 0.287. Nothing errors, and the ranking is meaningless. Check it by stamping every vector with the model name and version at write time and counting the distinct values per tenant, which turns an invisible bug into a one-line query. Second hypothesis if the space is uniform: the index was rebuilt with different parameters during the migration, so measure recall against a brute-force scan on that tenant. Third: the new model changed the vector dimension and something silently truncated or padded. The general rule is one index, one model, one version, and re-embedding queries with the same model that embedded the documents.',
       isCaseBased: true,
+    },
+    {
+      question: 'How does metadata filtering interact with an ANN index?',
+      answer:
+        'Awkwardly, because the index was built from vectors alone and knows nothing about dates, languages or ownership. Three strategies exist. Filter afterwards: take the index\'s top 10 and drop the failures — fast, and fine when the filter keeps most documents, but if it keeps 1 in 1,000 the top 10 contains no survivors and the user gets an empty page. Filter first: find every document passing the filter and brute-force scan those — exactly correct and fast when the filter is very restrictive, useless when millions survive. Filter during the search: real vector databases walk the graph or the buckets as usual but skip non-matching documents, which works and degrades quietly as the filter tightens, because the walk keeps stepping through nodes it cannot keep and the edges may not lead anywhere useful among the survivors. The rule: permissive filters are free, very restrictive filters should be a plain scan, and the middle must be measured. If one filter value dominates traffic, such as a single large tenant, give it its own index and filter nothing at query time.',
+      isCaseBased: false,
+    },
+    {
+      question: 'How would you choose between recall 0.90 and recall 0.99 for a system?',
+      answer:
+        'By what a miss costs, not by preference for a bigger number. The relationship between recall and work is lopsided: moving from 0.80 to 0.95 is usually cheap, and moving from 0.95 to 0.99 often costs several times more work than that whole earlier jump, which is why 0.95 is the number everyone quotes — it is where the curve bends. For a human-facing search box, the lost documents sit at positions 8 and 9 and are roughly as good as the ones that replaced them, so a user cannot tell and 0.90 is fine. For a system that feeds retrieved documents to a language model, the missing document may be the only one containing the answer, and then the miss is a wrong reply rather than a slightly worse list, so paying for 0.99 is justified. Either way, measure it: compute exact answers for a few hundred real queries once offline, then sweep nprobe or efSearch and plot recall against latency. That plot, not a rule of thumb, decides it.',
+      isCaseBased: false,
     },
   ],
   flashcards: [
-    { front: 'How do you get ONE vector for a whole passage?', back: 'Run a transformer encoder, then mean-pool the token vectors or take the CLS token. Critically, the model must be TRAINED for this (contrastively) — a raw LLM\'s hidden states are not good sentence embeddings.' },
-    { front: 'Typical embedding dimensions and what d costs', back: '384 (MiniLM class), 768 (base), 1536/3072 (large hosted). Cost is linear in d and paid three times: storage, index RAM, and every distance computation.' },
-    { front: 'Why normalize embeddings?', back: 'Magnitude tracks passage length, not topic — long documents win on raw dot product. Normalize once at index time; then cosine IS the plain inner product.' },
-    { front: 'Asymmetric search', back: 'Queries and documents are different kinds of text: many models need different prefixes ("query: " / "passage: ") or even separate encoders (DPR). Mixing conventions silently destroys recall.' },
-    { front: 'The chunking tension in one line', back: 'Small chunks retrieve precisely but lose context; big chunks carry context but dilute the embedding. Start at 256–512 tokens with 10–20% overlap and respect document structure.' },
-    { front: 'Parent-document (hierarchical) retrieval', back: 'Embed SMALL chunks so matching is precise, but return the larger parent section to the LLM for context. Gets both instead of choosing.' },
-    { front: 'When does exact k-NN stop working?', back: 'Exact scan is O(n·d) per query and is fine to roughly 100k vectors. Past that, use ANN — trading a few percent of recall for orders of magnitude of speed.' },
-    { front: 'HNSW, IVF, PQ in one line each', back: 'HNSW: layered neighbour graph, greedy descent; knobs M and ef_search. IVF: k-means buckets, scan the nprobe nearest. PQ: compress vectors into codebook ids (~6 KB → ~96 bytes); composes with the other two.' },
-    { front: 'Hybrid search + RRF', back: 'Dense misses exact tokens (part numbers, names); BM25 misses paraphrase. Run both, fuse with RRF: score = Σ 1/(k + rank), k≈60. Ranks only, so no score calibration needed. Highest-value retrieval upgrade there is.' },
-    { front: 'Why is your index model-specific?', back: 'Vectors from different models (or versions) are not comparable. Changing the embedding model means re-embedding the ENTIRE corpus — store model name + version as chunk metadata.' },
+    { front: 'Why an index is needed at all', back: '10,000,000 documents x 768 numbers = 7.68 billion multiply-and-adds per query for an exact scan, and the cost grows in direct proportion to the collection. An index exists to avoid scoring most of it.' },
+    { front: 'Exact vs approximate (ANN) search', back: 'Exact = compare against everything, guaranteed correct, too slow. ANN = use an index that skips most of the collection, returns most of the true nearest neighbours, and never says which ones it missed.' },
+    { front: 'Recall@10', back: 'Averaged over many queries, how many of the 10 documents a brute-force scan would return are present in the index\'s answer. 0.95 means 9.5 of 10. The exact scan is always the reference.' },
+    { front: 'IVF in one line', back: 'Cluster the vectors into buckets around centroids, then compare the query to the centroids only and scan the nearest nprobe buckets. 10M docs, 4,096 buckets, nprobe=8: about 23,600 comparisons instead of 10M.' },
+    { front: 'What IVF gets wrong', back: 'A document near the edge between two buckets can be a genuine nearest neighbour in a bucket you never opened. Silently missing. Raising nprobe recovers it at proportionally more work.' },
+    { front: 'HNSW in one line', back: 'A layered graph: sparse at the top so edges span long distances, dense at the bottom for fine steps. Greedy-walk each layer, hand the landing point down. Steps grow like the log of the collection size.' },
+    { front: 'Metadata filtering, three strategies', back: 'Filter after (fast, empties out under strict filters), filter first then exact scan (correct, only for very restrictive filters), filter during the walk (what real vector DBs do, degrades quietly as the filter tightens).' },
+    { front: 'One index, one model', back: 'Cosine between vectors from two different embedding models returns a normal-looking number and ranks nothing correctly. Changing the model means re-embedding every document and every query.' },
   ],
-  mindmapMarkdown: `- Embeddings, Vector DBs & Semantic Search
-  - Modern text embeddings
-    - encoder + mean pooling or CLS token
-    - must be TRAINED for it (contrastive) — raw LLM states are not enough
-    - d = 384 / 768 / 1536: quality vs storage, RAM, query cost (Matryoshka truncates)
-    - asymmetric: query vs passage prefixes, or two encoders (DPR)
-  - Cosine similarity
-    - angle only — magnitude tracks length, so long docs win on raw dot product
-    - normalize once at index time -> cosine IS the inner product (math: dot product module)
-  - Chunking (the high-variance decision)
-    - fixed-size + 10-20% overlap; sentence/paragraph-aware is the sane default
-    - semantic: split where the topic shifts
-    - hierarchical/parent-doc: embed small, return the parent
-    - tension: small = precise, no context; big = context, diluted
-    - respect structure (headings, code, tables); carry the heading path
-    - metadata: source, section, date, permissions -> filtering = correctness + security
-  - Vector search at scale
-    - exact k-NN: O(n·d), fine to ~100k vectors
-    - ANN: a few % recall for orders of magnitude of speed
-    - HNSW: layered small-world graph, greedy descent, knobs M / ef
-    - IVF: cluster, probe the nprobe nearest buckets
-    - PQ: codebook compression, composes with IVF/HNSW
-    - tune recall@k against a brute-force ground truth
-  - Hybrid search
-    - dense misses exact terms; BM25 misses paraphrase
-    - fuse with RRF: 1/(k+rank), k≈60 — ranks need no calibration
-    - biggest retrieval win per hour of work
-  - The landscape
-    - start with pgvector (in your Postgres) or FAISS (in-process)
-    - scale out: Qdrant / Weaviate / Milvus / Pinecone
-  - Operations
-    - index is model-specific -> model change = full re-embed
-    - build time and RAM: HNSW often exceeds the raw vectors
-    - deletes are tombstones until rebuild; staleness is a correctness bug
-  - Next: RAG — retrieve -> rerank (cross-encoder) -> generate with citations`,
+  mindmapMarkdown: `- Search at scale
+  - The problem
+    - 10,000,000 docs x 768 numbers
+    - 7.68 billion operations per query
+    - measured: minutes in pure Python
+  - Brute-force / exact search
+    - score every document, sort, take top k
+    - always correct, cost grows with the collection
+    - it is the yardstick for recall
+  - Index
+    - built in advance, lets a query skip most documents
+    - a vector database = storage + index + filters
+    - no index is both fast and guaranteed correct
+  - ANN and recall
+    - returns most of the true neighbours, not all
+    - recall@10 = overlap with the exact top 10
+    - 0.95 is where the cost curve bends
+  - IVF
+    - centroids, buckets, nprobe
+    - 4,096 buckets, nprobe=8: 424x less work
+    - loses neighbours near bucket boundaries
+  - HNSW
+    - graph of nearest-neighbour edges
+    - greedy walk: step to the closest neighbour
+    - sparse top layer jumps, dense bottom layer refines
+    - efSearch = how many candidates tracked at once
+  - Metadata filtering
+    - filter after / filter first / filter during
+    - restrictive filter = plain scan
+    - dominant filter value = its own index
+  - Classic mistakes
+    - treating ANN output as a complete set
+    - mixing two embedding models in one index
+  - Taught elsewhere
+    - what an embedding is: DL Embeddings: Meaning as Vectors
+    - chunking and reranking: RAG End to End`,
 }
 
 export default m

@@ -4,90 +4,249 @@ const m: Module = {
   id: 'genai-l2-inference-optimization',
   subjectId: 'genai',
   level: 2,
-  title: 'Inference: KV-Cache, Quantization & Serving',
+  title: 'Serving a Language Model: What Each Token Costs',
   whyItMatters:
-    'Training a model is a one-time bill; serving it is the bill that arrives every month. "Do the KV-cache math" is the single most-asked GenAI systems question, because it separates people who have read about transformers from people who have watched one fall over at batch size 33. This module gives you the arithmetic, the four fixes every serving stack uses (GQA, paged attention, continuous batching, quantization), and the honest numbers to defend each one.',
-  estMinutes: 55,
+    'A language model that answers one question for you on a laptop is a different engineering problem from the same model answering a thousand questions at once. This module works out, with plain arithmetic, what producing a single word actually costs in work and in memory. By the end you will be able to take a model description and a GPU, and say how many people can talk to it at the same time, and why.',
+  assumes: [
+    'You have seen a Python for loop, a list, and a function',
+    'You know what a byte is, and that a gigabyte is about a billion bytes',
+    'You know roughly what a neural network is: a big pile of numbers, called weights, that turns an input into an output',
+    'No transformer knowledge is needed. Every term used here is defined here.',
+  ],
+  estMinutes: 34,
   sections: [
     {
       type: 'intuition',
-      title: 'Why generation is slow — and it is not the reason you think',
-      md: `Training a 7B model touches 10²³ FLOPs. Generating 100 tokens from it touches almost nothing. Yet generation feels slow. Two reasons, and only one is obvious.
+      title: 'What it costs to produce one word',
+      md: `**Inference** means using a trained model to produce answers. Not training it, not changing it — just running it. That is what a serving system does all day.
 
-- **It is sequential by construction.** Token n+1 needs token n as input. You cannot generate word 50 before word 49 exists. No amount of GPU parallelism removes a dependency chain.
-- **Each step is memory-bandwidth bound, not compute bound.** To produce ONE token you must read *every weight in the model* out of HBM into the compute units. 13 GB of weights, streamed, for one word.
-- The arithmetic is embarrassing: you read ~13 GB and do ~14 GFLOPs of useful work. That is about **1 FLOP per byte read**. An A100 is happy at ~150 FLOPs per byte — you are running at well under 1% of its compute.
-- So the GPU sits idle waiting for memory. The tensor cores are a Ferrari in a traffic jam.
-- **The consequence that runs everything else in this module:** if you are bandwidth bound, the way to go faster is to *move fewer bytes* — smaller weights (quantization), smaller cache (GQA), or more useful tokens per byte moved (batching, speculative decoding).`,
+A language model produces text one piece at a time. Each piece is called a **token**, roughly a word or part of a word. To produce one token, the model runs once, top to bottom, over everything it has seen so far. One run like that is called a **forward pass**.
+
+- You send a prompt of 200 tokens. The model produces a 300-token answer.
+- That answer is not one run of the model. It is **300 separate runs**, one per token produced.
+- Run 1 reads the 200 prompt tokens and produces token 201.
+- Run 2 reads 201 tokens and produces token 202. Run 3 reads 202 tokens. And so on.
+- The model cannot skip ahead. Token 202 depends on token 201 existing first, so the 300 runs happen strictly one after another.
+
+Now count the total reading. Run 1 reads 200 tokens, run 2 reads 201, up to run 300 reading 499. Add those up and you get about 105,000 token-readings to produce 300 tokens. You did roughly 350 times more reading than the answer is long, and almost all of it was re-reading the same prompt over and over.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Count the waste before fixing it',
+      code: `prompt_tokens = 200
+generated = 300
+no_cache = 0
+for step in range(generated):
+    tokens_read = prompt_tokens + step
+    no_cache = no_cache + tokens_read
+with_cache = generated
+print(no_cache)
+print(with_cache)
+print(round(no_cache / with_cache, 1))
+
+# ---- real output ----
+# 104850
+# 300
+# 349.5`,
+      annotations: {
+        1: 'The prompt is 200 tokens long. A plain integer.',
+        2: 'The answer will be 300 tokens long, so the model runs 300 times.',
+        3: 'A running total, starting at zero. We will add the reading done by each run.',
+        4: 'range(300) produces 0, 1, 2, ... 299 — one number per run. step is which run we are on.',
+        5: 'On run number step, the model has the 200 prompt tokens plus the step tokens already generated. So it reads prompt_tokens + step tokens.',
+        6: 'Add this run\'s reading to the total. Nothing clever: just a sum.',
+        7: 'The alternative we are about to build: process each token once, so 300 runs read 300 new tokens in total.',
+        8: 'Prints 104850 — the token-readings done when nothing is remembered between runs.',
+        9: 'Prints 300 — the token-readings done when each token is processed once.',
+        10: 'Prints 349.5. Re-reading everything costs about 350 times as much work as remembering it.',
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'The fix: keep what you already computed',
+      md: `Here is the one fact that makes the waste avoidable. When the model reads a token, it turns that token into two vectors — lists of numbers — called the **key** and the **value** of that token. Their job is to let later tokens look back at this one: the key is what the token can be found by, the value is what is returned when it is found.
+
+- Those two vectors depend only on the token itself and on the model weights. Neither of those changes while the answer is being written.
+- So the key and value of prompt token 7 computed during run 1 are **bit for bit identical** to the ones run 300 would compute.
+- Recomputing them 300 times is pure waste.
+
+The **KV cache** is simply the store where you keep them. Compute each token\'s key and value once, park them in GPU memory, and every later run reuses them. Each run then only has to compute the key and value of the **one** new token.
+
+That is the whole idea, and it turns 104,850 units of reading into 300. Nothing is ever thrown away inside one answer: the run that produces token 500 still needs to look back at token 1. There is no "least recently used" eviction here — the cache only grows until the answer ends.
+
+You did not remove the cost. You **moved** it from compute into memory. The rest of this module is about paying that memory bill.`,
     },
     {
       type: 'math',
       intro:
-        'The single-sequence speed ceiling, from bandwidth alone. No model architecture in this formula — that is the point.',
+        'How much memory one token takes in the cache. Build it from the pieces, then put numbers in.',
       latex: [
-        '\\text{tokens/sec} \\;\\lesssim\\; \\frac{\\text{HBM bandwidth}}{\\text{bytes read per forward pass}}',
-        '\\text{7B in fp16 on an A100 80GB: } \\quad \\frac{2.0\\;\\text{TB/s}}{13\\;\\text{GB}} \\;\\approx\\; 154\\;\\text{tok/s for ONE sequence}',
-        '\\text{Same model in int4: } \\quad \\frac{2.0\\;\\text{TB/s}}{3.3\\;\\text{GB}} \\;\\approx\\; 600\\;\\text{tok/s} \\quad (\\text{4x fewer bytes} \\Rightarrow \\text{4x faster decode})',
-        '\\text{Arithmetic intensity of decode} \\;\\approx\\; 2 \\;\\text{FLOP/byte} \\;\\ll\\; \\text{hardware ratio} \\;\\approx\\; 150 \\;\\text{FLOP/byte}',
+        '\\text{bytes per token} \\;=\\; 2 \\;\\times\\; L \\;\\times\\; H \\;\\times\\; d \\;\\times\\; b',
+        '2 = \\text{one key AND one value};\\quad L = \\text{layers};\\quad H = \\text{key/value heads};\\quad d = \\text{numbers per head};\\quad b = \\text{bytes per number}',
+        '2 \\times 32 \\times 32 \\times 128 \\times 2 \\;=\\; 524{,}288 \\text{ bytes} \\;=\\; 0.5\\;\\text{MB per token}',
+        '4096 \\text{ tokens} \\;\\Rightarrow\\; 2\\;\\text{GB for one conversation};\\qquad 32 \\text{ conversations} \\;\\Rightarrow\\; 64\\;\\text{GB}',
       ],
     },
     {
       type: 'intuition',
-      title: 'Two phases, two completely different machines',
-      md: `Every request runs through the same model twice over, in two modes that behave nothing alike. Say these names in interviews.
+      title: 'Reading that formula out loud',
+      md: `Five pieces, and each one is a plain count. Take a common open model shape: 32 layers, 32 heads, 128 numbers per head, and each number stored in 2 bytes.
 
-- **Prefill** — the entire prompt goes through in ONE parallel forward pass. All n prompt tokens at once, big matmuls, tensor cores saturated. This phase is **compute bound**.
-- Prefill decides **time-to-first-token (TTFT)** — how long the user stares at a blank screen. Long prompts make TTFT worse *quadratically* (attention is O(n²) here).
-- **Decode** — one token at a time, forever. Each step is a tiny matrix-vector product against the whole weight set. This phase is **memory-bandwidth bound**.
-- Decode decides **inter-token latency** — how fast text appears once it starts, i.e. tokens per second.
-- They want opposite things. Prefill wants small batches (it is already saturating compute). Decode wants huge batches (it is wasting bandwidth on one sequence). Serving systems that split them onto different GPUs ("disaggregated prefill") exist for exactly this reason.
-- Practical tell: a chatbot with a 30k-token system prompt has a TTFT problem. A code assistant streaming 800 tokens has a decode problem. Different fixes.`,
+- **Layers.** The model is a stack of identical blocks — 32 of them here. Every block computes its own key and value for every token, so everything gets multiplied by 32.
+- **Heads.** Inside a block the looking-back is done by several independent copies called heads, 32 here. Each head has its own key and value.
+- **Numbers per head.** Each key is a list of 128 numbers. So is each value.
+- **Bytes per number.** A number stored at ordinary precision takes 2 bytes.
+- **The 2 at the front.** One key and one value per token. Not three — the third vector, the query, is used once by the current token and thrown away, so it is never cached.
+
+Multiply: 2 x 32 x 32 x 128 x 2 = 524,288 bytes, which is exactly **0.5 MB for one token**. That is per token, per conversation. Ten thousand tokens of chat history is 5 GB. This is the number that ends up deciding how many users fit on a card.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'The cache arithmetic, in code',
+      code: `layers = 32
+kv_heads = 32
+head_dim = 128
+bytes_per_number = 2
+per_token = 2 * layers * kv_heads * head_dim * bytes_per_number
+print(per_token)
+print(per_token / (1024 * 1024))
+seq = 4096
+print(per_token * seq / (1024 ** 3))
+print(per_token * seq * 32 / (1024 ** 3))
+
+# ---- real output ----
+# 524288
+# 0.5
+# 2.0
+# 64.0`,
+      annotations: {
+        1: 'The stack is 32 blocks deep, and every block stores its own keys and values.',
+        2: 'Each block has 32 heads that store a key and a value.',
+        3: 'Each key is 128 numbers long, and so is each value.',
+        4: 'Two bytes per number. Change this to 1 and the whole cache halves.',
+        5: 'The formula. The leading 2 is "a key and a value", not a fudge factor.',
+        6: 'Prints 524288 — the raw byte count for a single token.',
+        7: '1024 * 1024 is one megabyte in bytes, so this converts. Prints 0.5.',
+        8: 'A 4096-token context: the longest conversation the model will hold.',
+        9: '1024 ** 3 is one gigabyte. ** is Python\'s power operator. Prints 2.0 GB for one full-length conversation.',
+        10: 'Thirty-two users at full context. Prints 64.0 GB — and that is only their conversation history.',
+      },
+    },
+    {
+      type: 'note',
+      md: 'Compare 64 GB of cache against the model itself. Seven billion weights at 2 bytes each is about 13 GB, and that 13 GB is paid **once** no matter how many users you have. The cache is paid **per user, per token**. So "how big is the model" is the easy question and "how much memory does one more user cost" is the one that decides whether your service stays up.',
     },
     {
       type: 'intuition',
-      title: 'The KV-cache: stop redoing the same work',
-      md: `Attention at step n needs the Key and Value vectors of every token so far. Those vectors depend only on the token and the weights — **they never change once computed**.
+      title: 'Two phases that behave nothing alike',
+      md: `A request runs through the model in two distinct stages, and they have opposite bottlenecks. Two more terms first, both plain.
 
-- Without a cache: to generate token n, you re-run the whole prompt plus everything generated so far through every layer. Cost of one step is O(n). Cost of a full sequence is **O(n²)**.
-- With a cache: keep every past token's K and V in GPU memory. Each new step computes K and V for **one** token, appends them, and attends over the stored ones. Cost of one step is O(n), cost of the sequence is O(n²) in attention but the *weight matmuls* drop from O(n²) to O(n).
-- Concretely at 1000 generated tokens, the no-cache version does roughly 500× the projection work. Nobody serves without a KV-cache. It is not an optimization, it is the baseline.
-- The catch, and the whole rest of this module: **you traded compute for memory.** The cache is now the biggest tensor in your GPU.
-- Note what is NOT cached: Q. Each step's query is fresh, used once, and thrown away. Only K and V are reused, which is exactly why the "2" in the memory formula is a 2 and not a 3.`,
+- **Compute-bound** means the chips are busy doing arithmetic and the limit is how fast they multiply.
+- **Memory-bandwidth-bound** means the chips are mostly waiting for numbers to arrive from memory. Bandwidth is how many bytes per second can be moved out of the GPU\'s memory into the part that does the arithmetic.
+
+Now the two stages.
+
+- **Prefill** is the first pass: the whole prompt goes through the model at once. All 200 tokens are independent at this point, so they are processed in parallel, as one large multiplication. The chips are saturated. Prefill is **compute-bound**.
+- **Decode** is everything after: one token per pass, forever. Each pass does a tiny amount of arithmetic, but to do it the GPU must still read **every weight in the model** — all 13 GB — out of memory. Thirteen gigabytes moved to produce one word. Decode is **memory-bandwidth-bound**.
+
+The size of the mismatch: reading 13 GB at 2 TB/s takes about 6.5 milliseconds, which caps you at roughly 150 tokens per second for a single conversation no matter how fast the chips are. The arithmetic in that pass would have taken a small fraction of that time. The chips are idle, waiting.
+
+This is why the distinction drives every serving decision. If the limit is bytes moved, then going faster means moving fewer bytes — smaller weights, smaller cache — or getting more useful output from each byte you already moved.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Time to first token, latency, throughput',
+      md: `Three numbers you will be asked to trade against each other. All three are plain measurements.
+
+- **Time to first token (TTFT)** — how long the user stares at nothing before the first word appears. That is prefill, so it is set by prompt length. A 30,000-token prompt has a TTFT problem; a 20-token prompt does not.
+- **Latency** here means per-request speed: once text starts, how fast the next word arrives. That is decode. About 30 tokens per second matches comfortable reading speed.
+- **Throughput** means total output across all users, measured in tokens per second for the whole machine. This is the number your bill is proportional to.
+
+They are not the same number and they are often in conflict. One user getting 150 tokens per second is great latency and terrible throughput, because you moved 13 GB of weights and got one token out of it.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Batching: one weight read, many tokens',
+      md: `**Batching** means running several requests through the same forward pass together.
+
+Here is why it wins. In decode you read all 13 GB of weights to produce one token for one user. If eight users are mid-answer, you can run all eight through the same pass. The weights are read **once** and produce **eight** tokens. The bytes moved did not change; the useful output went up eight times.
+
+- That is close to free throughput while decode is bandwidth-bound, which it is at small batch sizes.
+- It stops being free eventually. Pile in enough requests and the arithmetic per pass grows until the chips, not the memory, are the limit. Past that point more batching buys nothing.
+- And it costs the individual user. Each pass now does more work, so each pass takes longer, so **your** next word arrives later than it would have if you were alone on the machine.
+- That is the core trade: batching raises throughput (cheaper per token, good for you) and raises per-user latency (slower text, bad for the user). You pick a batch size by raising it until per-user speed hits the slowest you are willing to ship.
+
+**Continuous batching** fixes an obvious waste in the simple version. If you form a batch of eight and run it until every one finishes, the user who wanted a 15-token answer sits in the batch doing nothing while a 900-token essay finishes next to them. Continuous batching instead re-forms the batch at **every single step**: any request that just finished is dropped, and a waiting request takes its slot immediately. On traffic with mixed answer lengths this is the single largest throughput win available, and it changes no output at all.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Quantisation: fewer bits per weight',
+      md: `**Quantisation** means storing each weight in fewer bits than the usual 16.
+
+A weight is currently a 16-bit number: 2 bytes, able to represent a wide range of values very finely. The observation behind quantisation is that the model does not need that fineness. So you pick a range, chop it into steps, and store each weight as which step it lands on.
+
+- **8-bit** gives you 256 possible steps per weight. One byte instead of two: the weights halve.
+- **4-bit** gives you 16 steps per weight. Half a byte: the weights are one quarter the size.
+- For a 7-billion-weight model: 7e9 x 2 = 14 GB at 16-bit, 7 GB at 8-bit, 3.5 GB at 4-bit. In the units a GPU actually reports, 13.0 GB, 6.5 GB and 3.3 GB.
+- Because decode is bandwidth-bound, fewer bytes of weights means less to read per token, so the model also gets **faster**, not just smaller.
+
+The honest cost: rounding every weight to a coarse grid changes the model\'s outputs. At 8 bits the change is usually too small to measure on real tasks. At 4 bits it is small but real — you should expect a slight quality drop and you should check it on your own examples rather than trusting a general claim. Below 4 bits quality falls apart quickly.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Does quantising the weights buy concurrency?',
+      code: `GB = 1024 ** 3
+card = 80 * GB
+per_seq = 2 * 32 * 32 * 128 * 4096 * 2
+sizes = [("fp16", 2.0), ("int8", 1.0), ("int4", 0.5)]
+for name, bytes_each in sizes:
+    weights = 7e9 * bytes_each
+    free = card - weights
+    print(name, round(weights / GB, 1), round(free / GB, 1), int(free // per_seq))
+
+# ---- real output ----
+# fp16 13.0 67.0 33
+# int8 6.5 73.5 36
+# int4 3.3 76.7 38`,
+      annotations: {
+        1: '1024 ** 3 bytes is one gigabyte, the unit a GPU reports free memory in.',
+        2: 'The card has 80 GB of memory in total. Everything must fit here: weights and caches together.',
+        3: 'Cache bytes for one full 4096-token conversation, from the formula above: 2 GB.',
+        4: 'A list of pairs. Each pair is a name and how many bytes one weight takes at that precision — 2 bytes at 16-bit, 1 at 8-bit, half a byte at 4-bit.',
+        5: 'Looping over pairs unpacks each one into two variables at once: name gets the first item, bytes_each the second.',
+        6: '7e9 is 7 billion written in scientific notation. Times the bytes per weight gives the total weight memory.',
+        7: 'Whatever the weights do not use is available for conversations.',
+        8: '// is floor division: how many whole 2 GB conversations fit in the free space. Prints 33, 36, 38.',
+      },
     },
     {
       type: 'note',
-      md: 'The stepper below is an **LRU cache**, not a KV-cache — be honest about that when it comes up. A KV-cache never evicts *within* a sequence (every past token is still needed by attention), so there is no LRU policy inside one request. What transfers exactly is the shape of the tradeoff: a cache turns repeated work into memory pressure, capacity decides how much work you skip, and when the working set exceeds capacity you thrash. Watch capacity 3 versus 4 on the same request stream. In a real LLM server the same cliff appears at the *sequence* level — vLLM preempts and later recomputes whole requests when the cache fills, which is a miss costing thousands of tokens.',
-    },
-    { type: 'visual', component: 'CacheSimulator', props: { capacity: 3 } },
-    {
-      type: 'math',
-      intro:
-        'The formula to be able to write from memory. Every serving capacity question is this line plus division.',
-      latex: [
-        '\\text{KV bytes} \\;=\\; 2 \\;\\times\\; L \\;\\times\\; H_{kv} \\;\\times\\; d_{head} \\;\\times\\; n \\;\\times\\; B \\;\\times\\; \\text{dtype bytes}',
-        '\\text{where } 2 = (K \\text{ and } V),\\; L = \\text{layers},\\; H_{kv} = \\text{KV heads},\\; n = \\text{seq len},\\; B = \\text{batch}',
-        '\\text{Llama-7B-style: } \\; 2 \\times 32 \\times 32 \\times 128 \\times 2\\,\\text{B} \\;=\\; 524{,}288 \\;=\\; \\mathbf{0.5\\;MB\\;per\\;token}',
-        'n = 4096 \\;\\Rightarrow\\; 2\\;\\text{GB per sequence} \\qquad B = 32 \\;\\Rightarrow\\; 64\\;\\text{GB} \\;>\\; 13\\;\\text{GB of weights}',
-      ],
+      md: 'Look hard at that output. Cutting the weights from 13 GB to 3.3 GB — a four-fold saving — bought you **five extra users**, from 33 to 38. The reason is that the weights were never the big number here; 32 conversations of cache are 64 GB against 13 GB of weights. Quantisation makes decode faster and lets the model fit on a smaller card, both real wins. It does almost nothing for concurrency, because concurrency is a cache problem. Fixing concurrency means shrinking the cache: fewer key/value heads in the architecture, or storing the cache itself at 8-bit.',
     },
     {
-      type: 'note',
-      md: 'Read that last line again, because it is the interview point. The **weights are a fixed cost you pay once**; the **cache is a per-user cost that grows with every token they type and every token you generate**. On an 80 GB card, weights take 13 GB and the remaining 67 GB is the entire business — it is what decides how many people can talk to your model at the same time. This is why "how much memory does the model need" is a beginner question and "how much memory per concurrent request" is the real one.',
+      type: 'intuition',
+      title: 'Speculative decoding, briefly',
+      md: `One more idea, because it follows directly from the bandwidth argument. Reading 13 GB of weights to produce one token is wasteful — and reading them to **check five proposed tokens** costs exactly the same, because all five can be checked in one parallel pass.
+
+So: let a small, cheap model guess the next few tokens. Then run the big model once over the prompt plus those guesses, and see which guesses it agrees with. Keep the agreed prefix, throw away the rest, and repeat. On predictable text the small model is right most of the time and you get several tokens per big-model pass. On unusual text it is rarely right and you gain little. The accept-or-reject rule is designed so the text you end up with has exactly the same distribution as the big model alone would have produced — this is a speed change, not a quality trade.`,
     },
     {
       type: 'visual',
       component: 'PointerBoxDiagram',
       props: {
-        title: 'The KV-cache, token by token',
-        notice: 'Left = what this step computes. Right = what is permanently parked in HBM. The right column only ever grows.',
-        leftLabel: 'This step',
-        rightLabel: 'KV-cache in HBM',
+        title: 'One request, and what accumulates in memory',
+        notice: 'Left = what this pass computes. Right = what is parked in GPU memory. The right column only grows.',
+        leftLabel: 'This pass',
+        rightLabel: 'KV cache in GPU memory',
         frames: [
           {
-            note: 'PREFILL. The whole 4-token prompt goes through the model in ONE parallel pass — big matmuls, compute bound. This is the phase your time-to-first-token measures. Every layer writes one K and one V vector per token.',
+            note: 'PREFILL. The whole 4-token prompt goes through in ONE pass, all four tokens in parallel. This is the phase the user experiences as time to first token. Every layer writes one key and one value per token.',
             stack: [
-              { name: 'phase', value: 'PREFILL (1 pass)' },
-              { name: 'tokens in', value: '4 (parallel)' },
+              { name: 'phase', value: 'prefill (1 pass)' },
+              { name: 'tokens in', value: '4, in parallel' },
               { name: 'cache size', value: '4 x 0.5 MB = 2 MB' },
             ],
             heap: [
@@ -98,39 +257,22 @@ const m: Module = {
             ],
           },
           {
-            note: 'DECODE step 1. One token in, one token out. Its query attends over the 4 stored pairs plus its own — the prompt is never re-computed. This step reads all 13 GB of weights to produce one word: bandwidth bound.',
+            note: 'DECODE, first pass. One token in, one token out. It looks back at the 4 stored pairs; the prompt is never recomputed. This pass reads all 13 GB of weights to produce one word.',
             stack: [
-              { name: 'phase', value: 'DECODE step 1' },
+              { name: 'phase', value: 'decode pass 1' },
               { name: 'token out', value: '"the"' },
               { name: 'just written', to: 'k5' },
               { name: 'cache size', value: '2.5 MB' },
             ],
             heap: [
-              { id: 'k1', value: 'K, V', label: 'tok 1  "The"' },
-              { id: 'k2', value: 'K, V', label: 'tok 2  "cat"' },
-              { id: 'k3', value: 'K, V', label: 'tok 3  "sat"' },
-              { id: 'k4', value: 'K, V', label: 'tok 4  "on"' },
+              { id: 'k1', value: 'K, V', label: 'tok 1-4  (prompt)' },
               { id: 'k5', value: 'K, V', label: 'tok 5  "the"  (new)' },
             ],
           },
           {
-            note: 'DECODE step 2. Identical work, one more row. Notice the pattern: compute is CONSTANT per step, memory grows by exactly 0.5 MB per step. Nothing is ever evicted — attention at step 500 still needs token 1.',
+            note: 'DECODE, pass 200. Notice the pattern: the arithmetic per pass is CONSTANT, the memory grows by exactly 0.5 MB per pass. Nothing is evicted — pass 200 still looks back at token 1.',
             stack: [
-              { name: 'phase', value: 'DECODE step 2' },
-              { name: 'token out', value: '"mat"' },
-              { name: 'just written', to: 'k6' },
-              { name: 'cache size', value: '3.0 MB' },
-            ],
-            heap: [
-              { id: 'k1', value: 'K, V', label: 'tok 1-4  (prompt)' },
-              { id: 'k5', value: 'K, V', label: 'tok 5  "the"' },
-              { id: 'k6', value: 'K, V', label: 'tok 6  "mat"  (new)' },
-            ],
-          },
-          {
-            note: 'DECODE step 200. 204 tokens cached = 102 MB for ONE user. Still fine. But the growth is linear and unbounded until the sequence ends, and you are serving more than one person.',
-            stack: [
-              { name: 'phase', value: 'DECODE step 200' },
+              { name: 'phase', value: 'decode pass 200' },
               { name: 'tokens cached', value: '204' },
               { name: 'cache size', value: '204 x 0.5 = 102 MB' },
             ],
@@ -141,465 +283,274 @@ const m: Module = {
             ],
           },
           {
-            note: 'Fill the 4096-token context window: 2 GB for one sequence. That is 15% of the model weights, spent on a single conversation. Now multiply by your users.',
+            note: 'One conversation filling the whole 4096-token context: 2 GB. That is one user holding more memory than a sixth of the model itself.',
             stack: [
               { name: 'phase', value: 'context full' },
               { name: 'tokens cached', value: '4096' },
               { name: 'cache size', value: '2.0 GB', danger: true },
             ],
             heap: [
-              { id: 'full', value: '4096 x 0.5 MB', label: 'one sequence = 2.0 GB', danger: true },
-              { id: 'w', value: '13 GB', label: 'model weights (fixed)' },
+              { id: 'full', value: '4096 x 0.5 MB', label: 'one conversation = 2.0 GB', danger: true },
+              { id: 'w', value: '13 GB', label: 'model weights (paid once)' },
             ],
           },
           {
-            note: 'Batch of 32 users, each at 4096 tokens: 64 GB of cache against 13 GB of weights. It does not fit on an 80 GB card. THIS is the number that caps your concurrency — not the model size.',
+            note: 'Thirty-two users at full context: 64 GB of cache against 13 GB of weights, on an 80 GB card. It does not fit. THIS is what caps how many people can talk to your model at once.',
             stack: [
-              { name: 'batch', value: '32 sequences' },
+              { name: 'users', value: '32' },
               { name: 'weights', value: '13 GB' },
               { name: 'cache', value: '64 GB', danger: true },
               { name: 'total', value: '77 GB on an 80 GB card', danger: true },
             ],
             heap: [
-              { id: 'cache32', value: '32 x 2.0 GB = 64 GB', label: 'KV-cache', danger: true },
-              { id: 'w', value: '13 GB', label: 'model weights (fixed)' },
-              { id: 'act', value: 'activations, fragmentation, CUDA ctx', label: 'the rest — and there is none left', danger: true },
-            ],
-          },
-          {
-            note: 'The fix: GQA with 8 KV heads instead of 32. Query heads stay at 32, so quality barely moves; the cache is 4x smaller. Same 32 users now cost 16 GB and you have room to grow the batch — which is also what makes decode bandwidth-efficient.',
-            stack: [
-              { name: 'KV heads', value: '8 (was 32)' },
-              { name: 'per token', value: '0.125 MB (was 0.5)' },
-              { name: 'batch 32 cache', value: '16 GB' },
-              { name: 'headroom', value: '80 - 13 - 16 = 51 GB' },
-            ],
-            heap: [
-              { id: 'cache32g', value: '32 x 0.5 GB = 16 GB', label: 'KV-cache with GQA-8' },
-              { id: 'w', value: '13 GB', label: 'model weights (fixed)' },
-              { id: 'free', value: '51 GB free', label: 'room for ~100 more sequences' },
+              { id: 'cache32', value: '32 x 2.0 GB = 64 GB', label: 'KV cache', danger: true },
+              { id: 'w', value: '13 GB', label: 'model weights' },
+              { id: 'act', value: 'scratch space, fragmentation', label: 'the rest — and there is none left', danger: true },
             ],
           },
         ],
       },
     },
     {
-      type: 'code',
-      lang: 'python',
-      title: 'The KV-cache calculator — the arithmetic you will be asked to do on a whiteboard',
-      code: `GB = 1024 ** 3          # binary GB (GiB) — the unit nvidia-smi reports
-MB = 1024 ** 2
+      type: 'intuition',
+      title: 'Worked case: size one machine, by hand',
+      md: `A document-assistant product. One GPU card with 80 GB. A 7-billion-weight model, 32 layers, 32 key/value heads, 128 numbers per head, 16-bit. Average conversation: a 3,000-token document pasted in, plus a 1,000-token answer, so 4,000 tokens live at the end. Work it out in order.
 
-def kv_bytes(layers, kv_heads, head_dim, seq, batch, dtype_bytes):
-    # the 2 = one K vector AND one V vector, per token, per layer
-    return 2 * layers * kv_heads * head_dim * seq * batch * dtype_bytes
+1. **Weights.** 7,000,000,000 weights x 2 bytes = 14,000,000,000 bytes. Divided by 1024 three times, that is **13.0 GB**. Paid once.
+2. **Scratch space.** Every pass needs working room for intermediate results, plus the GPU driver\'s own overhead. Reserve **5 GB**. Guessing zero here is how you get an out-of-memory error at 3 a.m.
+3. **What is left for conversations.** 80 - 13 - 5 = **62 GB**.
+4. **Cost of one conversation.** 0.5 MB per token x 4,000 tokens = 2,000 MB = **1.95 GB**. Call it 2 GB.
+5. **Concurrent conversations.** 62 / 2 = **31**.
+6. **Sanity-check against speed.** One card produces on the order of 2,000 tokens per second in total when the batch is full. Each user reading along needs about 30 tokens per second. 2,000 / 30 = about **66 users**.
 
-# Llama-7B-style: 32 layers, 32 heads, head_dim 128, fp16 (2 bytes/number)
-L, H, D, DT = 32, 32, 128, 2
-
-per_token = kv_bytes(L, H, D, seq=1, batch=1, dtype_bytes=DT)
-print(f"per token, per sequence : {per_token/MB:.3f} MB")
-print(f"4096-token context, b=1 : {kv_bytes(L,H,D,4096,1,DT)/GB:.2f} GB")
-print(f"4096-token context, b=32: {kv_bytes(L,H,D,4096,32,DT)/GB:.2f} GB")
-
-# Weights are FIXED; the cache is what grows with traffic.
-weights = 7e9 * DT
-print(f"\\nweights (7B, fp16)      : {weights/GB:.1f} GB")
-free = 80 * GB - weights                      # one 80 GB A100/H100
-print(f"free on an 80 GB card   : {free/GB:.1f} GB")
-print(f"-> max 4096-tok seqs    : {int(free // kv_bytes(L,H,D,4096,1,DT))} concurrent")
-
-# GQA / MQA: share K and V across query heads. Query heads stay 32.
-print()
-for name, kvh in [("MHA  (32 kv heads)", 32), ("GQA-8 (8 kv heads)", 8), ("MQA  (1 kv head )", 1)]:
-    b = kv_bytes(L, kvh, D, 4096, 1, DT)
-    print(f"{name}: {b/GB:6.3f} GB   {32//kvh:2d}x smaller   "
-          f"{int(free // b):4d} concurrent 4096-tok seqs")
-
-# Quantizing the CACHE itself (int8) is orthogonal to quantizing the weights.
-print(f"\\nGQA-8 cache in int8     : {kv_bytes(L,8,D,4096,1,1)/GB:.3f} GB")
-
-# ---------- real output ----------
-# per token, per sequence : 0.500 MB
-# 4096-token context, b=1 : 2.00 GB
-# 4096-token context, b=32: 64.00 GB
-#
-# weights (7B, fp16)      : 13.0 GB
-# free on an 80 GB card   : 67.0 GB
-# -> max 4096-tok seqs    : 33 concurrent
-#
-# MHA  (32 kv heads):  2.000 GB    1x smaller     33 concurrent 4096-tok seqs
-# GQA-8 (8 kv heads):  0.500 GB    4x smaller    133 concurrent 4096-tok seqs
-# MQA  (1 kv head ):  0.062 GB   32x smaller   1071 concurrent 4096-tok seqs
-#
-# GQA-8 cache in int8     : 0.250 GB`,
-      annotations: {
-        1: 'GB here means GiB (1024³), which is what nvidia-smi and every OOM message use. That is why 7B x 2 bytes = 14,000,000,000 bytes prints as 13.0 GB, not 14. Say which unit you mean in an interview and nobody can call you wrong.',
-        6: 'The whole formula, one line. Memorize the shape: 2 (K and V) x layers x KV heads x head_dim x tokens x batch x bytes-per-number. Note what is NOT in it — the FFN, the vocab, the query heads. Only K and V are stored.',
-        9: 'head_dim x heads = 32 x 128 = 4096 = the model dimension. If you are only told d_model, use it directly: heads x head_dim always reconstructs it.',
-        12: '0.5 MB per token is the number worth memorizing for 7B-class models. A 2000-token conversation is 1 GB. A user pasting a 100k-token document does not fit at all.',
-        14: 'Linear in batch, and this is where it bites: 64 GB of cache for 32 users on a card that has 67 GB free after weights. One more user and you OOM.',
-        21: '33 concurrent sequences. That is your entire concurrency budget on a $15,000 GPU — before any of the fixes below. Interviewers love this number because it is so much smaller than people guess.',
-        25: 'GQA-8 keeps 32 QUERY heads but only 8 KV heads: four queries share one key/value pair. MQA is the extreme (1 KV head) and does cost measurable quality, which is why 8 is the industry compromise.',
-        31: 'Cache quantization is a separate lever from weight quantization — int8 KV halves the cache again with modest quality cost, and fp8 KV is now common. Stack it on top of GQA, do not choose between them.',
-      },
+Memory allows 31, speed allows 66, so **memory is the binding constraint at 31 concurrent conversations**. Size the fleet on 31, not 66. And now you know exactly which lever to pull: not weight quantisation, which we showed buys almost nothing here — cache size. Cut the key/value heads from 32 to 8 and one conversation costs 0.5 GB instead of 2 GB, which takes you from 31 concurrent users to about 124 on the same card.`,
     },
     {
       type: 'intuition',
-      title: 'GQA and MQA: the cheapest 4x you will ever get',
-      md: `Multi-head attention gives every query head its own K and V heads. Grouped-query attention notices that the K/V heads are the expensive part and shares them.
+      title: 'The classic mistake: budgeting for the model and forgetting the cache',
+      md: `Here is the wrong answer, done in full, because almost everyone does this one first.
 
-- **MHA**: 32 query heads, 32 KV heads. Full cache.
-- **MQA** (multi-query): 32 query heads, **1** KV head. 32× smaller cache. Measurable quality drop and training instability — the reason it did not win outright.
-- **GQA** (grouped-query): 32 query heads, **8** KV heads, four queries per group. 4× smaller cache, quality within noise of MHA. This is what Llama-2-70B, Llama-3, Mistral and essentially every modern open model ships.
-- The intuition for why it barely hurts: many attention heads learn *similar* retrieval patterns anyway. Sharing what a group of heads looks *for* while keeping what each head *asks* preserves most of the diversity.
-- It also speeds up decode directly: a smaller cache means fewer bytes read per step, and decode is bandwidth bound.
-- Interview line: *"GQA is the only inference optimization that changes the architecture — you must pretrain (or uptrain) with it, you cannot bolt it on at serving time."*`,
+**The reasoning.** "The model is 7 billion weights at 2 bytes, so 13 GB. The card has 80 GB. That leaves 67 GB spare — loads of room. Each request is small, so let\'s allow **200 concurrent users**."
+
+**What happens.** It works perfectly in testing with three people. It works in a load test with short prompts. Then real traffic arrives, people paste in long documents, and the server starts crashing with out-of-memory errors. The fix everyone tries first — restarting with fewer users allowed — makes the crashes rarer without explaining anything.
+
+**Why it is wrong.** The 67 GB is not spare. It is where the KV cache lives, and the cache is charged per user **and** per token. At 0.5 MB per token, 200 users each holding 4,000 tokens want 200 x 2 GB = **400 GB**. You budgeted for 80. The crash was never about the model size.
+
+**Why it hid during testing.** In testing, prompts were short. Twenty users with 100-token conversations cost 20 x 50 MB = 1 GB, which fits in anything. The cache bill grows with **conversation length**, and test conversations are always short. The failure appears only when real users paste real documents.
+
+**The right budget.** Memory = weights + scratch space + (users x tokens per user x bytes per token). Solve it for users, not for weights. That is 62 GB / 2 GB = 31 users, not 200. Being off by six times is the difference between a service that stays up and one that does not.`,
     },
     {
       type: 'intuition',
-      title: 'PagedAttention and continuous batching: the two vLLM ideas',
-      md: `Naive serving reserves the *maximum* context per request up front. If your window is 4096 and the user writes 100 tokens, you just wasted 97% of a 2 GB allocation.
+      title: 'Practice problems',
+      md: `Work each one on paper before reading the solution. All of them are the same formula with different numbers.
 
-- **PagedAttention** borrows OS virtual memory: cut the cache into fixed-size **blocks** (say 16 tokens), keep a per-sequence block table, allocate a block only when it fills. Internal waste drops to under one block per sequence.
-- Free bonus: **prefix sharing**. Two requests with the same 2000-token system prompt point at the *same physical blocks*. One copy, refcounted. For agent workloads with huge shared prompts this is enormous.
-- Second bonus: copy-on-write for parallel samples (n=4 completions from one prompt share the prompt's blocks).
-- **Continuous batching** (a.k.a. in-flight batching) fixes the other waste. Static batching runs a batch until the *slowest* sequence finishes; a 20-token answer sits idle waiting for a 900-token one. Continuous batching evicts a finished sequence from the batch at the very next step and admits a waiting request in its slot.
-- This is the single biggest throughput win in real serving — reported gains of 2–4× on mixed-length traffic, and larger the more variable your output lengths are. It costs nothing in quality.
-- Together: paging gives you the memory to hold a big batch, continuous batching keeps that batch full. That is most of what vLLM, TGI and TensorRT-LLM are.`,
+**1.** A model with 40 layers, 40 key/value heads, 128 numbers per head, 16-bit. How much cache does one token take?
+
+**2.** Same model. A user has a 10,000-token conversation open. How much memory is that user holding?
+
+**3.** You store the cache at 8-bit instead of 16-bit. What happens to the answer to problem 2, and what else changes?
+
+**4.** A 13-billion-weight model at 16-bit, on an 80 GB card, 5 GB of scratch space, with the model from problem 1\'s cache shape. How many 10,000-token conversations fit?
+
+**5.** Your service serves 500 requests per second, each producing 20 tokens. A card produces 2,000 tokens per second. How many cards do you need, ignoring memory?`,
     },
     {
       type: 'intuition',
-      title: 'Quantization: fewer bits per number',
-      md: `A weight does not need 32 bits. Store it in fewer and you move fewer bytes — and decode is bandwidth bound, so fewer bytes is *literally* faster, not just smaller.
+      title: 'Practice solutions',
+      md: `**1.** 2 x 40 x 40 x 128 x 2 = 819,200 bytes, which is 0.78 MB per token. Bigger model, bigger per-token bill — layers and heads both went up.
 
-- The ladder for a 7B model: **fp32** 28 GB → **fp16/bf16** 14 GB → **int8** 7 GB → **int4** 3.5 GB. (bf16 over fp16 for training-range safety; same size.)
-- What you buy: memory *and* bandwidth, therefore speed. What you pay: quality, gradually. fp16 is free. int8 is nearly free. int4 is a small, usually acceptable hit. int2 falls apart.
-- The rule of thumb to quote: **4-bit is usually an acceptable quality hit for a 4× memory win** — it is what turns "needs an A100" into "runs on a laptop".
-- **PTQ vs QAT** in one line: post-training quantization compresses a finished model using a small calibration set (minutes, no gradients); quantization-aware training simulates the rounding *during* training so the model learns to tolerate it (better at very low bits, costs a training run).
-- The formats you should be able to name: **GPTQ** (layer-wise second-order PTQ, GPU), **AWQ** (protects the ~1% of salient weight channels, usually a touch better than GPTQ), **GGUF/llama.cpp** (CPU and Apple silicon, the local-inference standard), **bitsandbytes** (drop-in 8-bit/4-bit in Hugging Face, the easy path and the one used for QLoRA).
-- Two honest catches. (1) Activations are harder than weights — outlier channels blow up the scale, which is what LLM.int8() and SmoothQuant address. (2) A 4-bit model can be *slower* than fp16 at large batch sizes, because dequantization is compute and large batches are already compute bound.`,
-    },
-    {
-      type: 'math',
-      intro: 'Quantization is an affine map from floats to integers, chosen per group of weights. That is all it is.',
-      latex: [
-        'q \\;=\\; \\mathrm{round}\\!\\left( \\frac{w}{s} \\right) + z, \\qquad \\hat{w} \\;=\\; s \\,(q - z)',
-        's \\;=\\; \\frac{\\max(w) - \\min(w)}{2^{b} - 1} \\quad (b \\text{ bits}), \\qquad z = \\text{zero-point}',
-        '\\text{Per-tensor } s \\text{ is cheap and bad; per-channel or per-group (64--128 weights) is what makes 4-bit work.}',
-        '\\text{7B model: } 7\\!\\times\\!10^{9} \\times \\tfrac{4\\,\\text{bits}}{8} \\;=\\; 3.5\\;\\text{GB} \\quad \\text{(+ the scales, a few percent)}',
-      ],
+**2.** 819,200 x 10,000 = 8,192,000,000 bytes. Divide by 1024 three times: **7.63 GB** for one user. A single person is now holding more than half of what a 13 GB model weighs. This is why long contexts are expensive.
+
+**3.** Halve it: 0.39 MB per token, **3.81 GB** for that user. You have doubled how many users fit. What else changes: the cache entries are now rounded to a coarser grid, so the model\'s looking-back is slightly less precise and output can shift a little. It also speeds up decode slightly, since the cache is read every pass and there is now half as much of it.
+
+**4.** Weights: 13e9 x 2 = 26,000,000,000 bytes = 24.2 GB. Free: 80 - 24.2 - 5 = 50.8 GB. Each conversation is 7.63 GB from problem 2. 50.8 / 7.63 = **6 conversations**. Six. On an 80 GB card. Long context plus a big model is a brutal combination, and there is no way to be clever about it — the arithmetic is the arithmetic.
+
+**5.** 500 x 20 = 10,000 tokens per second needed. 10,000 / 2,000 = **5 cards** at perfect efficiency. Nobody runs at perfect efficiency, so provision more — the usual reason being that the batch is not always full and traffic is not evenly spread. But 5 is the floor, and if someone claims two cards will do it, this line is the argument.`,
     },
     {
       type: 'intuition',
-      title: 'Speculative decoding: get several tokens per big-model step',
-      md: `The bandwidth argument again: reading 13 GB of weights to produce one token is wasteful, and reading them to *check five* tokens costs the same. So guess first.
+      title: 'Beyond the basics - skip this on your first read',
+      md: `Four extensions, each one a direct consequence of something above.
 
-- A small **draft model** (say 1B, or even an n-gram table) generates k candidate tokens cheaply — it is fast because it is small.
-- The big **target model** runs ONE forward pass over the prompt plus all k drafted tokens *in parallel* (the same trick as prefill), producing its own distribution at each position.
-- A rejection-sampling rule accepts the longest correct prefix and re-samples the first rejected position from a corrected distribution.
-- **Say this clearly: the output distribution is EXACTLY the target model's.** It is not an approximation, not a quality/speed tradeoff. Only speed changes. This is the part interviewers check, because most people assume it must be lossy.
-- The whole speedup hangs on the **acceptance rate α** — how often the draft agrees. High α on predictable text (code, boilerplate, long shared prefixes); low α on creative or unusual text.
-- Sizing: k too small wastes the parallel verify, k too large drafts tokens that will be rejected anyway. k = 4–5 is typical; real systems get 2–3× on friendly workloads.
-- It helps *latency at low batch size*, where you have spare compute. At large batch sizes the GPU is already compute bound and speculation can make throughput **worse** — a genuinely good thing to volunteer.
-- Variants worth naming: **Medusa** (extra prediction heads instead of a separate draft model), **EAGLE**, and prompt-lookup decoding (draft by copying from the prompt — free, and superb for summarization and editing tasks).`,
-    },
-    {
-      type: 'math',
-      intro:
-        'Expected tokens accepted per target-model step, for draft length k and acceptance rate α (each draft token accepted independently with probability α).',
-      latex: [
-        '\\mathbb{E}[\\text{tokens per step}] \\;=\\; \\frac{1 - \\alpha^{\\,k+1}}{1 - \\alpha}',
-        '\\alpha = 0.8,\\; k = 4 \\;\\Rightarrow\\; \\frac{1 - 0.8^{5}}{0.2} = \\frac{0.6723}{0.2} \\approx 3.36 \\;\\text{tokens per big-model pass}',
-        '\\alpha = 0.5,\\; k = 4 \\;\\Rightarrow\\; \\frac{1 - 0.5^{5}}{0.5} = 1.94 \\quad (\\text{barely worth the draft model cost})',
-        '\\text{Net speedup} \\;=\\; \\frac{\\mathbb{E}[\\text{tokens per step}]}{1 + k \\cdot c}, \\quad c = \\frac{\\text{draft cost}}{\\text{target cost}} \\;\\; (\\text{keep } c \\text{ under } 0.05)',
-      ],
-    },
-    {
-      type: 'intuition',
-      title: 'The three numbers you get paged about',
-      md: `Serving has exactly three metrics, they conflict, and knowing which one your product cares about is the whole job.
-
-- **TTFT (time to first token)** — set by prefill. The user's "is it broken?" number. Target under ~500 ms for chat.
-- **ITL / TPOT (inter-token latency)** — set by decode. Must beat reading speed, roughly 30–50 tokens/sec, or streaming looks laggy.
-- **Throughput (total tokens/sec across all users)** — set by batch size. This is what your GPU bill divides by.
-- **The fundamental tradeoff: bigger batch = better throughput, worse per-request latency.** Bigger batches amortize the weight read across more sequences (bandwidth bound, remember), so tokens/sec/GPU climbs — while each individual user waits longer per step and may queue for admission.
-- Pick your side explicitly. Interactive chat: cap the batch, protect p99 latency, accept a worse cost per token. Offline batch jobs (summarizing 10M documents): max the batch, ignore latency entirely, and the cost per token can be 10× lower.
-- **Cost per million tokens** is the business number, and it is just: (GPU $/hour ÷ 3600) ÷ (tokens/sec) × 10⁶. A $2/hr A100 doing 2000 tok/s aggregate = about $0.28 per million tokens. Now you know why API prices look the way they do, and why input tokens are cheaper than output tokens — input is parallel prefill, output is serial decode.`,
-    },
-    {
-      type: 'intuition',
-      title: 'Two architecture notes that are really inference notes',
-      md: `- **MoE (mixture of experts)**: replace the FFN with N experts and a router that sends each token to the top-k (usually 2). Parameter count grows N× while per-token compute grows barely at all — a "1000B" MoE may activate 30B per token. That is the sales pitch.
-- **The MoE catch, and say it unprompted: all experts must be resident in memory.** You do not know which expert a token wants until the router runs, so you cannot page them in. You pay 1000B of *memory* for 30B of *compute*. MoE trades your cheap resource (VRAM capacity) for your expensive one (bandwidth and FLOPs) — great in a datacenter, awful on a laptop. Add expert-parallel communication and load imbalance across experts as the two operational headaches.
-- **Sliding-window attention**: each token attends only to the last w tokens (Mistral: w = 4096), so the KV-cache stops growing and caps at w — bounded memory for unbounded generation, at the cost of direct long-range links (information still travels layer by layer, w tokens per layer).`,
-    },
-    {
-      type: 'note',
-      md: 'How to apply all of it, in order, when someone hands you a slow endpoint. **(1)** Use a real serving engine — vLLM/TGI/TensorRT-LLM — for paged attention and continuous batching; this is free and usually the biggest single jump. **(2)** Pick a GQA model, because it is the only item on this list you cannot retrofit. **(3)** Quantize weights to int8 or int4 (AWQ/GPTQ), and the KV-cache to fp8/int8 if concurrency is the wall. **(4)** Tune batch size against your p99 latency SLO — not against a benchmark. **(5)** Add speculative decoding last, and only if your traffic is low-batch and predictable. Everything above **(5)** is a config change; that ordering is the answer to "how would you cut our inference cost in half".',
+- **Shrinking the cache in the architecture.** The formula multiplies by the number of key/value heads, so build the model with fewer of them. Let 32 query heads share 8 key/value groups: the cache is four times smaller and quality barely moves, because heads tend to look for similar things anyway. This is a training-time decision — you cannot switch it on at serving time.
+- **Paged attention.** Reserving the maximum context per user up front wastes almost all of it when the user writes three lines. Instead, cut the cache into fixed-size blocks and hand out a block only when the previous one fills, exactly like an operating system pages memory. A bonus falls out: two users with the same long system prompt can point at the **same** blocks, so it is stored once.
+- **Prefill and decode want different machines.** Prefill is compute-bound and wants small batches; decode is bandwidth-bound and wants large ones. The cheap fix is to chop a huge prompt into chunks so one giant paste cannot stall everyone else\'s text. The expensive fix is to run prefill and decode on separate pools of GPUs and ship the cache between them.
+- **What a server can evict.** Inside one answer, nothing — every past token is still needed. So eviction happens a level up: when memory runs out the server drops a whole request, frees its blocks, and re-runs its prefill later. Recomputing prefill is usually cheaper than copying gigabytes of cache out to system memory and back.`,
     },
   ],
   quiz: [
     {
-      question: 'During decode (one token at a time, batch size 1), what is the GPU mostly doing?',
+      question: 'Without a KV cache, producing a 300-token answer to a 200-token prompt costs about 105,000 token-readings. Where does that number come from?',
       options: [
-        {
-          text: 'Saturating its tensor cores with large matrix multiplications',
-          explanation: 'That is prefill. In decode the matmuls are matrix-VECTOR products — tiny compute, and the tensor cores are mostly idle.',
-        },
-        {
-          text: 'Waiting on HBM while it streams every weight in the model to produce one token',
-          explanation:
-            'Correct. Decode is memory-bandwidth bound: ~13 GB read for only ~1 FLOP per byte of useful work. This is why every decode optimization is really "move fewer bytes".',
-        },
-        {
-          text: 'Running the softmax, which dominates at small batch sizes',
-          explanation: 'Softmax is a rounding error in the cost. The weight read dominates by orders of magnitude.',
-        },
+        { text: 'The model runs once and reads 105,000 tokens.', explanation: 'No. One run produces one token, so a 300-token answer is 300 runs.' },
+        { text: 'The model runs 300 times, and run number k re-reads all 200 + k tokens seen so far. Summing 200 up to 499 gives about 105,000.', explanation: 'Correct. One forward pass per token produced, and each pass re-reads everything so far. The exact sum is 104,850. The cache removes the re-reading, leaving 300.' },
+        { text: 'Each of the 300 tokens is read 350 times while the text is split into tokens.', explanation: 'Splitting text into tokens happens once and is cheap. The cost here is the model passes, not the splitting.' },
       ],
       correct: 1,
     },
     {
-      question: 'A Llama-7B-style model (32 layers, 32 heads, head_dim 128, fp16). How much KV-cache does ONE 4096-token sequence need?',
+      question: 'Why are the key and value vectors safe to cache, while the query is not?',
       options: [
-        { text: 'About 128 MB', explanation: 'Off by 16×. That would be the answer if you forgot the layer count or used one K/V instead of both.' },
-        { text: 'About 500 MB', explanation: 'That is the GQA-8 answer (8 KV heads). With full 32-head MHA it is four times larger.' },
-        {
-          text: 'About 2 GB',
-          explanation:
-            'Correct. 2 × 32 × 32 × 128 × 2 bytes = 0.5 MB per token; × 4096 tokens = 2 GB. Memorize the 0.5 MB/token figure for 7B-class models.',
-        },
+        { text: 'Query vectors are too large to store.', explanation: 'They are the same size as a key. Size is not the reason.' },
+        { text: 'All three are cached; the 2 in the formula is a rounding.', explanation: 'The 2 is exact. Only two vectors per token are stored.' },
+        { text: 'Key and value depend only on the token and the weights, so they never change; the query is used once by the current token and then discarded.', explanation: 'Correct, and that is exactly why the formula starts with 2 rather than 3. Later tokens look back at earlier keys and values, so those must persist. Nobody ever looks back at an old query.' },
       ],
       correct: 2,
     },
     {
-      question: 'Which phase determines time-to-first-token, and what is its compute profile?',
+      question: 'A model has 32 layers, 32 key/value heads, 128 numbers per head, 2 bytes per number. How much cache does one token take?',
       options: [
-        {
-          text: 'Prefill — the whole prompt in one parallel pass, compute bound',
-          explanation: 'Correct. TTFT is dominated by prefill, which scales with prompt length (and quadratically in attention). Long system prompts are a TTFT problem.',
-        },
-        { text: 'Decode — the first generated token, bandwidth bound', explanation: 'The first token is produced at the end of prefill; decode governs the tokens AFTER the first, i.e. inter-token latency.' },
-        { text: 'Both equally, since they run interleaved', explanation: 'They are distinct phases with opposite bottlenecks — that separation is the point of the question.' },
+        { text: '0.5 MB', explanation: 'Correct. 2 x 32 x 32 x 128 x 2 = 524,288 bytes. At a 4096-token context that is 2 GB for one conversation.' },
+        { text: '2 MB', explanation: 'That is four times too big. Check whether you multiplied by 2 twice.' },
+        { text: '128 KB', explanation: 'Too small — this looks like head_dim x bytes without the layers and heads.' },
+        { text: '2 GB', explanation: 'That is the whole 4096-token conversation, not one token.' },
       ],
       correct: 0,
     },
     {
-      question: 'What exactly does GQA share, and what does it save?',
+      question: 'Decode produces one token per pass. What is the machine actually limited by?',
       options: [
-        { text: 'It shares query heads across layers, saving weights', explanation: 'Nothing about GQA is cross-layer, and query heads are not shared — they all remain distinct.' },
-        {
-          text: 'Several query heads share one K/V head, shrinking the KV-cache by the group factor',
-          explanation:
-            'Correct. 32 query heads with 8 KV heads = 4× smaller cache and 4× fewer cache bytes read per decode step, at quality within noise of full MHA.',
-        },
-        { text: 'It shares the KV-cache between different user requests', explanation: 'That is prefix sharing under PagedAttention — a different mechanism entirely.' },
+        { text: 'Arithmetic speed: the multiplications saturate the chips.', explanation: 'That is prefill, where the whole prompt goes through at once. A single decode pass does very little arithmetic.' },
+        { text: 'Memory bandwidth: every weight must be read out of memory to produce one token, and the arithmetic is tiny by comparison.', explanation: 'Correct. Reading 13 GB at 2 TB/s is about 6.5 ms per token however fast the chips are. That is why "move fewer bytes" is the main lever.' },
+        { text: 'The network between GPUs.', explanation: 'Only relevant when a model is split across cards. The single-card limit here is memory bandwidth.' },
       ],
       correct: 1,
     },
     {
-      question: 'What does continuous (in-flight) batching change versus static batching?',
+      question: 'You batch eight requests into one decode pass. What happens?',
       options: [
-        { text: 'It increases the batch size beyond what memory allows', explanation: 'It does not create memory; PagedAttention is what reduces memory waste. Continuous batching changes scheduling.' },
-        { text: 'It quantizes finished sequences to free space', explanation: 'No quantization is involved — finished sequences are simply released.' },
-        {
-          text: 'A finished sequence leaves the batch at the next step and a queued request takes its slot, instead of everyone waiting for the slowest',
-          explanation:
-            'Correct. On mixed-length traffic this is typically a 2–4× throughput win at zero quality cost — the largest single lever in real serving.',
-        },
+        { text: 'Both throughput and per-user speed improve.', explanation: 'Throughput improves, but each pass now does more work, so the individual user waits slightly longer for each word.' },
+        { text: 'Throughput is unchanged, because the work per token is the same.', explanation: 'The arithmetic per token is the same, but the weight read is shared across all eight, and that read was the bottleneck.' },
+        { text: 'Throughput rises close to eight-fold, because one weight read now yields eight tokens; each individual user waits a little longer per token.', explanation: 'Correct. Bytes moved stay the same and useful output multiplies. The cost is per-user speed.' },
       ],
       correct: 2,
     },
     {
-      question: 'Speculative decoding with a small draft model changes the model output how?',
+      question: 'Quantising a 7B model from 16-bit to 4-bit on an 80 GB card takes concurrency from 33 conversations to only 38. Why so small a gain?',
       options: [
-        {
-          text: 'Not at all — the accept/reject rule guarantees exactly the target model\'s distribution',
-          explanation:
-            'Correct, and this is the point most candidates get wrong. It is a pure latency optimization; the draft model only proposes, the target model verifies and corrects.',
-        },
-        { text: 'Output becomes a blend of the draft and target models', explanation: 'A rejected draft token is re-sampled from a corrected target distribution — the draft never contributes probability mass of its own.' },
-        { text: 'Quality drops slightly in exchange for ~2× speed', explanation: 'That describes quantization, not speculation. Speculation trades nothing but extra draft compute.' },
-      ],
-      correct: 0,
-    },
-    {
-      question: 'What problem does PagedAttention specifically solve?',
-      options: [
-        { text: 'The O(n²) cost of the attention score matrix', explanation: 'That is FlashAttention (an exact IO-aware kernel). PagedAttention is about memory allocation, not the attention math.' },
-        {
-          text: 'Fragmentation and over-reservation of KV-cache memory, by allocating fixed-size blocks on demand',
-          explanation:
-            'Correct — plus the bonus of sharing identical prefix blocks between requests by reference, which is huge for shared system prompts.',
-        },
-        { text: 'Weight memory, by paging unused layers to CPU RAM', explanation: 'Layer offloading is a different (and much slower) technique; PagedAttention only manages the KV-cache.' },
+        { text: 'Quantisation reduces compute, not memory.', explanation: 'It reduces memory directly — 13 GB down to 3.3 GB here. That is not the issue.' },
+        { text: 'The weights were the small number. At 2 GB of cache per conversation the cache dominates the budget, so shrinking the weights barely moves the count.', explanation: 'Correct. You freed 9.7 GB in a budget where each extra user costs 2 GB. Quantisation is a real win for decode speed and for fitting on smaller cards, just not for concurrency.' },
+        { text: 'The number of layers caps concurrency.', explanation: 'Layers affect the size of the cache per token, but they do not cap how many conversations fit.' },
       ],
       correct: 1,
-    },
-    {
-      question: 'An MoE model has 8 experts and routes each token to 2. What happens to memory and compute?',
-      options: [
-        { text: 'Both drop by 4×, since only 2 of 8 experts run', explanation: 'Compute drops relative to a dense model of the same parameter count — memory does not drop at all.' },
-        { text: 'Memory drops because unused experts are paged out per token', explanation: 'You only learn the routing after the router runs, so experts cannot be paged in on demand. All of them stay resident.' },
-        {
-          text: 'Per-token compute stays near a small dense model, but ALL experts must be resident in memory',
-          explanation:
-            'Correct. MoE buys parameter count without proportional FLOPs, and pays for it in VRAM capacity plus expert-parallel communication and load-imbalance headaches.',
-        },
-      ],
-      correct: 2,
     },
   ],
   interviewQuestions: [
     {
-      question: 'Do the KV-cache math out loud. Llama-7B-style: 32 layers, 32 heads, head_dim 128, fp16. How big is the cache at 4096 tokens, and what does that imply for serving?',
+      question: 'Do the KV cache arithmetic out loud: 32 layers, 32 key/value heads, head dimension 128, 16-bit. How big is the cache, and what does it imply for serving?',
       answer:
-        'Write the formula first: bytes = 2 × layers × KV heads × head_dim × seq_len × batch × dtype_bytes, where the 2 is one K vector and one V vector. Per token: 2 × 32 × 32 × 128 × 2 bytes = 524,288 bytes = **0.5 MB per token**. At 4096 tokens that is **2 GB for a single sequence**. Now the implication, which is the real question: the weights are 14 GB (13 GiB) and fixed, so on an 80 GB card you have ~67 GB left, which is **33 concurrent 4096-token sequences** — and 32 users at full context is 64 GB, more than four times the weights. So the KV-cache, not the model size, is what caps concurrency. Then name the levers in order: GQA-8 divides it by 4 (133 concurrent), fp8/int8 KV halves it again, PagedAttention removes the reservation waste, and sliding-window attention caps the growth entirely. Bonus credit for noting the cache is also *read* every decode step, so shrinking it speeds up decode as well as fitting more users.',
+        'Formula first: bytes = 2 x layers x kv_heads x head_dim x tokens x bytes_per_number, where the 2 is one key and one value per token. Per token: 2 x 32 x 32 x 128 x 2 = 524,288 bytes, so 0.5 MB. At a 4096-token context that is 2 GB for one conversation, and 32 conversations is 64 GB. Now the implication, which is the actual question: the weights are 13 GB and paid once, so on an 80 GB card you have roughly 62 GB after scratch space, which is about 31 concurrent full-length conversations. The cache, not the model size, caps concurrency. The levers follow from the formula: fewer key/value heads divides it directly, storing the cache at 8-bit halves it, and capping context length caps the growth.',
       isCaseBased: false,
     },
     {
-      question: 'Why is token generation memory-bandwidth bound rather than compute bound? Give the arithmetic.',
+      question: 'Explain the difference between prefill and decode, and why it matters for how you serve.',
       answer:
-        'For each generated token you must read every weight out of HBM once. A 7B model in fp16 is ~13 GB read per token. The useful work is roughly 2×params = 14 GFLOPs. That is about 1 FLOP per byte read (14 GFLOPs over 13 GB), against hardware that wants ~150 FLOPs per byte (an A100 does ~312 TFLOPs against ~2 TB/s). So you are running at roughly 1% of compute capability and the ceiling is bandwidth ÷ bytes: 2.0 TB/s ÷ 13 GB ≈ 154 tokens/sec for one sequence, no matter how fast the tensor cores are. Two consequences to state: (1) quantizing to int4 makes decode about 4× faster because it moves 4× fewer bytes — the speedup is *not* about faster math; (2) batching is nearly free in decode, because the same weight read serves every sequence in the batch, which is exactly why throughput scales with batch size while latency barely moves until you become compute bound.',
+        'Prefill is the first pass over the whole prompt. Every prompt token is independent at that point, so they go through together as one large multiplication and the chips are saturated: it is compute-bound, and it sets time to first token. Decode is everything after: one token per pass, each pass doing a small amount of arithmetic but still having to read every weight out of memory. It is memory-bandwidth-bound, and it sets how fast text appears. They want opposite things. Decode is wasting bandwidth on a single sequence, so it wants a large batch; prefill is already saturating compute, so a large batch only makes it slower. Practically that means chunking long prompts so one giant paste does not stall everyone else\'s decode, and at large scale running prefill and decode on separate pools.',
       isCaseBased: false,
     },
     {
-      question: 'Distinguish prefill and decode. Which optimizations apply to which?',
+      question: 'What does quantisation actually change, and what does it cost?',
       answer:
-        'Prefill processes the whole prompt in one parallel forward pass: large matmuls, tensor cores saturated, **compute bound**, and it sets time-to-first-token. Decode emits one token per pass: matrix-vector work, **memory-bandwidth bound**, and it sets inter-token latency. They respond to opposite medicine. Prefill benefits from FlashAttention (its O(n²) attention is the cost), prompt caching / prefix sharing (skip it entirely for repeated system prompts), and chunked prefill so a long prompt does not stall the decode of other users. Decode benefits from quantization, GQA, bigger batches, and speculative decoding. Two things worth volunteering: the phases fight each other in a shared batch — a long prefill blocks everyone\'s decode, hence chunked prefill and disaggregated prefill/decode on separate GPU pools; and this asymmetry is why API providers price input tokens cheaper than output tokens.',
+        'A weight is normally a 16-bit number. Quantising means picking a range, chopping it into steps, and storing which step each weight lands on. Eight bits gives 256 steps and halves the weights; four bits gives 16 steps and quarters them. For a 7B model that is 14 GB, 7 GB, 3.5 GB. Two wins: it fits on smaller hardware, and because decode is bandwidth-bound, fewer bytes read per token means faster decode roughly in proportion. The cost is that rounding to a coarse grid changes outputs. At 8 bits the difference is usually not measurable on real tasks; at 4 bits it is small but real and should be checked on your own examples rather than a public benchmark; below 4 bits it degrades fast. One caveat worth volunteering: quantising weights does little for concurrency, because concurrency is a KV cache problem, not a weights problem.',
       isCaseBased: false,
     },
     {
-      question: 'What is GQA, why does it barely hurt quality, and why can you not add it at serving time?',
+      question: 'Explain speculative decoding and say when it does not help.',
       answer:
-        'GQA keeps all query heads but gives each *group* of them a shared K/V head — 32 query heads with 8 KV heads means 4 queries per group and a 4× smaller KV-cache. MQA is the k=1 extreme: 32× smaller, but with measurable quality loss and training instability, which is why 8 groups became the industry default (Llama-2-70B onward, Llama-3, Mistral). It barely hurts because heads within a group tend to look for related things anyway; you preserve what each head *asks* (its own query projection) while sharing what the group *offers*. And it is architectural — the K/V projection matrices literally have fewer output heads, so the weights must be trained that way. You can "uptrain" an MHA checkpoint into GQA by mean-pooling each group\'s K/V projections and continuing pretraining for a small fraction of the original compute, which is how Llama-2-70B was made — but you cannot flip a serving flag. Every other optimization in the stack is a config change; this one is not.',
+        'It comes straight out of the bandwidth argument. Reading every weight to produce one token is wasteful, and reading them to check five proposed tokens costs the same, because the check runs over all five positions in one parallel pass. So a small cheap model proposes the next few tokens, the big model verifies them in a single pass, you keep the longest agreed prefix and repeat. The accept-or-reject rule is constructed so the final text has exactly the distribution the big model alone would produce, so this is purely a speed change, not a quality trade — that is the part people get wrong. When it fails: if the small model is often wrong, on creative or unusual text, most drafts are discarded and you gained little. And at large batch sizes you are already compute-bound rather than bandwidth-bound, so the free parallel check is no longer free and throughput can actually drop.',
       isCaseBased: false,
     },
     {
-      question: 'Case: your chat endpoint has good TTFT (300 ms) but users complain text appears slowly, and your GPU bill per token is terrible. Diagnose and fix.',
+      question: 'Case: your chat service has good time to first token but users say text appears slowly, and cost per token is bad. Diagnose and fix.',
       answer:
-        'Good TTFT means prefill is fine; slow text plus bad cost means decode. Measure first: inter-token latency, tokens/sec per request, aggregate tokens/sec, achieved HBM bandwidth, and GPU utilization. Low utilization with high memory traffic confirms bandwidth bound. Fix order: **(1)** Is the batch full? If you are running one or two sequences per step you are paying the full weight read for almost no output — that is both the latency and the cost symptom, and the cause is usually static batching plus a small memory budget. Move to a real engine with continuous batching and PagedAttention. **(2)** Shrink the bytes: int8 or int4 weight quantization (AWQ/GPTQ) gives a near-proportional decode speedup and frees memory for a bigger batch. **(3)** Shrink the cache so the batch can grow: GQA model if you can switch checkpoints, fp8/int8 KV if you cannot. **(4)** If traffic is genuinely low-concurrency and predictable, add speculative decoding — it converts spare compute into latency. Tradeoff to state explicitly: steps 1–3 improve latency and cost together; if the batch then gets so large you become compute bound, per-request latency starts degrading and you must cap batch size against a p99 SLO.',
+        'Good time to first token means prefill is healthy, so the problem is decode. Measure first: tokens per second per request, total tokens per second across the machine, and how full the batch actually is. The classic pattern is a nearly empty batch — you are paying the full weight read to produce one or two tokens, which is simultaneously the slow-text symptom and the cost symptom. Fixes in order. One: fill the batch, and use continuous batching so a finished short answer frees its slot at the next step instead of at the end of the batch. This is the biggest win and it costs no quality. Two: move fewer bytes — quantise weights to 8-bit or 4-bit, which speeds decode roughly in proportion. Three: shrink the cache so a bigger batch fits at all, through fewer key/value heads or an 8-bit cache. Four: if traffic is genuinely low-concurrency, speculative decoding converts spare compute into speed. State the tradeoff explicitly: fixes one to three help latency and cost together, but if the batch grows until the chips are the limit, per-user latency starts degrading and you must cap batch size against whatever slowest-acceptable speed you have promised.',
       isCaseBased: true,
     },
     {
-      question: 'Explain speculative decoding precisely, including why the output distribution is unchanged and when it does not help.',
+      question: 'Case: finance says inference costs 40k a month and needs to be under 15k, with the same product. What do you do, in order?',
       answer:
-        'A small draft model autoregressively proposes k tokens (cheap, because it is small). The target model then runs ONE parallel forward pass over prompt + the k drafts, producing its own next-token distribution at every position — the same trick that makes prefill parallel. A modified rejection sampling rule accepts draft token t with probability min(1, p_target(t)/p_draft(t)); on the first rejection it samples from the normalized residual (p_target − p_draft)⁺. That rule is exactly the one that makes the composite sampler have the target\'s marginal distribution, so **the output is distributionally identical to running the target alone** — it is not an approximation, and stating that clearly is the point of the question. Expected tokens per target step is (1 − α^(k+1))/(1 − α) for acceptance rate α: α=0.8, k=4 gives ~3.36. When it fails: low α (creative or out-of-distribution text) makes the drafts wasted work; large batch sizes make you compute bound, so the "free" parallel verify is no longer free and throughput can *drop*; and the draft model costs memory and must be well aligned with the target. Cheap variants that dodge the second model: Medusa/EAGLE heads, and prompt-lookup decoding for summarization or editing where the answer copies from the input.',
-      isCaseBased: false,
-    },
-    {
-      question: 'Walk through quantization: the ladder, what each rung costs, and PTQ vs QAT.',
-      answer:
-        'The map from bits to memory is just params × bytes: a 7B model is 28 GB at fp32, 14 GB at fp16/bf16, 7 GB at int8, 3.5 GB at int4. Because decode is bandwidth bound, memory reduction translates almost directly into decode speedup. Quality cost is gradual: fp16/bf16 is effectively free (bf16 preferred for its wider exponent range), int8 is nearly free with good scaling, int4 is a small hit that is usually acceptable — the rule of thumb being **4-bit for a 4× win**. Below 4 bits quality falls off a cliff. Mechanically it is an affine map ŵ = s(q − z), and the thing that makes low bits work is *granularity*: per-channel or per-group (64–128 weights) scales, not per-tensor. PTQ compresses a trained model with a small calibration set in minutes and no gradients; QAT simulates the rounding during training (straight-through estimator) so the model learns to tolerate it — better at 3 bits and below, but it costs a training run, so PTQ dominates in practice. Formats: GPTQ (second-order layer-wise PTQ), AWQ (protects salient channels, usually slightly better and faster), GGUF for llama.cpp on CPU/Apple silicon, bitsandbytes for drop-in HF 8/4-bit and QLoRA. Two catches worth raising unprompted: activations quantize worse than weights because of outlier channels (LLM.int8(), SmoothQuant), and at large batch sizes a 4-bit model can be *slower* than fp16 because dequantization is compute and you are no longer bandwidth bound.',
-      isCaseBased: false,
-    },
-    {
-      question: 'Static batching versus continuous batching — where does the win come from, and how big is it?',
-      answer:
-        'Static batching forms a batch, runs it to completion, and only then admits new work. Because output lengths vary wildly — a 15-token "yes, here you go" shares a batch with a 900-token essay — most slots sit computing padding for most of the batch\'s life; utilization is roughly mean length ÷ max length. Continuous batching schedules at the *step* level: any sequence that emits its EOS is released immediately and a queued request is admitted into that slot on the next forward pass. The win therefore scales with the variance of your output lengths — commonly quoted at 2–4× throughput on mixed chat traffic, and it costs exactly nothing in output quality. It depends on PagedAttention to be practical, because admitting requests mid-flight means allocating and freeing cache blocks constantly, which contiguous per-request allocations fragment badly. Worth adding: continuous batching improves *queueing* latency for short requests (they no longer wait behind an essay) while a very full batch slightly increases per-step latency — so you still cap the batch against a p99 SLO.',
-      isCaseBased: false,
-    },
-    {
-      question: 'Case: finance says inference costs $40k/month and needs to be under $15k, with the same product. What do you do, in order?',
-      answer:
-        'Cost per million tokens = (GPU $/hr ÷ 3600) ÷ (aggregate tokens/sec) × 10⁶, so there are exactly three levers: raise tokens/sec, lower $/hr, or send fewer tokens. Measure first — tokens/sec/GPU, batch occupancy, TTFT and ITL percentiles, and the input:output token ratio. Then, in order of win-per-effort: **(1)** Serving engine with continuous batching + PagedAttention if not already there — often 2–4× on its own, no quality change. **(2)** Quantize to int8/int4 (AWQ) — roughly proportional decode speedup plus room for a larger batch; validate on your own eval set, not a public benchmark. **(3)** Prefix/prompt caching if you have a large shared system prompt — for agent workloads this can remove most of prefill, which is pure cost. **(4)** Right-size the model: a well-finetuned 7B beating a 70B on *your* task is the single biggest cost lever anyone ever finds, and routing easy queries to the small model with hard ones escalating is the safe version of it. **(5)** Raise batch size until p99 latency hits the SLO, and move any non-interactive work (batch summarization, embeddings, evals) to a separate high-batch pool where latency does not matter. **(6)** Cheaper hardware for the smaller model, and spot/committed-use pricing. What I would NOT do first: cut context length or max tokens — that changes the product. The honest tradeoff: steps 1, 3, 5 are free; step 2 costs a little quality; step 4 costs engineering time and needs an eval harness to be safe.',
+        'Cost per million tokens is (GPU cost per hour / 3600) / (tokens per second) x 1,000,000, so there are exactly three levers: more tokens per second, cheaper hardware, or fewer tokens. Measure first — tokens per second per card, batch occupancy, and the ratio of input to output tokens. Then in order of win per unit of effort. One: continuous batching if you do not have it, because it is usually a multiple and costs nothing in quality. Two: quantise to 8-bit or 4-bit; roughly proportional decode speedup, validated on your own evaluation set. Three: if many requests share a long system prompt, store that prefix once and reuse it, which removes most of prefill for those requests and prefill is pure cost. Four: right-size the model — a smaller model fine-tuned on your actual task is the largest cost lever anyone ever finds, with the safe version being to route easy queries to it and escalate hard ones. Five: raise the batch cap until per-user speed touches your limit, and move non-interactive work to a separate high-batch pool where latency does not matter. What I would not do first is cut context length or maximum output, because that changes the product rather than the infrastructure.',
       isCaseBased: true,
     },
     {
-      question: 'The KV-cache never evicts entries within a sequence. So what CAN a serving system evict, and how?',
+      question: 'Case: choose a batch size for (a) a customer-facing chat product and (b) an overnight job summarising ten million documents.',
       answer:
-        'Correct premise — attention at step 500 still needs token 1, so there is no LRU policy inside a request; the cache only grows until the sequence ends. What a server can do instead operates at coarser granularity. **Preemption at the sequence level**: when memory runs out, vLLM evicts a whole running request — either swapping its blocks to CPU RAM and swapping back later, or dropping them and recomputing prefill on resume (recompute is usually cheaper than the PCIe round trip). **Refcounted prefix blocks**: shared prompt blocks are freed only when the last sequence using them finishes. **Architectural eviction**: sliding-window attention genuinely drops tokens older than w, which caps the cache — and StreamingLLM showed you must keep the first few "attention sink" tokens or quality collapses. **Lossy compression**: H2O and similar heuristics drop low-attention tokens, and KV quantization to fp8/int8 shrinks entries instead of removing them. Tradeoff to name: everything in the last category is approximate, so reach for it only after paging, GQA and quantization are exhausted.',
-      isCaseBased: false,
-    },
-    {
-      question: 'Case: pick a batch size for (a) a customer-facing chat product and (b) an overnight job summarizing 10 million documents. Justify with the tradeoff.',
-      answer:
-        'Same tradeoff, opposite ends. Because decode is bandwidth bound, one weight read serves the whole batch, so throughput rises nearly linearly with batch size until the GPU becomes compute bound — while per-request inter-token latency degrades and admission queueing grows. **(a) Chat:** the binding constraint is perceived speed — TTFT under ~500 ms and ITL fast enough to beat reading speed (~30–50 tok/s). So set the batch by *measuring* p99 ITL as you raise it and stopping at the SLO, typically a modest cap with continuous batching keeping it full; also chunk long prefills so one 30k-token prompt cannot stall everyone else\'s decode. Accept the worse cost per token. **(b) Offline:** nobody is watching, so latency is not a metric at all. Push the batch to the memory limit (which is a KV-cache limit — use GQA, quantized KV, and short max lengths to fit more), sort inputs by length to reduce ragged batches, use the largest quantization that passes eval, and expect roughly an order of magnitude better cost per million tokens than the interactive pool. The general principle to state: run interactive and batch traffic on **separate pools**, because a single batch-size setting cannot serve two opposite objectives.',
+        'Same tradeoff, opposite ends of it. Because decode is bandwidth-bound, one weight read serves the whole batch, so throughput rises nearly linearly with batch size until the chips become the limit — while each individual user\'s text gets slower. For chat, the binding constraint is perceived speed: first token within a few hundred milliseconds and then text faster than the user reads, around 30 tokens per second. So you raise the batch while measuring the slowest user\'s token rate and stop at your limit, and you rely on continuous batching to keep that modest batch full. You accept a worse cost per token as the price of feeling fast. For the overnight job, nobody is watching, so latency is not a metric at all. Push the batch until memory stops you — and remember memory means cache, so short maximum lengths, fewer key/value heads and a quantised cache all buy batch size. Sort inputs by length so batches are not ragged. Expect roughly an order of magnitude better cost per token than the interactive pool. The principle to state: run the two on separate pools, because one batch size cannot serve two opposite objectives.',
       isCaseBased: true,
     },
     {
-      question: 'MoE: what does it actually buy, and what is the catch you should raise before the interviewer does?',
+      question: 'Case: design the serving stack for a large chat product. Follow one request from the browser to the last streamed token, then size the fleet.',
       answer:
-        'A MoE layer replaces the dense FFN with N expert FFNs plus a router that sends each token to the top-k experts (usually 2). Parameter count scales with N while per-token FLOPs scale with k, so you get the quality of a much larger model at close to the compute of a small one — a nominally 8×7B model activating ~13B per token, for instance. The catch to volunteer: **all experts must be resident in memory**, because routing is data-dependent and only known after the router runs, so you cannot page experts in on demand. You are paying full parameter count in VRAM for a fraction of it in compute — a great trade in a datacenter with spare capacity, a terrible one on a single consumer GPU, which is why MoE models are awkward for local inference. Two further operational costs: with expert parallelism, every token generates all-to-all communication between GPUs, so interconnect becomes the bottleneck; and expert load is uneven, so you need auxiliary load-balancing losses at training time and capacity factors at serving time, or some experts idle while others queue.',
-      isCaseBased: false,
-    },
-    {
-      question: 'Case: design ChatGPT\'s serving stack. Follow one request from the browser to the last streamed token, then size the fleet.',
-      answer:
-        '**Front door.** CDN and TLS termination, then an API gateway that authenticates the session or API key and attaches the user\'s tier and quota. Rate limit in **tokens per minute, not requests per minute** — one request can be 200 tokens or 100,000, so a request counter is bypassed by a single giant prompt. Run the cheap abuse and moderation classifiers here, before any GPU is touched: rejecting at the gateway costs microseconds, rejecting after prefill costs a second of H100 time. Admission control is a bounded queue with a 429 when depth exceeds what the latency SLO can absorb — backpressure, never unbounded queueing.\n\n**Routing.** Route on model, tier, and prompt shape. Tier picks the pool: paid traffic to the fp16/fp8 flagship, free traffic to a smaller or int4-quantized variant. Then route on prefix — hash the conversation prefix (system prompt plus history) and prefer the replica that already holds those KV blocks in its prefix cache, which turns a 30k-token prefill into a lookup. That is the highest-leverage routing decision in any agent or long-system-prompt workload. Keep it **soft** affinity with load-based fallback, or one hot conversation pins a replica.\n\n**Inference pools.** Replicas of vLLM or TensorRT-LLM, weights resident, running **continuous batching**: a finished sequence is released at the next decode step and a queued request takes its slot, so a 15-token answer never waits behind a 900-token essay — 2 to 4 times the throughput on mixed traffic, at zero quality cost. Underneath it, **PagedAttention**: KV in fixed-size blocks, so no per-request over-reservation, refcounted prefix blocks for sharing, and copy-on-write for multi-sample requests.\n\n**Prefill and decode are different machines.** Prefill is compute bound and sets TTFT; decode is bandwidth bound and sets inter-token latency; they want opposite batch sizes. Minimum: chunked prefill, so a 100k-token paste cannot stall everyone else\'s decode. At scale: disaggregate them onto separate GPU pools and ship KV blocks across the interconnect — the tradeoff is a KV transfer per request plus real operational complexity, so do it only when TTFT and throughput are both binding.\n\n**Streaming back.** SSE from the inference server through the gateway, one token or small chunk per event. Three things people get wrong: the proxy must have response buffering disabled or streaming silently degrades into a batch response; you need heartbeats so idle intermediaries do not kill the connection; and **cancellation must propagate** — a closed tab has to free the sequence and its KV blocks immediately, or you generate for nobody and pay for it. Also: between turns you do **not** hold KV. The conversation is re-prefilled from the prefix cache on the next message. Holding cache through human think time is the most expensive mistake available in this design.\n\n**Capacity arithmetic — do it twice and size on whichever binds.** Memory: a 7B-class GQA-8 model is 0.125 MB of KV per token (0.5 MB for MHA, divided by 4), so a 2,000-token live context is 250 MB; an 80 GB card holding 13 GB of weights plus ~5 GB of activations and fragmentation leaves ~62 GB, about **248 concurrently generating sequences**. Throughput: that card does roughly 2,000-3,000 aggregate tokens/sec on a 7B at large batch (order of magnitude — measure yours), and each streaming user needs ~30 tok/s to beat reading speed, so about **70-100 concurrent streams**. Throughput binds, not memory, which is the usual outcome. So: if 20,000 people have a chat open and ~15% are mid-generation, that is 3,000 active streams at ~80 per GPU ≈ 38 GPUs, provisioned at ~50 for p99 headroom and failure domains across at least two zones. The business number is cost per million tokens = (GPU $/hr ÷ 3600) ÷ (aggregate tok/s) × 10⁶.\n\n**Autoscaling.** Scale on **queue depth, time-in-queue, KV-cache utilization and preemption rate — not CPU**, which is near-idle on a GPU box, and not raw GPU utilization either, which reads close to 100% during a bandwidth-bound decode that is doing almost no useful work. Two hard constraints shape the policy: loading weights into HBM takes minutes, so you scale on a leading indicator and keep a warm pool; and scale-down must drain, because killing a replica mid-stream drops live conversations. Instrument TTFT p50/p99, ITL p99, tokens/s/GPU, batch occupancy, prefix-cache hit rate and preemption rate, and alert on the first and last of those.\n\n**What I cut first under cost pressure**, ordered from least to most user-visible: (1) speculative decoding on the high-batch pools — it buys latency at low batch and actively costs throughput once you are compute bound; (2) warm-pool depth and redundancy headroom, accepting slower scale-up; (3) int4/AWQ weights and fp8 KV on the free tier, validated on our own eval set rather than a public benchmark; (4) route short and easy queries to a small fine-tuned model with escalation on failure — the largest lever anyone ever finds and also the most engineering; (5) raise batch caps until p99 inter-token latency touches the SLO ceiling. Last, and only with product sign-off, shrink max context or max output tokens — that changes the product, not the infrastructure. The one thing I would not cut is the eval harness, because every item on that list is a quality risk you cannot manage without one.',
+        'Front door: terminate TLS, authenticate, and attach the user\'s tier. Rate limit in tokens per minute rather than requests per minute, because one request can be 200 tokens or 100,000 and a request counter is defeated by a single huge prompt. Run cheap abuse checks here, before any GPU is touched — rejecting at the gateway costs microseconds, rejecting after prefill costs a second of expensive time. Admission is a bounded queue that returns a busy response when it is too deep; never queue without a limit.\n\nRouting: choose the pool by tier, then prefer a replica that already holds this conversation\'s prefix in its cache, since that turns a long prefill into a lookup. Keep that preference soft with load-based fallback, or one popular conversation pins a replica.\n\nInference pool: replicas with weights resident, running continuous batching so a finished short answer releases its slot at the very next step instead of waiting for a long one, and paged attention underneath so cache memory is handed out in fixed blocks rather than reserved per request at maximum context, with shared prompt prefixes stored once.\n\nPrefill and decode are different workloads — compute-bound versus bandwidth-bound — so at minimum chunk long prompts so one giant paste cannot stall everyone\'s decode, and at scale run them on separate pools.\n\nStreaming back: send tokens as they are produced. Three things people get wrong: proxy buffering silently turns streaming into a single batch response; idle intermediaries kill the connection without heartbeats; and cancellation must propagate, because a closed tab that keeps generating burns money for nobody. Also, do not hold the cache between turns — 2 GB per idle user waiting for someone to type is the most expensive mistake in this design. Re-prefill from the prefix cache instead.\n\nSizing, done twice. Memory: 0.5 MB per token, so a 4,000-token conversation is 2 GB; an 80 GB card holding 13 GB of weights and 5 GB of scratch leaves 62 GB, about 31 concurrent conversations — and with fewer key/value heads, four times that. Throughput: a card produces on the order of 2,000 tokens per second at full batch, and each streaming user needs about 30, so roughly 66 users. Size on whichever is smaller and say which it is. Then autoscale on queue depth and cache utilisation, not on processor utilisation, which reads near 100 percent during a bandwidth-bound decode doing almost no arithmetic. Loading weights takes minutes, so scale on a leading indicator and keep a warm pool, and drain rather than kill on scale-down so live conversations are not dropped.',
       isCaseBased: true,
     },
   ],
   flashcards: [
-    { front: 'Why is decode slow?', back: 'Sequential (token n+1 needs token n) AND memory-bandwidth bound: you read every weight from HBM per token, ~1 FLOP per byte against hardware wanting ~150.' },
-    { front: 'Prefill vs decode', back: 'Prefill: whole prompt, one parallel pass, compute bound, sets TTFT. Decode: one token per pass, bandwidth bound, sets inter-token latency.' },
-    { front: 'KV-cache memory formula (+ the 7B number)', back: 'bytes = 2 (K and V) × layers × KV_heads × head_dim × seq_len × batch × dtype_bytes. 7B: 2×32×32×128×2B = 0.5 MB per token → 2 GB at 4096 tokens → only 33 concurrent seqs on an 80 GB card.' },
-    { front: 'What the KV-cache buys and costs', back: 'Buys: no re-computing past tokens (O(n²) work → O(n) per step). Costs: memory — the cache, not the weights, caps batch size.' },
-    { front: 'GQA vs MQA', back: 'GQA: query heads grouped over 8 KV heads → 4× smaller cache, quality within noise. MQA: 1 KV head → 32× smaller, real quality cost. Architectural — must pretrain/uptrain it.' },
-    { front: 'PagedAttention + continuous batching', back: 'Paging: fixed-size KV blocks like OS virtual memory → no fragmentation or over-reservation, plus refcounted prefix sharing. Continuous batching: swap finished sequences out mid-flight → 2–4× throughput, free.' },
-    { front: 'Quantization ladder (7B)', back: 'fp32 28 GB → fp16 14 → int8 7 → int4 3.5. Buys memory AND bandwidth (= decode speed); costs quality gradually. 4-bit ≈ acceptable for 4×. PTQ = calibrate a trained model; QAT = simulate rounding during training. GPTQ, AWQ, GGUF, bitsandbytes.' },
-    { front: 'Speculative decoding', back: 'Draft model proposes k tokens, target verifies all k in ONE parallel pass, accepts the longest correct prefix. Output distribution is EXACTLY the target\'s — not an approximation. E[tokens/step] = (1−α^(k+1))/(1−α); α=0.8, k=4 → 3.36.' },
-    { front: 'The three serving metrics + the batch tradeoff', back: 'TTFT (prefill), inter-token latency (decode), throughput (batch). Bigger batch = better throughput, worse per-request latency. Cost/1M tokens = ($/hr ÷ 3600) ÷ tok/s × 10⁶.' },
-    { front: 'MoE catch', back: 'Top-k routing grows parameters without proportional per-token compute — but ALL experts must be resident in memory, since routing is only known at runtime. Plus all-to-all comms and expert load imbalance.' },
+    { front: 'What does one token cost to produce?', back: 'One full forward pass of the model. Without a cache that pass re-reads every token so far, so a 300-token answer to a 200-token prompt costs about 105,000 token-readings instead of 300.' },
+    { front: 'What is in the KV cache, and why those two?', back: 'The key and value vectors of every token seen so far. They depend only on the token and the weights, so they never change and can be computed once. The query is used once by the current token and discarded, which is why the formula starts with 2, not 3.' },
+    { front: 'KV cache size formula', back: 'bytes per token = 2 x layers x kv_heads x head_dim x bytes_per_number. For 32 / 32 / 128 / 2 bytes that is 524,288 bytes = 0.5 MB per token, so 2 GB at a 4096-token context.' },
+    { front: 'Prefill vs decode', back: 'Prefill: whole prompt in one parallel pass, compute-bound, sets time to first token. Decode: one token per pass, must read every weight from memory each time, memory-bandwidth-bound, sets how fast text appears.' },
+    { front: 'What does memory-bandwidth-bound mean here?', back: 'The chips are idle waiting for bytes. Reading 13 GB of weights at 2 TB/s takes about 6.5 ms, capping one conversation near 150 tokens/sec regardless of arithmetic speed. Going faster means moving fewer bytes.' },
+    { front: 'Batching: what it buys and what it costs', back: 'One weight read serves the whole batch, so throughput rises nearly in proportion — until the chips become the limit. Cost: each pass does more work, so an individual user\'s next word arrives later. Continuous batching re-forms the batch every step so a finished request frees its slot immediately.' },
+    { front: 'Quantisation ladder for a 7B model', back: '16-bit = 14 GB, 8-bit = 7 GB, 4-bit = 3.5 GB. Fewer bytes to read means faster decode too. 8-bit is nearly free in quality, 4-bit is a small real cost, below 4 bits degrades fast. It barely helps concurrency, because concurrency is a cache problem.' },
+    { front: 'Memory budget for a serving box', back: 'weights + scratch space + (users x tokens per user x bytes per token). Solve for users. 80 GB card, 13 GB weights, 5 GB scratch, 2 GB per conversation gives 31 concurrent, not 200. Forgetting the third term is the classic crash.' },
   ],
-  mindmapMarkdown: `- Inference: KV-Cache, Quantization & Serving
-  - Why generation is slow
-    - sequential: token n+1 needs token n
-    - memory-bandwidth bound, not compute bound
-    - read 13 GB of weights per ONE token
-    - ~2 FLOP/byte vs hardware ~150 FLOP/byte
-    - ceiling = bandwidth / bytes read
-  - Two phases
-    - prefill: whole prompt, parallel, compute bound
-    - prefill sets TTFT
-    - decode: one token per pass, bandwidth bound
-    - decode sets inter-token latency
-    - chunked / disaggregated prefill
-  - KV-cache
-    - without it: recompute all past tokens, O(n squared)
-    - with it: store K and V, O(n) per step
-    - Q is never cached (used once)
+  mindmapMarkdown: `- Serving a language model
+  - What one token costs
+    - one forward pass per token produced
+    - without a cache each pass re-reads everything
+    - 200-token prompt, 300-token answer = 105,000 readings
+    - with a cache = 300
+  - The KV cache
+    - key and value of each token, stored once
+    - they never change, so recomputing is waste
+    - the query is used once and discarded
+    - nothing is evicted inside one answer
     - traded compute for memory
-  - KV-cache arithmetic
-    - 2 x layers x kv_heads x head_dim x seq x batch x dtype
-    - 7B: 0.5 MB per token
-    - 4096 tokens = 2 GB per sequence
-    - batch 32 = 64 GB > 13 GB of weights
-    - cache caps concurrency, not model size
-  - GQA / MQA
-    - share K/V heads across query heads
-    - GQA-8: 4x smaller, quality in the noise
-    - MQA: 32x smaller, real quality cost
-    - architectural: cannot bolt on at serve time
-  - vLLM ideas
-    - PagedAttention: fixed blocks, no fragmentation
-    - prefix sharing, copy-on-write
-    - continuous batching: swap finished seqs mid-flight
-    - 2-4x throughput, zero quality cost
-  - Quantization
-    - fp32 28 GB, fp16 14, int8 7, int4 3.5
-    - fewer bytes = faster decode
-    - 4-bit = 4x memory for acceptable quality
-    - PTQ (calibrate) vs QAT (train with rounding)
-    - GPTQ, AWQ, GGUF/llama.cpp, bitsandbytes
-    - KV-cache quantization is a separate lever
-    - activation outliers: SmoothQuant, LLM.int8()
+  - Cache arithmetic
+    - 2 x layers x kv_heads x head_dim x bytes
+    - 32 / 32 / 128 / 2 bytes = 0.5 MB per token
+    - 4096 tokens = 2 GB per conversation
+    - 32 users = 64 GB against 13 GB of weights
+    - the cache caps concurrency, not the model size
+  - Two phases
+    - prefill: whole prompt at once, compute-bound
+    - prefill sets time to first token
+    - decode: one token per pass, bandwidth-bound
+    - decode reads all 13 GB per word
+    - decode sets how fast text appears
+  - Three numbers
+    - time to first token
+    - per-user speed, about 30 tokens/sec to match reading
+    - throughput, total tokens/sec, what the bill tracks
+  - Batching
+    - one weight read serves the whole batch
+    - throughput up, per-user latency down
+    - stops helping once compute-bound
+    - continuous batching re-forms the batch every step
+  - Quantisation
+    - 8-bit = 256 steps per weight, half the bytes
+    - 4-bit = 16 steps, a quarter of the bytes
+    - 7B: 14 GB, 7 GB, 3.5 GB
+    - faster decode because fewer bytes read
+    - small real quality cost at 4-bit
+    - barely helps concurrency
   - Speculative decoding
-    - draft model proposes k tokens
-    - target verifies all k in ONE parallel pass
-    - EXACT same output distribution, not approximate
-    - acceptance rate alpha drives the speedup
-    - hurts at large batch (already compute bound)
-    - Medusa, EAGLE, prompt-lookup
-  - Serving metrics
-    - TTFT vs inter-token latency vs throughput
-    - bigger batch: more throughput, worse latency
-    - cost per million tokens is the business number
-    - separate interactive and batch pools
-  - Architecture notes
-    - MoE: params grow, per-token compute does not
-    - MoE catch: all experts resident in memory
-    - sliding-window attention caps the cache at w`,
+    - small model proposes several tokens
+    - big model checks them all in one pass
+    - same output distribution, only speed changes
+    - useless when the small model is usually wrong
+  - Sizing a box
+    - weights + scratch + users x tokens x bytes
+    - 80 - 13 - 5 = 62 GB free
+    - 62 / 2 = 31 concurrent conversations
+    - check throughput too, size on the smaller
+  - Beyond the basics
+    - fewer key/value heads shrink the cache
+    - paged attention, fixed blocks and shared prefixes
+    - chunk long prompts, or split prefill and decode
+    - eviction happens per request, not per token`,
 }
 
 export default m

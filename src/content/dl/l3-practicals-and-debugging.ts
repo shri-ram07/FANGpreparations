@@ -64,7 +64,7 @@ print('ln(10)      :', round(float(np.log(10)), 4))   # what a random 10-class g
       annotations: {
         9: 'A "logit" is just a raw score before it is turned into a probability. Starting them near zero is what a freshly initialised model does.',
         12: 'P[np.arange(4), y] pairs row 0 with y[0], row 1 with y[1], and so on. numpy calls this fancy indexing: two lists of positions read together. It gives back 4 numbers, not a 4-by-10 grid.',
-        16: 'The measured 2.3036 sits 0.001 above the theoretical 2.3026. That gap is the random init, not a bug: the scores are near zero but not exactly zero, so the probabilities are near 0.1 but not exactly 0.1.',
+        15: 'The measured 2.3036 sits 0.001 above the theoretical 2.3026. That gap is the random init, not a bug: the scores are near zero but not exactly zero, so the probabilities are near 0.1 but not exactly 0.1.',
       },
     },
     {
@@ -103,7 +103,7 @@ print('head share    :', round(100 * head / (convs + head)), '%')   # share of t
 # P2 dense head : 527114
 # head share    : 85 %`,
       annotations: {
-        9: 'The three convolution layers of P2, chained: 3 colour channels in, then 32, then 64, ending at 128 channels.',
+        8: 'The three convolution layers of P2, chained: 3 colour channels in, then 32, then 64, ending at 128 channels.',
         10: 'Where the 4x4 comes from: P2 halves the picture three times with pooling, so 32 -> 16 -> 8 -> 4. Get that chain wrong and this number is wrong and nothing runs.',
         13: '85% of the weights sit in one dense layer that has seen nothing but a flattened grid. This is exactly why modern image networks average each channel down to a single number instead of flattening.',
       },

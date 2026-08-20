@@ -6,551 +6,643 @@ const m: Module = {
   level: 3,
   title: 'RAG End to End: Retrieve, Rerank, Generate',
   whyItMatters:
-    'RAG is the single most common thing GenAI engineers are actually paid to build, and "RAG vs finetuning" plus "how would you stop it hallucinating" are two questions you will be asked in almost every applied-LLM interview. Anyone can wire LangChain in an afternoon; what separates a hire is knowing where the pipeline breaks — retrieval misses, chunk boundaries, lost-in-the-middle, permission leakage — and how to measure retrieval and generation separately. This module builds the pipeline, then attacks it.',
-  estMinutes: 60,
+    'A language model has never read your company handbook, your tickets, or your notes. It cannot answer a question about them, and no amount of extra training will reliably fix that. The trick that does work is embarrassingly simple: find the right paragraph and paste it into the prompt. This module builds that whole system from scratch in plain Python - a real document, real chunks, a real search, a real prompt - and then shows you the place where almost every one of these systems actually breaks.',
+  assumes: [
+    'You have seen a Python list, a for loop, an if statement, and a function with def',
+    'You know what a Python string is, and that "abc".split() cuts a string into words',
+    'You know what a square root is',
+    'No machine learning background is needed. Every term used here is defined here.',
+  ],
+  estMinutes: 43,
   sections: [
     {
       type: 'intuition',
-      title: 'Four things a model cannot do — and one fix for all four',
-      md: `A pretrained LLM is a very well-read person who has been locked in a room since their training cutoff, with no notes and no library card.
+      title: 'The problem: it has never read your handbook',
+      md: `Your company handbook contains one sentence: *"Customers may request a refund within 30 days of purchase."* A customer asks your chatbot how long they have to ask for a refund.
 
-- **Cutoff.** It knows nothing after its training data ended. Ask about last quarter's incident and it guesses.
-- **No private data.** Your wiki, your tickets, your PDFs were never in the training set and never will be.
-- **Confident hallucination.** It has no "I looked it up" signal, so a fabricated answer feels identical to a correct one — to the model *and* to the user.
-- **No citations.** Knowledge is smeared across billions of weights. There is no page to point at.
+- The model was trained on public text scraped from the internet. Your handbook was not in it. It has genuinely never seen that sentence.
+- It still answers. It says "14 days" in a confident, well-written sentence, because producing fluent text is the only thing it does.
+- That is a **hallucination**: an answer that is fluent, plausible, and not supported by anything real. In this setting it means one specific thing - the model stated a fact it had no source for.
+- The model has no way to tell you it was guessing. A guess and a fact come out looking identical.
 
-RAG — **R**etrieval-**A**ugmented **G**eneration — fixes all four with one move: **find the right passages at query time and put them INTO the prompt**. The model stops recalling and starts reading. Fresh data, private data, grounded answers, and a source link, because you know exactly which passages you inserted.`,
+So the model needs the sentence. There are only two ways to get a fact into a model: put it in the training data, or put it in the prompt.`,
     },
     {
       type: 'intuition',
-      title: 'RAG vs finetuning: behaviour vs knowledge',
-      md: `The line that ends the argument in an interview: **finetuning teaches behaviour, RAG supplies knowledge.**
+      title: 'Why training it on your handbook is the wrong tool',
+      md: `The obvious idea is to train the model further on your documents. This is called **fine-tuning** - continuing to train an existing model on extra data so its internal numbers shift. It is taught in *Fine-Tuning: Full FT, LoRA & QLoRA*. For facts, it is the wrong tool, for four practical reasons.
 
-- Finetuning (see the LoRA/finetuning module) changes weights. Use it to change *how* the model responds: tone, output format, domain jargon, a task it keeps getting structurally wrong.
-- RAG changes the prompt. Use it to change *what* the model knows: facts that are private, that change weekly, or that must be cited.
-- Facts baked into weights cannot be updated without retraining, cannot be cited, and cannot be permission-scoped per user. Three fatal properties for a knowledge system.
-- They compose, and in production they usually do: finetune a small model to answer tersely in your format, then feed it retrieved passages.
-- Cheap heuristic: *if the correct answer changes when a document changes, it is RAG. If the correct answer changes when your style guide changes, it is finetuning.*`,
+- **Facts change.** HR edits the handbook on Tuesday. Retraining the model every Tuesday is expensive and slow, and until it finishes the model is confidently wrong.
+- **You cannot point at the source.** After training, the sentence is not stored anywhere you can look up. It is smeared across millions of internal numbers. The model cannot show you the page it came from.
+- **You cannot restrict it per user.** Once a salary document is trained into the weights, every user gets it. There is no per-person switch.
+- **It does not reliably stick.** Training changes behaviour - tone, format, the shape of an answer - much more reliably than it implants individual facts.
+
+The rule to remember: **fine-tuning changes how the model behaves; putting text in the prompt changes what it knows.**`,
     },
     {
       type: 'intuition',
-      title: 'The ingestion side: load, chunk, embed, index',
-      md: `Half the pipeline runs offline, before any user asks anything. It is a batch job, not a request handler.
+      title: 'The whole idea, in one sentence',
+      md: `So put the sentence in the prompt. Instead of asking *"how long do I have to ask for a refund?"*, send this:
 
-1. **Load and parse.** PDFs, HTML, Confluence, Slack, code. Extract text plus metadata: source URI, title, date, author, and the access-control tag.
-2. **Chunk.** Split into retrievable units, typically 200–500 tokens with some overlap, split on structure (headings, paragraphs) rather than blind character counts. The embeddings module covers strategies; the RAG-level point is that a chunk is your *unit of truth* — retrieval can never return anything smaller.
-3. **Embed.** Run every chunk through an embedding model. One vector per chunk, computed once.
-4. **Index.** Store vectors in a vector DB alongside the raw text and every metadata field you will ever want to filter on. Also build a keyword index (BM25) — you will need it.
+*Answer only from the passage below. Passage: "Customers may request a refund within 30 days of purchase." Question: how long do I have to ask for a refund?*
 
-Honest warning, because this is where real projects bleed time: **parsing is the hard part, not the AI part.** Multi-column PDFs interleave text. Tables become word soup. Scans need OCR. Headers repeat on every page and pollute every chunk. Budget more time for the parser than for everything downstream combined, and look at your chunks with your own eyes before you trust any of it.`,
+- Now the model is not remembering. It is **reading**. That is a much easier job, and one it is very good at.
+- This is called **retrieval-augmented generation**, or **RAG**. Broken into its three words: *retrieval* means looking text up, *augmented* means the prompt is enlarged with what you found, *generation* means the model then writes the answer.
+- An answer built only from supplied text is called **grounded** - every claim traces back to a passage you can point at. **Grounding** is the property; the passage is the ground.
+- Because you know exactly which passage you pasted in, you can print its source next to the answer. That is a **citation**, and it is free - you already had the source when you did the lookup.
+
+That is the entire concept. Everything else in this module is engineering to answer one question: *when the handbook is 40,000 pages instead of one sentence, how do you find the right paragraph?*`,
     },
     {
       type: 'intuition',
-      title: 'The query path: retrieve, rerank, assemble, generate',
-      md: `Now a question arrives. Five steps, and a latency budget ticking.
+      title: 'Five stages, and the words for them',
+      md: `Finding the right paragraph splits into five steps. Each gets a section and a runnable snippet below. The vocabulary first, so nothing arrives unexplained.
 
-1. **Embed the query** with the *same* model used at ingestion. Different model, different vector space, garbage results.
-2. **Retrieve top-k, hybrid.** Dense vector search catches paraphrase ("how much VRAM" finds "GPU memory"); keyword/BM25 catches exact tokens dense search fumbles — error codes, product names, \`NullPointerException\`. Fuse the two ranked lists (reciprocal rank fusion is the boring default that works). Filter by metadata **in the query**, never after.
-3. **Rerank** the ~50 candidates down to ~5 with a cross-encoder.
-4. **Assemble the prompt.** Passages with their source labels, the question, and an instruction: *answer ONLY from the context; if the context does not contain the answer, say "I don't know".* Order matters — see the failure modes.
-5. **Generate and cite.** Stream the answer, and return the source of every passage you inserted so the user can check you.`,
+1. **Chunk.** Cut the documents into small pieces. Each piece is a **chunk**. The rule you pick for cutting - split on blank lines, split every 300 words, split on headings - is your **chunking strategy**. Letting consecutive chunks share a few words so a sentence is never cleanly severed is called **overlap**.
+2. **Embed and index.** Turn each chunk into something searchable and store it. That store is the **index**.
+3. **Retrieve.** When a question arrives, score every chunk against it and keep the best few. That is **retrieval**. The number you keep is **top-k** - if k is 5, you keep the five best-scoring chunks.
+4. **Rerank.** Take those few candidates and re-score them with a slower, more careful method that fixes the fast method's mistakes. That is **reranking**.
+5. **Generate.** Paste the survivors into the prompt with the question and let the model write the answer.
+
+One more term you will hear used as an insult: **context stuffing** means skipping steps 3 and 4 and pasting in everything you have. It is what people try first, and the chunking section shows exactly why it fails.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Stage 1: chunk a document by hand',
+      code: `DOC = """Customers may request a refund within 30 days of purchase.
+Refunds go back to the original payment card.
+
+Standard shipping takes five to seven business days.
+Express shipping costs twelve dollars per order."""
+
+chunks = DOC.split("\\n\\n")               # "\\n" is a newline, so "\\n\\n" is a blank line
+for i, c in enumerate(chunks):           # enumerate hands you (position, item) on each pass
+    print(i, "->", c.replace("\\n", " ")) # replace the inner newline so each chunk prints on one line
+
+# real output:
+# 0 -> Customers may request a refund within 30 days of purchase. Refunds go back to the original payment card.
+# 1 -> Standard shipping takes five to seven business days. Express shipping costs twelve dollars per order.`,
+      annotations: {
+        1: 'Triple quotes let one string run across several lines. This is our entire document: four sentences in two paragraphs.',
+        2: 'The refund fact lives in the sentence above this one. Keep an eye on it - later a careless chunker cuts it in half.',
+        4: 'Paragraph two starts here. The blank line above it is the only thing marking the boundary.',
+        5: 'The closing triple quote sits at the end of the last line, so the string ends without a trailing newline.',
+      },
     },
     {
       type: 'note',
-      md: 'Why a cross-encoder reranker beats the retriever it is reranking: the retriever is a **bi-encoder** — it embedded the query and the chunk *separately*, then compared two independent vectors. All the chunk\'s nuance was squeezed into one vector before it ever heard the question. A **cross-encoder** feeds query and chunk into one transformer *together*, so every query token can attend to every chunk token. Far more accurate, and far slower: it cannot precompute anything, so cost is one full forward pass per (query, chunk) pair. That is exactly why the two are stacked — retrieve 50 cheaply with the bi-encoder (one dot product each, over millions of chunks), then rerank those 50 accurately with the cross-encoder. Cheap-and-wide, then expensive-and-narrow.',
+      md: 'Two chunks came out, one per paragraph. That is a chunking strategy: split on the blank line. It is a real one - it respects how a human wrote the document, so a chunk is a complete thought. It is also fragile, because it assumes the document has blank lines in sensible places. A PDF converted to text often has them in nonsensical places instead.',
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Stage 2: the index - six chunks and one question',
+      code: `CHUNKS = [                                                        # our entire index
+    "Customers may request a refund within 30 days of purchase.",  # c0 - the chunk that answers
+    "Refunds go back to the original payment card.",               # c1 - about refunds, wrong fact
+    "Standard shipping takes five to seven business days.",        # c2 - off topic
+    "Express shipping costs twelve dollars per order.",            # c3 - off topic
+    "Closing an account does not refund the unused days of a subscription.",  # c4 - a near miss
+    "Our support team answers questions about refund rules, refund timing, purchase history, shipping days, dollars charged and account settings.",  # c5 - a grab bag
+]                                                                  # a real index holds millions of these
+QUERY = "how many days after purchase can I ask for a refund"      # what the customer typed
+print(len(CHUNKS), "chunks in the index")                          # len() counts the items
+
+# real output:
+# 6 chunks in the index`,
+      annotations: {
+        6: 'c4 is the interesting one. It contains the words "refund" and "days" and answers a completely different question. Word matching will love it.',
+        7: 'c5 is a support-page blurb that mentions everything and states nothing. Every real corpus has hundreds of these, and they poison naive search.',
+      },
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Stage 3: turn text into the words worth matching on',
+      code: `STOP = {"how", "many", "a", "an", "the", "of", "to", "i", "can", "is", "do", "for", "and"}
+
+def content(text):                    # give it a string, get back the useful words
+    out = []                          # start with an empty list to collect into
+    for w in text.lower().split():    # lower() so "Refund" matches "refund"; split() cuts on spaces
+        w = w.strip(".,")             # strip removes those characters from both ends: "purchase." -> "purchase"
+        if w not in STOP:             # skip the words that appear in every sentence
+            out.append(w)             # keep the rest
+    return out                        # hand the caller a plain list of words
+
+print("query words:", content(QUERY))
+print("chunk 0    :", content(CHUNKS[0]))
+
+# real output:
+# query words: ['days', 'after', 'purchase', 'ask', 'refund']
+# chunk 0    : ['customers', 'may', 'request', 'refund', 'within', '30', 'days', 'purchase']`,
+      annotations: {
+        1: 'Curly braces with no colons make a set - an unordered bag with no duplicates, built for one question: is this thing in here? These are called stopwords: words so common that matching on them is evidence of nothing.',
+        11: 'The query keeps five words. Three of them - days, purchase, refund - also appear in chunk 0. That overlap is the entire search signal we are about to use.',
+        12: 'CHUNKS[0] is the first chunk; Python counts from 0. Note "30" survives as a word - numbers are just characters here.',
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'What real systems use instead of word overlap',
+      md: `Counting shared words is a real search method, and it is the honest thing to teach first because you can run it in your head. Production systems replace it with **embeddings**: each chunk is converted into a list of a few hundred numbers, positioned so that chunks about similar things end up numerically close together.
+
+- The advantage is paraphrase. "How much VRAM do I need" shares no words with "GPU memory requirements", so word overlap scores it zero. Embeddings score it high.
+- The database that stores those number-lists and finds the closest ones without checking all ten million is a **vector database**, and the trick it uses is **approximate nearest neighbour search** - close enough, hundreds of times faster.
+- Both are taught in *Embeddings, Vector Databases & Semantic Search*. Nothing below depends on the details.
+- What does not change is the shape: score every chunk, keep the top-k, rerank. Swapping word overlap for embeddings swaps the scoring function and nothing else.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Stage 4: retrieve - score every chunk, keep the best',
+      code: `q = content(QUERY)                    # compute the query words once, not once per chunk
+
+def hits(chunk):                      # our stand-in for a similarity score
+    n = 0                             # counter for matching words
+    for w in content(chunk):          # walk the chunk word by word
+        if w in q:                    # is this chunk word one of the query words?
+            n += 1                    # yes - count it
+    return n                      # hand back the number of matching words
+
+scored = []
+for i, c in enumerate(CHUNKS):        # score every single chunk in the index
+    scored.append((hits(c), i))       # store (score, position); a tuple sorts by its first item
+scored.sort(reverse=True)             # reverse=True means biggest score first
+for s, i in scored:
+    print(s, "c" + str(i), CHUNKS[i][:44])   # [:44] shows the first 44 characters only
+
+# real output:
+# 4 c5 Our support team answers questions about ref
+# 3 c0 Customers may request a refund within 30 day
+# 2 c4 Closing an account does not refund the unuse
+# 1 c2 Standard shipping takes five to seven busine
+# 0 c3 Express shipping costs twelve dollars per or
+# 0 c1 Refunds go back to the original payment card`,
+      annotations: {
+        10: 'scored starts empty and collects one pair per chunk. Building a list of (score, thing) pairs and sorting it is the plainest ranking code there is.',
+        14: 'for s, i in scored unpacks each pair into two names at once, so s is the score and i is the position.',
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'The winner is wrong, and why that is normal',
+      md: `Read the output again. The top-scoring chunk is **c5**, the support blurb that answers nothing. The chunk that actually contains the answer, c0, came second.
+
+- c5 scored 4 because it is long. It says "refund" twice, plus "purchase" and "days". Length alone bought it the win.
+- c0 scored 3, and it is the answer.
+- This is not a bug in the toy. It is the defining weakness of fast search: a fast scorer looks at *how many* words match, not at whether the chunk is genuinely *about* the question.
+
+You could fix it by making the scorer smarter, but a smarter scorer is a slower scorer, and you must run it against every chunk in the index. Ten million chunks makes that impossible. So do both, in two stages:
+
+- **Stage one, fast and crude:** score all ten million, keep 50. Mistakes are fine here. The only job is to not lose the right chunk.
+- **Stage two, slow and careful:** score those 50 properly and keep 5. You can afford a hundred times more work per chunk, because there are two hundred thousand times fewer chunks.
+
+That is reranking, and that is why two stages beat one. One fast stage is inaccurate. One slow stage is unaffordable. Two stages are both.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Stage 5: rerank the survivors with a fussier score',
+      code: `top3 = [i for s, i in scored[:3]]     # keep only the position from the top 3 pairs
+print("top 3 after retrieval:", top3)   # positions, best first
+
+def rerank(chunk):                                     # slow score - only ever runs on survivors
+    shared = set(content(chunk)) & set(q)              # & keeps words that are in BOTH sets
+    return len(shared) / (len(content(chunk)) ** 0.5)  # ** 0.5 is square root: the length penalty
+
+for i in top3:                                         # only 3 chunks reach this loop
+    print(round(rerank(CHUNKS[i]), 3), "c" + str(i), CHUNKS[i][:44])  # score, name, first 44 chars
+best = max(top3, key=lambda i: rerank(CHUNKS[i]))      # pick the position with the highest rerank
+print("best before rerank: c" + str(top3[0]))          # top3[0] is what fast search chose
+print("best after  rerank: c" + str(best))             # and this is what careful scoring chose
+
+# real output:
+# top 3 after retrieval: [5, 0, 4]
+# 0.707 c5 Our support team answers questions about ref
+# 1.061 c0 Customers may request a refund within 30 day
+# 0.707 c4 Closing an account does not refund the unuse
+# best before rerank: c5
+# best after  rerank: c0`,
+      annotations: {
+        1: 'A list comprehension: [expression for names in list] builds a new list in one line. Read it as "the i from every (s, i) pair in the first three". scored[:3] is a slice - the first three items.',
+        5: 'Two changes at once, and both matter. set(...) collapses duplicates, so c5 saying "refund" twice now counts once. & is set intersection - the words present in the chunk AND in the query.',
+        6: 'Dividing by the square root of the chunk length is the length penalty. A long chunk gets more chances to contain your words by accident, so its score is discounted - but by square root, not by length, or every one-word chunk would win.',
+        10: 'max(list, key=f) compares items by f(item) instead of by the item itself. lambda i: ... is a one-line unnamed function: given i, return its rerank score.',
+      },
+    },
+    {
+      type: 'note',
+      md: 'The reorder in that output is the whole reason reranking exists. c5 went from 0.707 to third place and c0 to first, from 3 hits to 1.061. Real systems use a **cross-encoder** for stage two: a model that reads the question and the chunk *together* in one pass, so it can tell "mentions refunds" from "answers this refund question". Our two rules - count each word once, penalise length - are a crude stand-in that produces the same kind of correction for the same reason.',
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Stage 6: assemble the prompt',
+      code: `order = sorted(top3, key=lambda i: -rerank(CHUNKS[i]))   # the minus sign sorts high to low
+lines = ["Answer only from the passages below. If they do not answer it, say I do not know."]
+for rank, i in enumerate(order):                         # rank counts 0, 1, 2 as we go
+    lines.append("[S" + str(rank + 1) + "] " + CHUNKS[i])  # label each passage S1, S2, S3
+lines.append("Question: " + QUERY)                       # the question goes last
+print("\\n".join(lines))                                  # join glues the list with newlines between
+
+# real output:
+# Answer only from the passages below. If they do not answer it, say I do not know.
+# [S1] Customers may request a refund within 30 days of purchase.
+# [S2] Our support team answers questions about refund rules, refund timing, purchase history, shipping days, dollars charged and account settings.
+# [S3] Closing an account does not refund the unused days of a subscription.
+# Question: how many days after purchase can I ask for a refund`,
+      annotations: {
+        1: 'sorted() returns a new sorted list rather than rearranging the original. Negating the score flips the order, because sorting is smallest-first by default.',
+        2: 'The instruction is doing real work. Without "answer only from the passages", the model happily falls back on its own guesses, and you are back to the 14-days hallucination.',
+        4: 'The S1/S2/S3 labels are what makes citation possible: you kept the mapping from label to chunk, so a label in the answer resolves to a document you can link.',
+      },
+    },
+    {
+      type: 'note',
+      md: 'That prompt string is the whole output of the pipeline - it is what you would send to a language model. **Illustrative only, not a run:** no model was called anywhere in this module. Given that prompt, a working model should answer roughly *"30 days from the date of purchase [S1]."* If you ever see a claim about what a model replied, check whether someone actually ran it.',
+    },
+    {
+      type: 'intuition',
+      title: 'Chunking is where these systems actually fail',
+      md: `The pipeline above is straightforward. The part that decides whether your system works is the one that looks like a formatting detail: how you cut the documents up.
+
+The reason is a hard constraint worth memorising: **retrieval can never return anything smaller than a chunk, and never anything larger.** The chunk is the unit. If the answer is half a chunk, you get the other half too. If the answer spans two chunks, you get half an answer.
+
+Three ways it goes wrong, all shown with real numbers next:
+
+- **Chunks too small** - the answer gets scattered across several chunks and no single one is convincing.
+- **Chunks too large** - the matching words are diluted by hundreds of unrelated words, so the score drops and the right chunk loses to a short irrelevant one.
+- **A boundary lands mid-answer** - the worst case, because both halves score respectably and neither one answers.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Failure 1: chunks too small',
+      code: `POLICY = "Customers may request a refund within 30 days of purchase. Refunds go back to the original payment card."  # one paragraph of the handbook
+w = POLICY.split()                    # a flat list of every word in the policy
+for i in range(0, len(w), 3):         # range(start, stop, step) - so i is 0, 3, 6, 9 ...
+    piece = " ".join(w[i:i + 3])      # w[i:i+3] takes three words; join glues them back into a string
+    print(hits(piece), "|", piece)    # score each tiny chunk against the same query
+
+# real output:
+# 0 | Customers may request
+# 1 | a refund within
+# 1 | 30 days of
+# 1 | purchase. Refunds go
+# 0 | back to the
+# 0 | original payment card.`,
+      annotations: {
+        5: 'The best score any chunk can now reach is 1, down from 3. The word "refund" is in one chunk, "30 days" is in the next, "purchase" is in the one after. The fact still exists in the corpus and has been shredded into three pieces that individually mean nothing.',
+      },
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Failure 2: chunks too large',
+      code: `BIG = " ".join(CHUNKS)                # the opposite mistake: the whole document as ONE chunk
+print("one big chunk:", hits(BIG), "hits,", len(content(BIG)), "words, rerank", round(rerank(BIG), 3))
+print("c0 (the answer):", hits(CHUNKS[0]), "hits,", len(content(CHUNKS[0])), "words, rerank", round(rerank(CHUNKS[0]), 3))
+print("c2 (off topic) :", hits(CHUNKS[2]), "hits,", len(content(CHUNKS[2])), "words, rerank", round(rerank(CHUNKS[2]), 3))
+
+# real output:
+# one big chunk: 10 hits, 54 words, rerank 0.408
+# c0 (the answer): 3 hits, 8 words, rerank 1.061
+# c2 (off topic) : 1 hits, 7 words, rerank 0.378`,
+      annotations: {
+        2: 'The big chunk has the most raw hits of anything in this module - 10 - and the second-worst rerank score, 0.408. That is dilution in one line: the matching words are real, and they are drowning in 54 words of other material.',
+        3: 'c0 is the same eight-word chunk from stage 2, scored again for comparison. Three hits, and the best rerank score in this module.',
+        4: 'The comparison that should worry you: the whole document scores 0.408 and the short, entirely off-topic shipping chunk scores 0.378. A dozen more shipping sentences in the file and the document containing your answer would lose to a chunk about parcels.',
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'So what size, and what do you do about it?',
+      md: `The two failures pull in opposite directions, which is why there is no universally correct answer - only a defensible starting point and a way to check it.
+
+- Start at roughly **200 to 500 words per chunk**: big enough to hold a complete fact with its context, small enough that a match means something.
+- **Split on structure, not on a counter.** Cut at headings, paragraphs, list items, table rows. A rule that cuts every 300 words will eventually cut in the middle of a sentence, and eventually is every day at scale.
+- **Add overlap.** Let each chunk repeat the last 10 to 20 percent of the previous one. A sentence severed by a boundary then survives whole inside its neighbour. It costs storage and buys back most boundary failures.
+- **Prefix each chunk with its document title and heading.** A chunk reading only "Within 30 days." is useless alone; "Refund Policy > Timing: Within 30 days." is not.
+- **Then measure it.** Write down 50 real questions and the paragraph that answers each, and count how often your top-5 contains the right paragraph. Change the chunk size, count again. That is the only honest way to pick, and it is the subject of *Evaluating LLM Systems: Judges, Hallucination & Guardrails*.`,
     },
     {
       type: 'visual',
       component: 'PointerBoxDiagram',
       props: {
-        title: 'One question through the whole RAG pipeline — then two ways it breaks',
-        notice: 'Step through it. Watch the candidate list get cut from 5 to 3 and REORDER at the rerank step — then watch the last two frames, where the pipeline runs perfectly and still gives a wrong or illegal answer.',
+        title: 'One question through the pipeline, then the way it breaks',
+        notice: 'Step through it. Watch the candidate list shrink from 6 to 3 and reorder at the rerank step, then watch the last frame, where every stage runs correctly and the answer is still wrong.',
         leftLabel: 'query path',
         rightLabel: 'index / candidates',
         frames: [
           {
-            note: '1. A question arrives. Nothing is retrieved yet — the index was already built offline by the ingestion job.',
-            stack: [{ name: 'question', value: '"how big is the KV cache?"' }],
-            heap: [{ id: 'idx', value: '12,400 chunk vectors', label: 'vector index' }],
+            note: '1. A question arrives. Nothing is retrieved yet - the index was built earlier, offline, by the chunking job.',
+            stack: [{ name: 'query', value: '"how many days ... refund"' }],
+            heap: [{ id: 'idx', value: '6 chunks (real: millions)', label: 'index' }],
           },
           {
-            note: '2. Embed the question with the SAME model used at ingestion. One 768-dim vector. ~20 ms.',
-            stack: [
-              { name: 'question', value: '"how big is the KV cache?"' },
-              { name: 'q_vec', value: '[0.02, -0.11, ...]', to: 'idx' },
+            note: '2. Fast scoring runs over every chunk in the index. Here that is 6 comparisons; in a real system it is millions, which is why this stage must stay cheap.',
+            stack: [{ name: 'q', value: "['days','after','purchase','ask','refund']", to: 'idx' }],
+            heap: [{ id: 'idx', value: '6 chunks scored', label: 'index' }],
+          },
+          {
+            note: '3. Top-3 kept. Note the order: the grab-bag c5 is FIRST with 4 hits, purely for being long. The right answer c0 is second. Fast search is allowed to be wrong here - it only has to keep the answer in the list.',
+            stack: [{ name: 'top3', value: '[5, 0, 4]' }],
+            heap: [
+              { id: 'c5', value: 'support blurb, mentions everything', label: '4 hits' },
+              { id: 'c0', value: 'refund within 30 days of purchase', label: '3 hits' },
+              { id: 'c4', value: 'closing an account does not refund', label: '2 hits' },
             ],
-            heap: [{ id: 'idx', value: '12,400 chunk vectors', label: 'vector index' }],
           },
           {
-            note: '3. Hybrid search returns 5 candidates (real systems: 50). The ACL filter is applied INSIDE the query, so forbidden chunks are never even scored.',
+            note: '4. Rerank: count each word once, divide by the square root of the length. c0 rises to 1.061 and c5 falls to 0.707. This one reorder is the entire reason a second stage exists.',
+            stack: [{ name: 'best', value: 'c0', to: 'c0' }],
+            heap: [
+              { id: 'c0', value: 'refund within 30 days of purchase', label: 'rerank 1.061' },
+              { id: 'c5', value: 'support blurb', label: 'rerank 0.707' },
+              { id: 'c4', value: 'account closing', label: 'rerank 0.707' },
+            ],
+          },
+          {
+            note: '5. Prompt assembly. Strongest passage first, each labelled S1/S2/S3 so the answer can cite it, with an instruction to answer only from these passages.',
             stack: [
-              { name: 'q_vec', value: '[0.02, -0.11, ...]', to: 'c3' },
-              { name: 'filter', value: 'acl IN user.groups' },
+              { name: 'prompt[0]', value: 'answer only from the passages' },
+              { name: 'prompt[1]', value: '[S1] ...', to: 'c0' },
+              { name: 'prompt[4]', value: 'Question: how many days ...' },
+            ],
+            heap: [{ id: 'c0', value: 'refund within 30 days of purchase', label: 'S1 policy.md' }],
+          },
+          {
+            note: 'FAILURE - the chunker cut mid-sentence. Chunk A holds "may request a refund within", chunk B holds "30 days of purchase". Both retrieve. Neither answers. Every stage after this ran perfectly and could not help.',
+            stack: [
+              { name: 'top3', value: '[B, A, ...]', danger: true },
+              { name: 'answer', value: 'confident and wrong', danger: true },
             ],
             heap: [
-              { id: 'c3', value: 'int8 quantization...', label: '0.868' },
-              { id: 'c1', value: 'kv cache memory/token', label: '0.863' },
-              { id: 'c8', value: 'gpu memory limits', label: '0.514' },
-              { id: 'c5', value: 'serving glossary', label: '0.407' },
-              { id: 'c6', value: 'kv cache eviction', label: '0.206' },
-            ],
-          },
-          {
-            note: '4. Cross-encoder reranks: it reads the question TOGETHER with each chunk. c1 jumps to the top, c3 (topically close, actually about quantization) is dropped, c8 is dropped. 5 -> 3.',
-            stack: [{ name: 'context', value: 'top 3 passages', to: 'c1' }],
-            heap: [
-              { id: 'c1', value: 'kv cache memory/token', label: 'rerank 1.327' },
-              { id: 'c6', value: 'kv cache eviction', label: 'rerank 1.133' },
-              { id: 'c5', value: 'serving glossary', label: 'rerank 0.840' },
-            ],
-          },
-          {
-            note: '5. Prompt assembly. Best passage FIRST and last, weakest in the middle — models attend least to the middle of a long context. Each passage carries its source label.',
-            stack: [
-              { name: 'prompt[0]', value: 'system: answer only from context' },
-              { name: 'prompt[1]', value: '[S1] ...', to: 'c1' },
-              { name: 'prompt[2]', value: '[S2] ...', to: 'c5' },
-              { name: 'prompt[3]', value: '[S3] ...', to: 'c6' },
-              { name: 'prompt[4]', value: 'user: how big is the KV cache?' },
-            ],
-            heap: [
-              { id: 'c1', value: 'kv cache memory/token', label: 'S1 serving.md#kv' },
-              { id: 'c5', value: 'serving glossary', label: 'S2 glossary.md' },
-              { id: 'c6', value: 'kv cache eviction', label: 'S3 chat-limits.md' },
-            ],
-          },
-          {
-            note: '6. Generate. The answer streams token by token; citations [S1][S3] resolve to real URLs because we know exactly which passages we inserted.',
-            stack: [
-              { name: 'answer', value: '"2 * n_layers * ... [S1]"', to: 'c1' },
-              { name: 'citations', value: '[S1, S3]', to: 'c6' },
-            ],
-            heap: [
-              { id: 'c1', value: 'kv cache memory/token', label: 'S1 serving.md#kv' },
-              { id: 'c6', value: 'kv cache eviction', label: 'S3 chat-limits.md' },
-            ],
-          },
-          {
-            note: 'FAILURE 1 - retrieval miss. The real answer lives in c47, which never entered the top-k. The generator cannot save you: it answers confidently from three near-misses, or says "I do not know" on a question your corpus can answer.',
-            stack: [
-              { name: 'context', value: 'top 3 passages', to: 'c5', danger: true },
-              { name: 'answer', value: 'confident + wrong', danger: true },
-            ],
-            heap: [
-              { id: 'c5', value: 'serving glossary', label: 'retrieved', danger: true },
-              { id: 'c8', value: 'gpu memory limits', label: 'retrieved', danger: true },
-              { id: 'c3', value: 'int8 quantization', label: 'retrieved', danger: true },
-              { id: 'c47', value: 'THE ACTUAL ANSWER', label: 'never retrieved', danger: true },
-            ],
-          },
-          {
-            note: 'FAILURE 2 - permission leak. No ACL filter on the query, so a salary document scored well and got pasted into the prompt. The model quotes it back to a user who may not read it. Fix: filter at query time, never post-hoc.',
-            stack: [
-              { name: 'filter', value: 'NONE', danger: true },
-              { name: 'prompt[2]', value: '[S2] ...', to: 'cx', danger: true },
-              { name: 'answer', value: 'leaks salary band', danger: true },
-            ],
-            heap: [
-              { id: 'c1', value: 'kv cache memory/token', label: 'S1 public' },
-              { id: 'cx', value: 'comp-bands-2026.pdf', label: 'acl: hr-only', danger: true },
+              { id: 'A', value: '"Customers may request a refund within"', label: '1 hit', danger: true },
+              { id: 'B', value: '"30 days of purchase. Refunds go"', label: '2 hits', danger: true },
             ],
           },
         ],
       },
     },
     {
+      type: 'intuition',
+      title: 'Worked case: one question, computed by hand',
+      md: `No code. Take the six chunks and the query *"how many days after purchase can I ask for a refund"* and do it on paper.
+
+1. **Query words after removing stopwords:** days, after, purchase, ask, refund. Five words.
+2. **Score c0** - *"Customers may request a refund within 30 days of purchase."* Its content words are customers, may, request, refund, within, 30, days, purchase. Which are in the query list? refund, days, purchase. **Score 3.**
+3. **Score c4** - *"Closing an account does not refund the unused days of a subscription."* Content words closing, account, does, not, refund, unused, days, subscription. Matches: refund, days. **Score 2.**
+4. **Score c5** - the grab bag. It contains refund twice, plus purchase and days. **Score 4.** It wins retrieval while answering nothing.
+5. **Top-3 is therefore c5, c0, c4.** The answer survived, in second place. That is retrieval doing its job - not being right, just not losing the answer.
+6. **Rerank c5.** Distinct query words present: refund, purchase, days - three. It has 18 content words, and the square root of 18 is about 4.24. Score = 3 / 4.24 = **0.707**. The double "refund" stopped counting twice, and the length cost it.
+7. **Rerank c0.** Distinct matches: refund, days, purchase - also three. But it has 8 content words, and the square root of 8 is about 2.83. Score = 3 / 2.83 = **1.061**.
+8. **c0 wins**, goes into the prompt as S1, and the answer is 30 days with a citation.
+
+The number to take away is the pair 0.707 against 1.061. Both chunks match the same three words. The only difference is that one of them is *about* the question and the other merely mentions it, and dividing by length is what turned that difference into a number.`,
+    },
+    {
+      type: 'intuition',
+      title: 'The classic mistake: the answer is in the corpus, cut in half',
+      md: `Here is the failure that catches nearly everyone, and it looks like a success from the outside.
+
+A team ships a policy assistant. Retrieval logs look healthy - every question returns chunks that mention refunds. Users report that the bot "sort of knows" the refund policy but never states the window. The team assumes the model is at fault, spends a week rewriting the prompt, and nothing improves.
+
+The chunker was splitting every 6 words. Run it.`,
+    },
+    {
       type: 'code',
       lang: 'python',
-      title: 'Retrieve cheap, rerank accurate — 50 lines of NumPy, real output pasted',
-      code: `import numpy as np
+      title: 'The diagnosis: print the chunks the query actually retrieved',
+      code: `A = " ".join(w[:6])                   # first six words of the policy
+B = " ".join(w[6:12])                 # the next six
+print("A:", A)                        # read the chunk text, not just the score
+print("B:", B)                        # this is the diagnostic step people skip
+print("A ->", hits(A), "hits, rerank", round(rerank(A), 3))   # score chunk A as usual
+print("B ->", hits(B), "hits, rerank", round(rerank(B), 3))   # and chunk B
 
-rng = np.random.default_rng(5)
-
-VOCAB = ['kv', 'cache', 'memory', 'attention', 'gpu', 'batch', 'quantize', 'latency', 'token', 'cost']
-IDX = {w: i for i, w in enumerate(VOCAB)}
-E = rng.normal(size=(len(VOCAB), 16))           # one learned vector per content word
-E /= np.linalg.norm(E, axis=1, keepdims=True)
-
-# (chunk label, the content words left after stopword removal)
-DOCS = [
-    ('c1  kv cache memory per token',        'kv cache memory token'),
-    ('c2  attention cost is quadratic',      'attention cost token'),
-    ('c3  int8 quantization cuts memory',    'quantize memory gpu'),
-    ('c4  batch size vs latency',            'batch latency gpu'),
-    ('c5  serving-glossary grab-bag',        'memory gpu batch cost token latency attention quantize kv cache'),
-    ('c6  kv cache eviction for long chats', 'kv cache token'),
-    ('c7  latency budget per request',       'latency token cost'),
-    ('c8  gpu memory is the constraint',     'gpu memory cost'),
-]
-QUERY = 'kv cache memory'
-
-P = rng.normal(size=(16, 4))                    # the lossy squeeze every bi-encoder makes
-
-def embed(text):                                # bi-encoder: mean-pool, compress, L2-normalise
-    v = E[[IDX[w] for w in text.split()]].mean(axis=0) @ P
-    return v / np.linalg.norm(v)
-
-D = np.stack([embed(d) for _, d in DOCS])       # built ONCE, offline, by the ingestion job
-q = embed(QUERY)                                # built per request, at query time
-
-cheap = D @ q                                   # one dot product per chunk - the cheap stage
-cand = np.argsort(-cheap)[:5]                   # retrieve 5 (real systems: 50)
-print('stage 1 - bi-encoder cosine, top 5:')
-for r in cand:
-    print(f'  {cheap[r]: .3f}  {DOCS[r][0]}')
-
-df = np.array([sum(w in d.split() for _, d in DOCS) for w in VOCAB])
-idf = np.log(len(DOCS) / df)
-
-def cross(query, doc):                          # cross-encoder: reads query AND doc together
-    dt = doc.split()
-    return sum(idf[IDX[w]] * (w in dt) for w in query.split()) / np.sqrt(len(dt))
-
-ce = np.array([cross(QUERY, DOCS[r][1]) for r in cand])
-top = cand[np.argsort(-ce)][:3]                 # rerank to 3 (real systems: 5)
-print('\\nstage 2 - cross-encoder rerank, top 3:')
-for r in top:
-    print(f'  {cross(QUERY, DOCS[r][1]): .3f}  {DOCS[r][0]}')
-
-print('\\nbest before rerank:', DOCS[cand[0]][0])
-print('best after  rerank:', DOCS[top[0]][0])
-
-# ---------------- actual output ----------------
-# stage 1 - bi-encoder cosine, top 5:
-#    0.868  c3  int8 quantization cuts memory
-#    0.863  c1  kv cache memory per token
-#    0.514  c8  gpu memory is the constraint
-#    0.407  c5  serving-glossary grab-bag
-#    0.206  c6  kv cache eviction for long chats
-#
-# stage 2 - cross-encoder rerank, top 3:
-#    1.327  c1  kv cache memory per token
-#    1.133  c6  kv cache eviction for long chats
-#    0.840  c5  serving-glossary grab-bag
-#
-# best before rerank: c3  int8 quantization cuts memory
-# best after  rerank: c1  kv cache memory per token`,
+# real output:
+# A: Customers may request a refund within
+# B: 30 days of purchase. Refunds go
+# A -> 1 hits, rerank 0.447
+# B -> 2 hits, rerank 0.894`,
       annotations: {
-        16: 'The distractor: a chunk stuffed with every keyword. Mean-pooling makes it look vaguely relevant to everything, and length normalisation in the reranker is what puts it back in its place.',
-        23: 'The honest core of the analogy. A real bi-encoder squeezes a whole chunk into one fixed vector BEFORE it has seen the query — detail is lost. This projection is that loss, made visible.',
-        29: 'Offline. Millions of chunk vectors, computed once by the ingestion job. This is why dense retrieval is cheap at query time.',
-        32: 'The entire cheap stage: one dot product per chunk. A real vector DB does this approximately (HNSW/IVF) so it is sublinear, not linear.',
-        41: 'The cross-encoder. Note it takes BOTH arguments and looks at them together — it cannot be precomputed, which is exactly why you only run it on 50 candidates, not 12,400.',
-        43: 'Dividing by sqrt(len) is the length penalty: a long grab-bag chunk that happens to contain your words is not the same as a short chunk about them.',
-        56: 'Look at the flip. Cheap retrieval ranked c3 (quantization) FIRST — topically adjacent, wrong answer. The reranker demoted it out of the top 3 entirely and promoted c1. This one reorder is the whole reason reranking exists.',
+        1: 'w[:6] is a slice - items from the start up to but not including position 6. This is the chunker cutting blind: six words, no attention to where the sentence ends.',
+        2: 'w[6:12] picks up exactly where A stopped. There is no overlap, so the words "refund within" and "30 days" never appear in the same chunk again.',
       },
     },
     {
       type: 'intuition',
-      title: 'Failure modes, part 1: retrieval broke',
-      md: `Every RAG demo works. Every RAG product fails here first. Learn these by name — interviewers grade on whether you can name them.
+      title: 'Why the week on the prompt was wasted',
+      md: `Look at what the model was handed. B scores highest, so B goes into the prompt: *"30 days of purchase. Refunds go"*. Thirty days of what? The chunk does not say. A says a refund may be requested within - within what? A does not say.
 
-- **Retrieval miss.** The answer was never in the top-k. Nothing downstream can fix this: the generator cannot cite what it never received. This is the #1 cause of bad RAG answers, and the reason you measure retrieval separately.
-- **Chunk boundary split.** The question is "what is the refund window?" and the chunker cut between "customers may request a refund within" and "30 days". Both chunks retrieve; neither answers. Fix: overlap, structure-aware splitting, or parent-document retrieval.
-- **Conflicting or stale documents.** The 2023 policy and the 2026 policy both retrieve. The model averages them or picks one at random. Fix: date metadata, recency boosting, and deleting old versions from the index instead of hoping.
-- **Over-retrieval.** "Context is cheap now, send 50 chunks." Signal-to-noise drops, cost per query rises, and accuracy usually *falls*. More context is not more knowledge.
-- **Lost in the middle.** Models attend most to the start and end of a long context and least to the middle. A correct passage buried at position 12 of 20 can be functionally invisible. Fix: send fewer, better passages, and **order them** — strongest first, second-strongest last.`,
+- Both chunks retrieve, and both look plausible in a log. Nobody scrolls far enough to notice neither one is a complete fact.
+- The model then does one of two things, and both get blamed on the model. It answers "I do not know" on a question your own handbook answers, or it fills the gap from its training data and confidently says 14 days.
+- **No prompt fixes this.** The words "30 days" and "refund" were never in the same string the model saw. The prompt cannot recover text that was never sent.
+- The diagnostic that would have saved the week is one line: *print the chunks you actually retrieved and read them as a human.* If they do not answer the question when you read them, the model has no chance either.
+
+This is the general shape of nearly every RAG bug: the failure happened at retrieval or chunking, and it shows up as a generation problem. Always check the retrieved text before touching the prompt.
+
+The fixes here, in order of how much they buy: **overlap** (if chunks had shared their last two words, "refund within 30 days" would exist somewhere intact), **splitting on sentence ends instead of a word counter**, and **returning the whole enclosing paragraph** whenever a small chunk matches.`,
     },
     {
       type: 'intuition',
-      title: 'Failure modes, part 2: generation and security',
-      md: `- **The model ignores your context.** You retrieved the right passage; it answered from its parametric memory anyway — usually when the retrieved text contradicts something it "knows", or when your instruction is weak. Fix: an explicit instruction to use only the context, passages clearly delimited and labelled, and a faithfulness check that flags unsupported claims.
-- **Refusal when it should answer**, the mirror image: an over-strict "only from context" prompt makes the model say "I don't know" even when the passage does support the answer. Both directions must be measured; tuning one breaks the other.
-- **Permission leakage.** The retriever fetched a document this user is not allowed to read, and the model helpfully quoted it. This is the failure that ends careers, because it is a data breach with a chat log as evidence.
-- The fix for leakage is one sentence: **filter at the query, never post-hoc.** The ACL predicate goes into the vector search itself, so a forbidden chunk is never scored, never ranked, never in a prompt, never in a cache, never in a log. Retrieving then dropping is not a fix — the document was already loaded, and one bug or one prompt-injection away from the user.
-- Practical consequence: every chunk carries its ACL tag as indexed metadata from ingestion day one. Retrofitting permissions onto an existing index is a rewrite.`,
-    },
-    {
-      type: 'note',
-      md: 'One more, worth its own line because it is easy to miss: **a shared cache is an ACL bypass.** If you cache answers by question text and user A asked something that retrieved their private document, user B asking the same question gets A\'s answer straight from the cache — with every filter perfectly configured. Cache keys must include the permission scope.',
+      title: 'When RAG is the wrong answer',
+      md: `RAG supplies facts. If the thing missing is not facts, it will not help, and reaching for it anyway is a common and expensive mistake.
+
+- **The task needs reasoning, not lookup.** "Given these 40 tickets, what is our biggest recurring problem?" No single passage contains that answer. Retrieval hands over 5 tickets out of 40 and the model summarises those. You needed to process all of them, not search them.
+- **The task needs a behaviour change.** The model is too chatty, ignores your JSON format, or will not stop apologising. No retrieved passage fixes a habit. That is fine-tuning, or a much firmer prompt.
+- **The task needs a computation.** "What was total revenue last quarter?" belongs in a SQL query, not a similarity search. Retrieval finds documents that talk about revenue; it does not add up numbers.
+- **The corpus is tiny.** If your whole knowledge base is 20 pages, paste all 20 pages into the prompt. Do not build a pipeline to search a document that fits in the prompt.
+- **The facts never change and are public.** A good model already knows what HTTP 404 means. Retrieving a definition it has known since pretraining adds latency and no accuracy.
+
+The honest test: *ask what would have to change for the answer to change.* If it is a document, RAG. If it is a habit, fine-tuning. If it is a number in a database, write a query.`,
     },
     {
       type: 'intuition',
-      title: 'Evaluation: measure the two halves separately',
-      md: `"Our RAG is 72% accurate" is a useless sentence. Accurate at what — finding, or writing? Split it, always.
+      title: 'Practice problems',
+      md: `Do these on paper before reading the solutions in the next section. Stopwords are the same set used above: how, many, a, an, the, of, to, i, can, is, do, for, and.
 
-- **Retrieval metrics.** *recall@k*: was a gold passage in the top-k? *MRR*: how high did the first correct passage rank? Retrieval recall is a hard ceiling — if recall@5 is 0.7, no generator alive gets you past 70%.
-- **Generation metrics.** *Faithfulness / groundedness*: is every claim in the answer supported by the retrieved text? *Answer relevance*: does it actually address the question? *Context precision*: how much of what you sent was useful?
-- The RAGAS-style family is exactly this set — faithfulness, answer relevance, context precision, context recall — scored with an LLM-as-judge, cheap enough to run per commit.
-- Why the split is non-negotiable: retrieval@5 = 0.95 with faithfulness = 0.60 means fix the prompt. Retrieval@5 = 0.55 with faithfulness = 0.95 means fix the chunker and the retriever. Same end-to-end score, opposite fixes.
-- **Build a golden set.** 50–100 real questions, each with the source passage that answers it, written by someone who knows the domain. It takes an afternoon, it is the highest-leverage afternoon in the project, and without it you are tuning by vibes.`,
-    },
-    {
-      type: 'math',
-      intro: 'The three numbers to quote in an interview, and the inequality that makes the split matter.',
-      latex: [
-        '\\text{recall@}k = \\frac{\\left| \\{\\text{gold passages}\\} \\cap \\{\\text{top-}k \\text{ retrieved}\\} \\right|}{\\left| \\{\\text{gold passages}\\} \\right|}',
-        '\\text{MRR} = \\frac{1}{|Q|}\\sum_{i=1}^{|Q|} \\frac{1}{\\text{rank}_i}, \\quad \\text{rank}_i = \\text{position of the first correct passage } (\\tfrac{1}{\\text{rank}} = 0 \\text{ if absent})',
-        '\\text{faithfulness} = \\frac{\\#\\{\\text{claims in the answer supported by the retrieved context}\\}}{\\#\\{\\text{claims in the answer}\\}}',
-        '\\text{end-to-end accuracy} \\;\\le\\; \\text{recall@}k \\;\\;\\Rightarrow\\;\\; \\text{recall@}5 = 0.70 \\text{ caps you at } 70\\% \\text{, whatever the model}',
-      ],
+1. Query: *"how much does express shipping cost"*. Using the six chunks in stage 2, list the query content words, score c2 and c3 by counting matching words, and say which one retrieval ranks first.
+2. Chunk c3 is "Express shipping costs twelve dollars per order." Its rerank score for the query in problem 1 is 2 divided by the square root of 7 - it has 7 content words. Compute it, then compute the rerank score of c5 (18 content words) for the same query, and say whether reranking changes the winner.
+3. Your chunker splits every 100 words. A support article has 40 questions, each a heading with a two-sentence answer under it. Name two distinct failures you should expect, and one chunking strategy that avoids both.
+4. A user asks "what is our refund policy?" and gets a correct, well-written answer that cites a page deleted from the wiki three months ago. Which stage is broken, and what would you add to the pipeline?
+5. Retrieval returns the right chunk in the top-5 for 60 of 100 test questions. Your generation step is flawless. What is the highest end-to-end accuracy you can possibly reach, and what does that tell you about where to spend the next week?`,
     },
     {
       type: 'intuition',
-      title: 'Advanced patterns, one line each',
-      md: `Reach for these when the golden set says a specific stage is failing — not before.
-
-- **Query rewriting / expansion.** Turn "and what about the second one?" into a standalone query using chat history. Not optional: in any multi-turn chatbot, follow-ups embed to nonsense without it. This is the highest-value item on the list.
-- **HyDE** (Hypothetical Document Embeddings). Have the LLM *write a fake answer*, embed that, and search with it — a hypothetical answer looks more like the target passage than the question does.
-- **Multi-query fusion.** Generate 3–5 paraphrases of the query, retrieve for each, fuse the ranked lists. Buys recall for extra latency and cost.
-- **Parent-document retrieval.** Index small precise chunks, but return the larger parent section they came from. Precision when searching, context when reading — the standard cure for chunk-boundary splits.
-- **Self-querying.** Let the LLM extract metadata filters from the question: "Q3 2025 security incidents" becomes a semantic query plus \`date BETWEEN ...\` plus \`tag = security\`.
-- **Agentic / iterative retrieval.** The model decides it needs more, searches again with a better query, and repeats. Powerful, unbounded in latency and cost — that is the agents module.`,
+      title: 'Practice solutions',
+      md: `1. Content words: much, does, express, shipping, cost. c2 is "Standard shipping takes five to seven business days" - content words standard, shipping, takes, five, seven, business, days; only **shipping** matches, so **score 1**. c3 is "Express shipping costs twelve dollars per order" - content words express, shipping, costs, twelve, dollars, per, order. **express** and **shipping** match; "costs" does not match "cost" because we compare whole words. **Score 2**, so c3 ranks first. Retrieval got it right this time, and note the near-miss: plural "costs" against singular "cost" is a real class of bug that word matching has and embeddings do not.
+2. c3: 2 divided by the square root of 7 is 2 / 2.646 = **0.756**. Does c5 match express? No - c5 says shipping but not express, so it has 1 distinct match, and 1 / 4.243 = **0.236**. Reranking does not change the winner here; it widens the gap. That is the normal case. Reranking earns its keep on the minority of queries where it flips the order, and you cannot know in advance which ones those are.
+3. Two failures: (a) a 100-word cut lands in the middle of an answer, so a question ends up in one chunk and half its answer in the next - the boundary split; (b) a 100-word chunk can swallow three unrelated question-and-answer pairs, so a match on one drags in two irrelevant ones and dilutes the score. The strategy that avoids both: **split on the headings**, one chunk per question-and-answer pair, and prefix each chunk with the article title. The document already told you where the boundaries are.
+4. Nothing in retrieval or generation is broken - the pipeline faithfully returned what was in the index. The **index is stale**: the document was deleted from the wiki and never deleted from the index. Add an ingestion job that re-syncs on a schedule and removes chunks whose source is gone, and store the source date on every chunk so you can prefer recent material. This failure is invisible in every metric that only looks at the answer quality, which is what makes it dangerous.
+5. **60 percent.** If the right chunk is missing from the prompt in 40 of 100 cases, a perfect model still cannot answer those 40 - it cannot cite what it never received. Retrieval accuracy is a hard ceiling on end-to-end accuracy. So the next week goes into chunking and retrieval, not into the prompt. This one number is why you always measure the two halves separately instead of reporting a single score.`,
     },
     {
       type: 'intuition',
-      title: 'The production architecture',
-      md: `Two systems that share one index, and must be deployed and scaled separately.
+      title: 'Beyond the basics - skip this on your first read',
+      md: `Everything above is enough to build a working system and explain it. These are the four things you meet next.
 
-- **Ingestion job** (offline, batch): crawl → parse → chunk → embed → upsert. Runs on a schedule or on a webhook. Must be idempotent and incremental — re-embedding the whole corpus because one page changed is the classic waste. Re-embedding *is* forced when you change the embedding model, so version your index.
-- **Query service** (online, per request): the five-step path. Stateless, autoscaled, latency-critical.
-- **Semantic cache**: embed the question, and if a previous question sits within a similarity threshold, return the cached answer. Huge win on support-style traffic where the same 200 questions repeat forever. Two rules: key on permission scope, and expire on reindex, or you will serve stale answers with confident citations.
-- **Streaming**: send the first token as soon as generation starts, and resolve citation links in parallel. Perceived latency is time-to-first-token, not total time — see the Backend serving module for the SSE/streaming-response mechanics.
-- **Latency budget**, order of magnitude, not a benchmark: embed query ~20 ms, vector search ~30 ms, rerank 50 candidates ~100–200 ms, time-to-first-token ~300–800 ms. The reranker is the piece you will be asked to justify or drop; know that it costs roughly a fifth of your budget and usually buys the largest single accuracy jump.
-- **Cost per query**: reranker calls + input tokens (the passages dominate — 5 chunks × 400 tokens is 2000 input tokens *per question*) + output tokens. Over-retrieval shows up on the invoice before it shows up in the metrics.`,
-    },
-    {
-      type: 'intuition',
-      title: 'Build it: RAG over your own notes',
-      md: `The plan's practical, and a genuinely strong portfolio project because it forces every stage to be real.
-
-1. **Ingest** your actual study notes (markdown is kind; add one PDF so you meet the parsing pain honestly). Chunk on headings, 300 tokens with 50 overlap, and store source path plus heading anchor as metadata.
-2. **Index** with a local vector store, plus BM25, and fuse. Local means no API key needed to demo it.
-3. **Serve** with FastAPI: \`POST /chat\` streaming the answer, returning citations as source path + anchor. This is the line that connects the project to your Backend work — same streaming machinery.
-4. **Evaluate**, and this is the part 95% of portfolio RAG projects skip, which is exactly why doing it stands out: 50 golden questions, report recall@5 before and after adding the reranker, and faithfulness before and after adding the "answer only from context" instruction.
-5. **README**, written like an engineer, not a tutorial: the architecture diagram, the chunking decision *and why*, the eval table with the four numbers, one paragraph on a failure you found and fixed, and the honest limitations section (no ACLs, single user, corpus size). An interviewer reads that README and has five questions ready — all of which you can answer.`,
-    },
-    {
-      type: 'note',
-      md: 'The one-sentence version to keep in your head: **RAG is a search engine wearing a language model as a hat.** Almost every RAG failure is a search failure, and almost every RAG improvement is a search improvement — better parsing, better chunks, hybrid retrieval, reranking, filters. Teams that treat it as a prompt-engineering problem plateau; teams that treat it as an information-retrieval problem ship.',
+- **Hybrid search.** Run word matching and embedding search side by side and merge the two ranked lists. Embeddings miss exact rare tokens - an error code like ERR_2231, a product SKU, a surname - because they never learned a good position for them. Word matching catches those and misses paraphrase. Together they cover each other, and merging costs almost nothing.
+- **Query rewriting.** In a chat, the third message is "and how much does that cost?". Searching for those words retrieves nothing useful, because the subject is in an earlier message. So use the model to rewrite the follow-up into a standalone question first - "how much does express shipping cost?" - and search with that. In any multi-turn assistant this is close to mandatory.
+- **Permissions.** Store an access tag on every chunk at indexing time, and put the permission check *inside* the search query so a forbidden chunk is never scored. Filtering after retrieval is not equivalent: by then the document is already loaded in your process, ready to be logged, cached, or leaked by the next bug. If you cache answers, the cache key must include who is asking, or user B gets user A's private answer.
+- **Lost in the middle.** Models pay most attention to the start and end of a long prompt and least to the middle. A correct passage sitting twelfth of twenty can be effectively invisible. Send fewer passages, and put the strongest first.`,
     },
   ],
   quiz: [
     {
-      question: 'Your RAG system answers a question wrongly. Logging shows the passage containing the correct answer was not in the retrieved top-5. What is the most direct fix?',
+      question: 'Your assistant answers a refund question wrongly. The logs show the paragraph containing the correct answer was not among the retrieved top-5. What is the most direct fix?',
       options: [
-        {
-          text: 'Rewrite the generation prompt to be stricter about using context',
-          explanation: 'The prompt cannot help — the correct text was never given to the model. Prompt fixes address faithfulness failures, not retrieval misses.',
-        },
-        {
-          text: 'Improve retrieval: hybrid search, better chunking, larger k before reranking, query rewriting',
-          explanation: 'Correct. This is a retrieval miss, and retrieval recall is a hard ceiling on end-to-end accuracy. Nothing downstream can recover a passage that was never fetched.',
-        },
-        { text: 'Switch to a larger generation model', explanation: 'A bigger model reading the wrong passages still answers wrongly — or hallucinates more fluently.' },
-        { text: 'Increase the temperature so it explores more', explanation: 'Temperature changes sampling randomness, not what is in the context window. It would make things worse.' },
+        { text: 'Rewrite the prompt to insist harder on using the provided context', explanation: 'The prompt cannot help. The correct text was never sent to the model, so there is nothing in the context to insist on.' },
+        { text: 'Fix retrieval: chunking, the scoring method, or a larger k before reranking', explanation: 'Correct. This is a retrieval miss, and retrieval accuracy is a hard ceiling on the final answer. Nothing downstream can recover a passage that was never fetched.' },
+        { text: 'Use a larger language model', explanation: 'A bigger model reading the wrong passages still answers wrongly, just more fluently.' },
+        { text: 'Fine-tune the model on the handbook', explanation: 'That reintroduces every problem RAG was chosen to avoid: no citation, no per-user scoping, and stale the next time the handbook changes.' },
       ],
       correct: 1,
     },
     {
-      question: 'Why is a cross-encoder reranker more accurate than the bi-encoder retriever that fed it?',
+      question: 'Why run a fast crude search first and a slow careful one second, instead of just running the careful one?',
       options: [
-        { text: 'It uses a bigger embedding dimension', explanation: 'Dimension is not the difference; a cross-encoder does not produce a comparable embedding at all.' },
-        { text: 'It is trained on more data', explanation: 'Possibly true in practice, but it is not the structural reason and not what the question is testing.' },
-        {
-          text: 'It encodes the query and the document TOGETHER, so query tokens attend to document tokens; the bi-encoder compares two independently computed vectors',
-          explanation: 'Correct. Joint encoding means full query-document interaction. The cost is that nothing can be precomputed — one forward pass per pair — which is why you only rerank ~50 candidates.',
-        },
-        { text: 'It runs on the GPU while the retriever runs on the CPU', explanation: 'An implementation detail, and irrelevant — both typically run on GPU.' },
+        { text: 'The careful method is less accurate on large collections', explanation: 'Accuracy is not the issue. The careful method is more accurate; it is the cost that rules it out at scale.' },
+        { text: 'The two methods measure different things, so both scores are needed', explanation: 'They measure the same thing - relevance to the query - with different amounts of care.' },
+        { text: 'The careful method is too slow to run against every chunk, but affordable on the 50 the fast one keeps', explanation: 'Correct. Fast-and-wide narrows millions to 50; slow-and-narrow gets those 50 into the right order. One fast stage is inaccurate, one slow stage is unaffordable, two stages are neither.' },
+        { text: 'It halves the number of chunks stored in the index', explanation: 'Reranking happens at query time and changes nothing about what is stored.' },
       ],
       correct: 2,
     },
     {
-      question: 'A user asks a question and the answer quotes a compensation document they are not authorised to read. Which fix is correct?',
+      question: 'In the module, the long grab-bag chunk c5 scored 4 hits and beat the correct chunk c0 at 3. After reranking, c0 scored 1.061 and c5 scored 0.707. Which two changes caused the flip?',
       options: [
-        {
-          text: 'Apply the ACL filter inside the retrieval query, so forbidden chunks are never scored or returned',
-          explanation: 'Correct. Pre-filtering at query time is the only safe design: the document is never loaded, never in a prompt, never in a cache, never in a log.',
-        },
-        { text: 'Retrieve normally, then drop unauthorised chunks before building the prompt', explanation: 'Post-hoc filtering means the data was already fetched into your process. One bug, one logging line, or one cache write leaks it. This is the pattern that causes real breaches.' },
-        { text: 'Add "do not reveal confidential information" to the system prompt', explanation: 'Instructions are not access control. The passage is in the context window and is one prompt injection away from being repeated.' },
-        { text: 'Use a smaller k so fewer documents are retrieved', explanation: 'Reduces the probability, not the vulnerability. Security by luck.' },
+        { text: 'Counting each distinct word once, and dividing by the square root of the chunk length', explanation: 'Correct. Counting distinct words stopped c5 scoring twice for saying "refund" twice, and the length penalty discounted it for being long. Both chunks matched the same three words; only length separated them.' },
+        { text: 'Removing stopwords from the chunks', explanation: 'Stopwords were removed at both stages, so they cannot explain a change between them.' },
+        { text: 'Sorting the results in the opposite direction', explanation: 'The sort direction was descending in both stages. Reversing it would put the worst chunk first.' },
+        { text: 'Using a larger k so more candidates were compared', explanation: 'k stayed at 3. Reranking reordered the same candidates rather than adding any.' },
       ],
       correct: 0,
     },
     {
-      question: 'You must choose between finetuning and RAG. The requirement: answers must reflect a policy document that HR edits weekly, and must link to the clause used. What do you pick?',
+      question: 'A chunker splits every 6 words. The handbook says "Customers may request a refund within 30 days of purchase." Both resulting chunks retrieve for a refund question. Why does no prompt change fix the wrong answers?',
       options: [
-        { text: 'Finetune weekly on the new policy', explanation: 'Retraining weekly is expensive, slow, and still cannot cite a clause or be scoped per user. Facts in weights cannot be pointed at.' },
-        { text: 'Finetune once, then patch with prompts', explanation: 'The moment the policy changes, the weights are wrong, and prompt patches do not scale to a changing document.' },
-        {
-          text: 'RAG — the knowledge changes and must be citable; finetuning changes behaviour, not facts',
-          explanation: 'Correct. Changing knowledge, required citations, and per-user permissions are three properties weights cannot provide. Finetuning would only be added later to fix tone or format.',
-        },
-        { text: 'Neither — use a bigger base model', explanation: 'No base model has your private HR policy, and none can cite it.' },
-      ],
-      correct: 2,
-    },
-    {
-      question: 'Your eval shows recall@5 = 0.94 but faithfulness = 0.58. Where is the problem?',
-      options: [
-        { text: 'The chunker — chunks are splitting answers', explanation: 'Chunk splits would show up as poor retrieval recall. Recall is 0.94, so retrieval is fetching the right text.' },
-        { text: 'The embedding model is too weak', explanation: 'A weak embedder depresses recall. Recall is high, so the embedder is doing its job.' },
-        { text: 'The vector database index is misconfigured', explanation: 'Again a retrieval-side cause, contradicted by recall@5 = 0.94.' },
-        {
-          text: 'Generation — the right passages are arriving but the answer makes unsupported claims',
-          explanation: 'Correct. Faithfulness measures whether claims are grounded in the retrieved text. High recall + low faithfulness means fix the prompt, the passage ordering, or the model — not the retriever. This is precisely why the two halves are measured separately.',
-        },
-      ],
-      correct: 3,
-    },
-    {
-      question: 'What is the "lost in the middle" effect, and what does it imply for prompt assembly?',
-      options: [
-        { text: 'Middle layers of the transformer lose information; use fewer layers', explanation: 'It is about position in the context window, not depth in the network.' },
-        {
-          text: 'Models attend less to passages in the middle of a long context, so passages should be ordered with the strongest at the edges',
-          explanation: 'Correct. Recall degrades for material buried mid-context. Send fewer, better passages and put the highest-ranked first (and next-highest last) rather than dumping them in retrieval order.',
-        },
-        { text: 'Chunks in the middle of a document are usually irrelevant', explanation: 'Nothing about document structure implies this; the effect is about position in the prompt.' },
-        { text: 'The middle of a chunk gets truncated during embedding', explanation: 'Truncation happens at the end when a chunk exceeds the model max length, and is a different problem.' },
+        { text: 'The chunks are too short for the model to read reliably', explanation: 'Short text is not hard for a model to read. The problem is that the fact itself was cut, not the length.' },
+        { text: 'The word "refund" and the words "30 days" are in different chunks, so no single passage states the fact', explanation: 'Correct. One chunk says a refund may be requested within, the other says 30 days of purchase. Neither is a complete fact, and a prompt cannot recover text that was never sent.' },
+        { text: 'The model attends least to the middle of the prompt', explanation: 'A real effect and a different one. Here the information is not buried in the middle; it is missing from every passage.' },
+        { text: 'Six-word chunks embed poorly', explanation: 'This example uses word matching, not embeddings, and the failure appears with either.' },
       ],
       correct: 1,
     },
     {
-      question: 'In a multi-turn chatbot, the user asks "how much does it cost?" after three turns about vector databases. Embedding that sentence directly retrieves junk. What is the standard fix?',
+      question: 'You need answers that reflect a policy document HR edits weekly, and every answer must link to the clause it used. RAG or fine-tuning?',
       options: [
-        { text: 'Increase k so something relevant appears', explanation: 'Retrieving more of the wrong neighbourhood does not help; the query vector points at "cost" in general.' },
-        { text: 'Concatenate the entire chat history into the query', explanation: 'Better than nothing, but it drags in irrelevant earlier topics and blurs the query vector. It is the crude version of the right answer.' },
-        {
-          text: 'Query rewriting — use the LLM to turn the follow-up into a standalone query first',
-          explanation: 'Correct. "How much does Pinecone cost?" is a searchable query; "how much does it cost?" is not. Query rewriting is effectively mandatory in multi-turn RAG.',
-        },
-        { text: 'Ask the user to rephrase', explanation: 'It works, and it is why people stop using your product.' },
+        { text: 'Fine-tune weekly on the new policy', explanation: 'Weekly retraining is expensive and slow, and it still cannot produce a link to a clause. The requirement to cite is what rules it out on its own.' },
+        { text: 'RAG - the facts change and must be citable, which is exactly what putting text in the prompt gives you', explanation: 'Correct. Changing facts and required citations are two properties that trained-in weights cannot provide. Fine-tuning could be added later for tone or format, never for the facts.' },
+        { text: 'Neither - a larger base model will know the policy', explanation: 'No base model has ever seen your internal policy, and none can link to it.' },
+        { text: 'Fine-tune once, then patch with prompts when the policy changes', explanation: 'The moment the policy changes the weights are wrong, and patching a changing document by hand does not scale.' },
       ],
-      correct: 2,
+      correct: 1,
     },
     {
-      question: 'A teammate proposes: "context windows are huge now, let us send the top 50 chunks instead of 5." What is the honest assessment?',
+      question: 'Your top-5 contains the correct paragraph for 60 of 100 test questions. What is the maximum end-to-end accuracy achievable, even with a perfect generator?',
       options: [
-        { text: 'Good idea — more context always means better answers', explanation: 'Empirically false. Beyond a point, added passages are noise and accuracy declines.' },
-        { text: 'Good idea, but only for the cost', explanation: 'The cost moves the wrong way: passages dominate input tokens, so 50 chunks is roughly 10x the input bill per query.' },
-        { text: 'Bad idea — it breaks the citation mechanism', explanation: 'Citations still work with 50 passages; that is not the failure. The failures are dilution, latency and cost.' },
-        {
-          text: 'Bad idea — dilution and lost-in-the-middle usually cut accuracy, while latency and cost per query rise sharply',
-          explanation: 'Correct. Over-retrieval is a real failure mode: signal-to-noise falls, mid-context passages get ignored, and input tokens (the dominant cost) multiply. Reranking to a small, well-ordered set beats dumping everything.',
-        },
+        { text: '100% - a good model can infer the rest', explanation: 'Inferring facts it was not given is exactly the hallucination the pipeline exists to prevent.' },
+        { text: '80% - roughly halfway, since the model gets partial credit', explanation: 'There is no partial credit here. If the passage is missing, the answer is not grounded in anything.' },
+        { text: '60% - retrieval accuracy is a hard ceiling on the final answer', explanation: 'Correct. In the 40 failing cases the answer was never in the prompt, so no generator can produce it with a source. Spend the next week on chunking and retrieval, not on the prompt.' },
+        { text: 'It cannot be determined without knowing the model', explanation: 'It can, and that is the point of measuring retrieval separately: the ceiling is a property of retrieval alone.' },
       ],
-      correct: 3,
+      correct: 2,
     },
   ],
   interviewQuestions: [
     {
-      question: 'Explain RAG end to end in two minutes, as if to a smart engineer who has never built one.',
+      question: 'Explain RAG end to end to an engineer who has never built one.',
       answer:
-        'Two pipelines sharing one index. Offline: load and parse the sources, chunk them into 200-500 token units on structure, embed each chunk, and store the vectors with their text and metadata (source, date, ACL) in a vector DB plus a keyword index. Online, per question: embed the query with the same model, retrieve ~50 candidates with hybrid dense+BM25 search under a metadata filter, rerank to ~5 with a cross-encoder, assemble a prompt containing those passages with source labels and an instruction to answer only from context, then generate and return citations. Then say why it exists: training cutoff, private data, hallucination, no citations - RAG fixes all four by moving knowledge from weights into the prompt. Finish with the failure that matters: end-to-end accuracy is capped by retrieval recall.',
+        'Two halves sharing one index. Offline: load the documents, cut them into chunks of a few hundred words along headings and paragraphs, convert each chunk into a searchable form, and store it with its source, date and access tag. Online, per question: score the chunks against the question and keep the best ~50, rerank those to ~5 with a slower and more careful scorer, paste the survivors into the prompt with labels and an instruction to answer only from them, then generate and return the sources. Say why it exists: the model never saw your private documents, and training them in gives you no citation, no per-user access control, and stale facts. And name the constraint that matters most: end-to-end accuracy is capped by retrieval accuracy.',
       isCaseBased: false,
     },
     {
-      question: 'Case: a fintech wants a support assistant. Their product docs change monthly, they have 40k internal pages, answers must cite a source, and different customer tiers may see different documents. RAG, finetuning, or both? Justify.',
+      question: 'Case: a fintech wants a support assistant. Their product docs change monthly, they have 40k internal pages, answers must cite a source, and different customer tiers may see different documents. RAG, fine-tuning, or both?',
       answer:
-        'RAG for the knowledge, optionally finetuning later for behaviour. The four requirements each independently rule out putting facts in weights: monthly changes would mean monthly retraining; 40k pages is a retrieval problem, not a memorisation one; citations are impossible from parametric memory; and per-tier visibility needs a per-user filter at query time, which weights cannot express. So: RAG with ACL/tier tags as indexed metadata, filtered inside the query. Where finetuning could still earn its place: a small model finetuned for the house response format and refusal style, which shortens prompts and cuts cost per query - but only after the RAG baseline is measured, and never for the facts. The general rule to state: finetuning teaches behaviour, RAG supplies knowledge; if the right answer changes when a document changes, it is RAG.',
+        'RAG for the knowledge, fine-tuning later at most for behaviour. Each requirement independently rules out putting the facts into the weights: monthly changes would mean monthly retraining; 40k pages is a search problem, not a memorisation one; a citation needs a document you can point at, which trained-in facts are not; and per-tier visibility needs a filter applied per user at query time, which weights cannot express. So build RAG with the tier tag stored on every chunk and the tier check applied inside the search itself, not after it. Where fine-tuning could still earn its place: a small model tuned to answer in the house format and to refuse cleanly, which shortens prompts and cuts cost per question - but only after the RAG baseline is measured, and never for the facts. The rule to state out loud: fine-tuning changes how the model behaves, RAG changes what it knows, and if the right answer changes when a document changes, it is RAG.',
       isCaseBased: true,
     },
     {
-      question: 'Design a hallucination-mitigation strategy for a production RAG assistant. Be concrete about layers and what each one costs.',
+      question: 'Design a strategy to stop a production RAG assistant from hallucinating. Be concrete about the layers and what each costs.',
       answer:
-        'Layer it, cheapest first. (1) Retrieval quality, because most "hallucinations" are retrieval misses: hybrid search, a cross-encoder reranker, query rewriting for multi-turn. Free at inference except reranker latency, and the largest single win. (2) Prompt discipline: passages delimited and labelled, an explicit instruction to answer only from context and to say "I do not know" otherwise, strongest passage first. Free. (3) Abstention on weak evidence: if the top reranker score is below a threshold, do not answer - return the closest documents instead. Costs some coverage, and the threshold must be tuned on a golden set. (4) Citation enforcement: require a source tag per claim and reject or regenerate an answer whose citations do not resolve. Cheap and highly visible to users. (5) A faithfulness check as an LLM-as-judge over the answer and its context, run on a sample online and on the whole golden set in CI; a second full LLM call is too expensive for every request. (6) Feedback loop: log question, retrieved ids, answer, and thumbs-down; failed questions become new golden-set entries. Close by naming the tradeoff: every strictness knob trades hallucination against unnecessary refusals, so both must be measured, and abstention rate is a first-class metric, not a bug.',
+        'Layer it, cheapest first. (1) Fix retrieval, because most so-called hallucinations are retrieval misses: better chunking on structure with overlap, hybrid word-plus-embedding search, a reranker, and query rewriting for follow-up questions. Costs some latency, buys the largest single improvement. (2) Prompt discipline: passages clearly delimited and labelled, an explicit instruction to answer only from them and to say "I do not know" otherwise, strongest passage first. Free. (3) Abstain on weak evidence: if the best reranker score falls below a threshold, return the closest documents instead of an answer. Costs coverage, and the threshold must be tuned against a test set. (4) Enforce citations: require a source label on each claim and reject an answer whose labels do not resolve to a passage you sent. Cheap and very visible to users. (5) Sample-check groundedness offline with a second model as a judge - too expensive to run on every request, fine on a sample and on the full test set in CI. (6) Feed failures back: log the question, the retrieved chunk ids and the answer, and turn every thumbs-down into a permanent test case. Close on the tradeoff: every strictness knob trades hallucination against refusing questions you could have answered, so measure the refusal rate as a first-class number, not as a bug.',
       isCaseBased: true,
     },
     {
-      question: 'Why do you need a reranker if the vector search already ranks by similarity?',
+      question: 'How would you choose a chunk size, and what would you do about an answer that spans a chunk boundary?',
       answer:
-        'Because the retriever is a bi-encoder: it embedded the chunk offline, before it had ever seen the query, so a whole passage is compressed into one fixed vector and compared by a single dot product. That is cheap enough to run over millions of chunks and lossy enough to confuse topically adjacent text with the actual answer. A cross-encoder feeds query and passage into one transformer together, so query tokens attend to passage tokens - much more accurate, but nothing can be precomputed, so cost is a forward pass per pair. The stack exists because of that asymmetry: bi-encoder over 10^6 chunks to get 50, cross-encoder over 50 to get 5. In practice reranking is often the single biggest accuracy jump per unit of engineering, at roughly 100-200 ms.',
+        'Not in the abstract - against a test set. Write 50 real questions with the paragraph that answers each, then measure how often the right paragraph is in the top-5 for two or three candidate configurations. Starting point: 200 to 500 words, split on structure - headings, paragraphs, table rows - rather than on a word counter, because the chunk is the smallest thing retrieval can ever return. For boundary splits, overlap of 10 to 20 percent helps, and returning the enclosing section whenever a small chunk matches helps more: you get precision when matching and completeness when reading. Also prefix every chunk with its document title and heading path, so an orphaned chunk still says what it is about. State the tradeoff plainly: small chunks match precisely and answer partially, large chunks answer completely and match fuzzily.',
       isCaseBased: false,
     },
     {
-      question: 'Your RAG scores 68% on end-to-end answer correctness. What do you measure next, and why not just improve the prompt?',
+      question: 'Your assistant scores 68% on answer correctness. What do you measure next, and why not just improve the prompt?',
       answer:
-        'Split the number, because one score does not name a fix. Measure retrieval alone on a golden set: recall@k (was a gold passage in the top-k) and MRR (how high the first correct one ranked). Then measure generation alone, conditioned on gold passages being present: faithfulness (every claim supported by context) and answer relevance. The diagnosis is mechanical: low recall with high faithfulness means fix parsing, chunking, hybrid search and reranking; high recall with low faithfulness means fix the prompt, passage ordering, or the model. Retrieval recall is a hard ceiling - at recall@5 = 0.70 no prompt gets you past 70%. Improving the prompt first is the classic wasted month.',
+        'Split the number, because one score does not name a fix. Measure retrieval on its own: how often is the correct paragraph in the top-k, and how highly does it rank. Then measure generation on its own, with the correct passage guaranteed present: is every claim in the answer supported by the passages, and does the answer address the question. The diagnosis is then mechanical. Low retrieval with good generation means fix parsing, chunking and search. Good retrieval with poor generation means fix the prompt, the passage order, or the model. Retrieval is a hard ceiling - at 70% you cannot exceed 70% however good the prompt is - so improving the prompt first is the classic wasted month.',
       isCaseBased: false,
     },
     {
-      question: 'Case: users report the assistant answers correctly for short documents but fails on a 200-page policy PDF. Walk through your debugging.',
+      question: 'Case: users say the assistant works on short documents but fails on a 200-page policy PDF. Walk through your debugging.',
       answer:
-        'Work the pipeline in order and stop at the first broken stage. (1) Look at the parsed text - multi-column layouts interleave, tables become word soup, repeated page headers pollute every chunk. This is the most likely culprit and the one people skip. (2) Look at the chunks themselves, printed, for the failing questions: is the answer split across a boundary? Is a table row separated from its header? (3) Check retrieval on the golden questions: recall@5. If the gold chunk exists but does not rank, try hybrid search - long policy PDFs are full of exact terms like clause numbers that dense retrieval fumbles. (4) If the gold chunk retrieves but the answer is still wrong, check position: with a large document you are probably sending more passages, so lost-in-the-middle and dilution are live. Reorder and cut k. (5) Fix in that order: parser, then chunker (structure-aware, parent-document retrieval so a small chunk retrieves but its whole section is read), then hybrid, then ordering. Nine times in ten on a big PDF, it is the parser.',
+        'Work the pipeline in order and stop at the first broken stage. (1) Read the extracted text. Multi-column PDF layouts interleave columns into nonsense, tables collapse into word soup, and a page header repeats into every chunk. This is the most likely culprit and the one people skip. (2) Print the chunks for a failing question and read them as a human. Is the answer split across a boundary? Is a table row separated from its header row? If the retrieved text does not answer the question when you read it, stop - the bug is here. (3) Measure retrieval on your test questions. If the right chunk exists but does not rank, add word matching alongside embeddings, because long policy documents are full of exact terms like clause numbers that embeddings handle badly. (4) If the right chunk does rank and the answer is still wrong, look at how many passages you are sending and in what order: with a big document you are probably sending more, so dilution and the lost-in-the-middle effect are live. Send fewer, reorder strongest first. (5) Fix in that order - parser, chunker, search, ordering. On a large PDF it is the parser nine times out of ten, and no amount of prompt work will show it to you.',
       isCaseBased: true,
     },
     {
-      question: 'How do you handle permissions in RAG? What is wrong with filtering after retrieval?',
+      question: 'Case: design the serving side of a RAG assistant at 500 requests per minute with a 2-second p95 latency target and a fixed budget. What do you build, and what do you cut first?',
       answer:
-        'Every chunk carries its access-control tag as indexed metadata from ingestion day one, and the ACL predicate goes inside the vector search so forbidden chunks are never scored. Post-hoc filtering is broken because by then the document is already in your process: it can be logged, cached, traced, or surfaced by the next bug or prompt injection, and the "drop it" step is one code path among many that can be missed. Pre-filtering means the data never leaves the store. Three follow-ups worth volunteering: a shared answer cache is an ACL bypass unless the cache key includes the permission scope; ACLs must be refreshed on reindex or you enforce last month\'s permissions; and retrofitting permissions onto an index built without them is a full re-ingest, so decide before you build.',
-      isCaseBased: false,
-    },
-    {
-      question: 'Case: design the serving architecture for a RAG assistant with 500 requests/minute, a p95 latency target of 2 seconds, and a fixed monthly budget. What do you build and what do you cut?',
-      answer:
-        'Two deployables. Ingestion is a scheduled batch job - incremental and idempotent, so one changed page re-embeds one page - writing to a versioned index. Query service is stateless and autoscaled. Budget the path: embed query ~20 ms, ANN search ~30 ms, cross-encoder rerank of 50 ~150 ms, time-to-first-token ~500 ms; that fits 2 s p95 with headroom, and the user perceives time-to-first-token because the answer streams. Add a semantic cache in front - support traffic is heavily repeated - keyed on (query embedding bucket, permission scope, index version); a 30% hit rate removes 30% of both latency and token cost. Cost per query is dominated by input tokens, so 5 chunks not 50 is a budget decision as much as an accuracy one. What I cut under pressure: reranking depth first (50 to 25 candidates), multi-query fusion entirely, and the online faithfulness check reduced to a 5% sample. What I never cut: the ACL filter and citations.',
+        'Two deployables. Ingestion is a scheduled batch job, incremental and idempotent, so one edited page re-processes one page, writing into a versioned index. The query service is stateless and autoscaled. Budget the path roughly: turn the question into a vector ~20 ms, search the index ~30 ms, rerank 50 candidates ~150 ms, first token ~500 ms. That fits 2 seconds with headroom, and users perceive time-to-first-token because the answer streams. Put a cache in front keyed on the question, the asking user\'s permission scope, and the index version - support traffic repeats heavily, and a 30% hit rate removes 30% of both latency and cost. Cost per question is dominated by the passage tokens you paste in, so sending 5 chunks rather than 50 is a budget decision as much as an accuracy one. Under pressure I would cut rerank depth first, from 50 candidates to 25, then drop the offline groundedness check to a small sample. What I would never cut: the permission filter and the citations. Both are correctness, not polish.',
       isCaseBased: true,
     },
     {
-      question: 'What is HyDE, and when would you actually reach for it?',
+      question: 'When would you tell someone RAG is the wrong tool?',
       answer:
-        'HyDE - Hypothetical Document Embeddings - asks the LLM to write a plausible answer to the question, embeds that hypothetical answer, and searches with it instead of the question. The rationale is a vocabulary mismatch: a question and the passage that answers it are written differently, but a hypothetical answer and the real answer are written alike, so the vector lands closer to the target. Reach for it when your golden set shows retrieval recall is the bottleneck on questions phrased very differently from the source material - short natural-language questions over formal technical documents. It costs one extra LLM call before retrieval, and it can amplify a confidently wrong hypothesis into a confidently wrong search. Try query rewriting and hybrid search first; both are cheaper and usually enough.',
-      isCaseBased: false,
-    },
-    {
-      question: 'How would you choose a chunk size, and what would you do about answers that span a chunk boundary?',
-      answer:
-        'Do not choose it in the abstract - choose it against the golden set, and measure recall@k for 2-3 candidate configurations. Starting point: 200-500 tokens with 10-20% overlap, split on structure (headings, paragraphs, table rows) rather than fixed character counts, because a chunk is the smallest thing retrieval can ever return. For boundary splits, overlap helps a little and parent-document retrieval helps a lot: index small precise chunks for searching, but return the enclosing section for reading, so you get precision when matching and completeness when generating. Other tactics: prefix each chunk with its document title and heading path so an orphaned chunk still carries context, and for tables keep the header row with every chunk. State the tradeoff explicitly - small chunks retrieve precisely but answer partially, large chunks answer completely but retrieve fuzzily and dilute the prompt.',
-      isCaseBased: false,
-    },
-    {
-      question: 'Why hybrid search? Give a case where pure dense retrieval fails and pure keyword search fails.',
-      answer:
-        'Dense retrieval matches meaning, so it fails on rare exact tokens it never learned a good vector for: error code "ERR_2231", a SKU, an internal service name, a person\'s surname. It will happily return semantically similar but wrong text. Keyword/BM25 matches tokens, so it fails on paraphrase: "how much VRAM does it need" never lexically matches "GPU memory requirements". Hybrid runs both and fuses the ranked lists - reciprocal rank fusion is the boring default, since it needs no score calibration between two incomparable scales. In practice hybrid is close to free, needs no tuning, and is one of the first things to add when recall is the bottleneck. The one cost worth mentioning: two indexes to keep in sync at ingestion.',
-      isCaseBased: false,
-    },
-    {
-      question: 'Tell me about a RAG evaluation set. What goes in it, who writes it, and how do you use it?',
-      answer:
-        '50-100 real questions - taken from actual user logs or support tickets, not invented - each paired with the source passage(s) that answer it and a short reference answer, written by someone who knows the domain rather than by the model. Use it three ways. Retrieval: recall@k and MRR, run on every change to parsing, chunking, embedding model or search config; this is fast, deterministic, and the highest-signal test you have. Generation: faithfulness and answer relevance, scored by LLM-as-judge, run in CI on each prompt change. Regression: keep every question a user complained about, so failures become permanent tests. Two honest caveats: LLM-as-judge scores drift when the judge model changes, so pin the judge version; and a golden set built only from questions your corpus can answer will hide your abstention behaviour, so deliberately include unanswerable questions and check the system says "I do not know".',
+        'When the missing thing is not facts. If the task needs reasoning over a whole collection - "what is our most common complaint across 40,000 tickets" - retrieval hands the model five tickets and it summarises five tickets; you needed to process all of them. If the task needs behaviour change - wrong tone, ignores your output format - no retrieved passage fixes a habit; that is fine-tuning or a firmer prompt. If the task needs a computation, like total revenue last quarter, that is a database query, not a similarity search. If the whole corpus is 20 pages, paste all 20 pages in and skip the pipeline. And if the facts are public and stable, the model already knows them, so retrieval only adds latency. The test I use: ask what would have to change for the correct answer to change. A document means RAG, a habit means fine-tuning, a number in a table means write a query.',
       isCaseBased: false,
     },
   ],
   flashcards: [
-    { front: 'Why RAG exists (4 reasons)', back: 'Training cutoff, no private data, confident hallucination, no citations. RAG fixes all four by putting the right passages into the prompt at query time.' },
-    { front: 'RAG vs finetuning, one line', back: 'Finetuning teaches behaviour (tone, format, task shape); RAG supplies knowledge (facts that change, are private, or must be cited). They compose.' },
-    { front: 'The pipeline', back: 'Offline: load, parse, chunk, embed, index. Online: embed query, hybrid retrieve top-50, cross-encoder rerank to 5, assemble prompt with sources, generate with citations.' },
-    { front: 'Bi-encoder vs cross-encoder', back: 'Bi-encoder embeds query and doc separately (one dot product, precomputable, cheap, lossy). Cross-encoder reads them together (full interaction, accurate, one forward pass per pair, no precompute).' },
-    { front: 'Retrieval miss', back: 'The answer was never in the top-k. The generator cannot fix it. Retrieval recall is a hard ceiling on end-to-end accuracy.' },
-    { front: 'Lost in the middle', back: 'Models attend least to the middle of a long context. Send fewer, better passages and order them - strongest first, next-strongest last.' },
-    { front: 'Permission leakage, and the fix', back: 'Retrieving a document the user may not see. Fix: put the ACL predicate INSIDE the retrieval query. Never post-hoc filter. Also key any answer cache on permission scope.' },
-    { front: 'Evaluate retrieval vs generation', back: 'Retrieval: recall@k, MRR. Generation: faithfulness/groundedness, answer relevance, context precision. Same end-to-end score, opposite fixes - never report one number.' },
-    { front: 'Query rewriting', back: 'Turn a chat follow-up ("what about the second one?") into a standalone query using history. Effectively mandatory in multi-turn RAG.' },
-    { front: 'Advanced patterns cheat sheet', back: 'HyDE (search with a hypothetical answer), multi-query fusion (paraphrase and fuse), parent-document retrieval (index small, return the section), self-querying (LLM extracts metadata filters), agentic retrieval (iterate).' },
+    { front: 'What RAG is, in one sentence', back: 'Find the passages that answer the question, paste them into the prompt, and let the model read instead of remember. Retrieval-augmented generation: retrieval = look it up, augmented = the prompt is enlarged with what you found, generation = the model writes the answer from it.' },
+    { front: 'Fine-tuning vs RAG', back: 'Fine-tuning changes how the model behaves (tone, format, task shape). RAG changes what it knows (facts that change, are private, or must be cited). Test: if the right answer changes when a document changes, it is RAG.' },
+    { front: 'The five stages', back: 'Chunk the documents, index the chunks, retrieve the top-k for a question, rerank those few with a slower scorer, assemble the prompt and generate with citations.' },
+    { front: 'Chunk, top-k, overlap', back: 'Chunk: the piece a document is cut into, and the smallest thing retrieval can ever return. Top-k: how many best-scoring chunks you keep. Overlap: letting consecutive chunks share their edges so a sentence is never cleanly severed.' },
+    { front: 'Why two stages instead of one', back: 'A fast scorer is cheap enough to run over millions of chunks and gets the order wrong. A careful scorer gets the order right and is far too slow for millions. Run fast over everything to keep 50, careful over those 50 to keep 5.' },
+    { front: 'The three chunking failures', back: 'Too small - the fact is scattered and no chunk is convincing. Too large - the matching words are diluted and the score falls below short irrelevant chunks. Boundary split - the cut lands mid-answer, both halves retrieve, neither answers.' },
+    { front: 'Retrieval is a hard ceiling', back: 'If the correct passage is in the top-k for only 60% of questions, end-to-end accuracy cannot exceed 60% however good the model is. Measure retrieval and generation separately or you cannot tell which one to fix.' },
+    { front: 'The first thing to check when an answer is wrong', back: 'Print the chunks that were actually retrieved and read them yourself. If they do not answer the question, the bug is in chunking or retrieval and no prompt change will help.' },
   ],
   mindmapMarkdown: `- RAG End to End
-  - Why RAG: cutoff, private data, hallucination, no citations
-  - Finetune teaches behaviour, RAG supplies knowledge
-  - Ingestion (offline job)
-    - Load and parse (PDFs bleed the most time)
-    - Chunk 200-500 tok, structure-aware
-    - Embed once; index vectors + BM25 + metadata + ACL
-  - Query path (online)
-    - Embed query with the SAME model
-    - Hybrid dense + keyword, retrieve top-50, rerank to 5
-    - Assemble prompt, order passages, generate, cite
-  - Rerank: bi-encoder cheap and lossy, cross-encoder joint and accurate
-  - Failure modes
-    - Retrieval miss - the hard ceiling
-    - Chunk boundary splits the answer
-    - Lost in the middle + over-retrieval dilution
-    - Stale or conflicting docs
-    - Model ignores context, or over-refuses
-    - Permission leak - filter at the query, never post-hoc
-  - Evaluation
-    - Retrieval: recall@k, MRR
-    - Generation: faithfulness, answer relevance, context precision
-    - RAGAS family + a golden set of 50-100 real questions
-  - Advanced patterns
-    - Query rewriting - mandatory in multi-turn
-    - HyDE, multi-query fusion, parent-document, self-querying, agentic
-  - Production
-    - Ingestion job vs stateless query service
-    - Semantic cache keyed on permission scope
-    - Streaming, latency budget per stage, cost per query
-  - Practical: RAG over your notes, FastAPI streaming + eval README`,
+  - The problem
+    - The model never read your documents
+    - It answers anyway - fluent, sourceless, wrong
+    - Training facts in: cannot update, cite, or scope per user
+  - The idea
+    - Put the passage in the prompt; the model reads instead of remembers
+    - Grounded answer + free citation
+  - Five stages
+    - Chunk (strategy, overlap)
+    - Index
+    - Retrieve top-k (fast, crude)
+    - Rerank (slow, careful)
+    - Assemble prompt and generate
+  - Why two stages
+    - Fast over millions keeps 50
+    - Careful over 50 keeps 5
+    - Distinct words + length penalty flipped c5 to c0
+  - Chunking is where it breaks
+    - Too small - fact scattered, best score drops to 1
+    - Too large - 10 hits, rerank 0.408, loses to off-topic
+    - Boundary split - both halves retrieve, neither answers
+    - Fixes: 200-500 words, split on structure, overlap, title prefix
+  - The classic mistake
+    - Answer in the corpus, cut in half by the chunker
+    - Blamed on the model, a week lost on the prompt
+    - Diagnostic: print the retrieved chunks and read them
+  - When RAG is wrong
+    - Reasoning over everything, behaviour change, computation, tiny corpus
+  - Beyond the basics
+    - Hybrid search, query rewriting, permissions in the query, lost in the middle`,
 }
 
 export default m

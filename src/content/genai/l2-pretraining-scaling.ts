@@ -6,117 +6,259 @@ const m: Module = {
   level: 2,
   title: 'Pretraining & Scaling Laws',
   whyItMatters:
-    'Everything you use — GPT, Claude, Llama — is one objective (predict the next token) run at a scale that costs millions. Interviewers probe this to find out whether you understand WHY scale works or just that it does. And the practical payoff is immediate: Chinchilla arithmetic and the C = 6ND rule are how you sanity-check any training claim in a design review, and how you pick a base model instead of burning a quarter on a run you should never have started.',
-  estMinutes: 50,
+    'Every large language model you have used was built by one boring procedure repeated for months: look at some text, guess the next piece, check the guess, adjust. This module builds that procedure from a single six-word sentence, then shows the arithmetic that decides how big the model should be and how much text it should read. By the end you can take a dollar figure and work out, on paper, what size of model that money buys.',
+  assumes: [
+    'You have seen a Python list, a for loop, and a function definition',
+    'You know what a percentage is and how to multiply and divide numbers written as powers of ten, like 7e9 meaning 7 billion',
+    'You have read *Tokenization: How Text Becomes Numbers*, so you know a token is a chunk of text turned into a number',
+    'No other machine learning background is needed. Every term used here is defined here.',
+  ],
+  estMinutes: 34,
   sections: [
     {
       type: 'intuition',
-      title: 'The whole objective, in one sentence',
-      md: `Given the text so far, predict the next token. That is it. There is no second objective.
+      title: 'One sentence, five training examples',
+      md: `Take the sentence **"the cat sat on the mat"**. Split it on spaces and you get six pieces: the, cat, sat, on, the, mat. For this module treat each word as one **token** — a token is just a chunk of text that the model handles as a single unit.
 
-- The data needs no labels — token *t* is the label for everything before it. The internet labels itself. That is what makes trillions of tokens usable.
-- Training loop: take a window of tokens, predict every next token in it at once, measure cross-entropy, backprop, repeat for months.
-- Nothing in that loop mentions facts, grammar, reasoning or code. Those are not in the loss function.
-- And yet the model learns all of them. That is the part worth actually understanding.`,
+Now build the training data out of it. There are no human labels anywhere. Instead:
+
+- Show the model **"the"**, and the right answer is **"cat"**.
+- Show it **"the cat"**, and the right answer is **"sat"**.
+- Show it **"the cat sat"**, and the right answer is **"on"**.
+- Show it **"the cat sat on"**, and the right answer is **"the"**.
+- Show it **"the cat sat on the"**, and the right answer is **"mat"**.
+
+Six tokens produced five training examples, and a human wrote none of them. The sentence supplied both the question and the answer. That is the whole idea, and the rest of this module is about what happens when you do it a few trillion times.`,
     },
     {
       type: 'intuition',
-      title: 'Why one dumb objective forces a model to learn everything',
-      md: `To predict the next token *well across all of human text*, you are forced into every skill that helps. Look at what each blank costs:
+      title: 'The four words you need before anything else',
+      md: `Define these now, because every later sentence uses them.
 
-- *"The capital of France is ___"* → you need a **fact**. Guessing badly costs loss.
-- *"def fib(n): if n < 2: return ___"* → you need **code semantics**, not just token frequency.
-- *"She was born in 1984, so in 2004 she turned ___"* → you need **arithmetic**.
-- *"...shall I compare thee to a summer's ___"* → you need **meter, rhyme and register**.
-- *"The cat sat on the mat because it was ___"* → you need **coreference** and world knowledge about cats.
+- **Pretraining** — the first and by far the longest stage of building a language model, where the model reads enormous amounts of ordinary text and learns to continue it. Nothing about being helpful, polite or truthful happens here.
+- **Next-token prediction** — the single task the model is trained on: given the text so far, produce a guess for the next token. There is no second task.
+- **Self-supervised** — the labels come out of the data itself rather than out of a human. In our sentence, the token "cat" is the label for the input "the". No annotator was paid. This is the same trick, applied to images and audio too, that the DL module *Self-Supervised Learning: Labels Out of Raw Data* covers in general.
+- **Corpus** — the pile of text you train on. A modern corpus is web pages, books, code repositories, encyclopaedia articles and forum posts, cleaned and glued into one long stream of tokens.
 
-None of these were goals. Each one is *instrumentally useful* for lowering a single number. The corpus is broad enough that the cheapest way to lower that number is to actually model the world the text describes. This is why "it's just predicting the next word" is a bad dismissal — the dismissal is a description of the objective, not of what the objective forces into the weights.`,
-    },
-    {
-      type: 'math',
-      intro: 'The loss you are minimizing, and the number people quote instead of it.',
-      latex: [
-        '\\mathcal{L}(\\theta) = -\\frac{1}{T} \\sum_{t=1}^{T} \\log p_\\theta\\!\\left( x_t \\mid x_1, \\dots, x_{t-1} \\right)',
-        '\\text{perplexity} = \\exp(\\mathcal{L}) \\;=\\; \\text{the effective number of equally-likely next tokens being chosen between}',
-        '\\text{No labels anywhere: } x_t \\text{ IS the label for the prefix } x_{<t}.',
-      ],
+The reason a corpus can be huge is exactly the self-supervised part. Labelled data costs money per example. Self-labelled data costs only the crawl.`,
     },
     {
       type: 'intuition',
-      title: 'The data pipeline, honestly',
-      md: `Raw web text is mostly garbage. Every serious lab runs roughly the same five stages, and the ordering is not arbitrary.
+      title: 'The shift by one is the whole trick',
+      md: `In the code below you will see the training data built by taking one list of tokens and lining it up against **the same list moved one step to the left**.
 
-1. **Crawl** — Common Crawl and friends: petabytes of HTML. Strip boilerplate, nav bars, ads. What survives is a fraction of what you downloaded.
-2. **Deduplicate** — exact and *near*-duplicate removal (MinHash / LSH on shingles). This matters more than it sounds: duplicated text pushes the model toward memorization instead of generalization, and duplicated eval text silently contaminates your benchmarks.
-3. **Quality filter** — heuristics (length, symbol ratio, stopword presence) plus a learned classifier ("does this look like a Wikipedia reference, or like SEO spam?"). Also PII and toxicity removal, which is a legal requirement long before it is a safety one.
-4. **Mix** — you choose the *weights*: how much web vs code vs books vs Wikipedia vs math vs multilingual. Code is upsampled well past its natural share because it appears to help general reasoning; Wikipedia is tiny but high-value so it gets repeated.
-5. **Tokenize** — everything becomes one flat stream of integers, chopped into fixed-length windows. The model never sees a "document"; it sees a window that may start mid-sentence.`,
+- The inputs are every token except the last one.
+- The targets are every token except the first one.
+- Position by position, the target is the token that came immediately after the input.
+
+That single shift is what turns a plain piece of text into thousands of question-and-answer pairs. People skim past it because it is one line of code, and then they cannot explain where the training signal comes from. It comes from the shift.
+
+One more practical detail: the model does not process those five examples one at a time. It sees the whole window of six tokens at once and is scored on all five predictions in the same step, which is why training is fast enough to be possible at all.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Step 1: build the inputs and targets from one real sentence',
+      code: `sentence = "the cat sat on the mat"   # one ordinary sentence, nothing special about it
+tokens = sentence.split()             # .split() with no argument cuts on spaces -> a list of 6 strings
+print(tokens)                         # look at the list before doing anything to it
+inputs = tokens[:-1]                  # slice: start at 0, stop BEFORE the last item -> drops "mat"
+targets = tokens[1:]                  # slice: start at position 1 -> drops "the", the first item
+print(inputs)                         # 5 items
+print(targets)                        # 5 items, the same list shifted one step left
+for i in range(len(inputs)):          # walk both lists together, position by position
+    print(inputs[i], "->", targets[i])  # inputs[i] is what the model sees, targets[i] is the answer
+
+# ---- real output ----
+# ['the', 'cat', 'sat', 'on', 'the', 'mat']
+# ['the', 'cat', 'sat', 'on', 'the']
+# ['cat', 'sat', 'on', 'the', 'mat']
+# the -> cat
+# cat -> sat
+# sat -> on
+# on -> the
+# the -> mat`,
+      annotations: {
+        4: 'A slice writes list[start:stop] and gives you a new list. Leaving start blank means "from the beginning". -1 counts from the right-hand end, so [:-1] means "everything up to but not including the last item".',
+        5: 'Leaving stop blank means "to the end". So [1:] is everything from position 1 onwards, which is the same list slid one place to the left.',
+        8: 'len(inputs) is 5, so range(5) produces 0,1,2,3,4 — the five positions that exist in both lists.',
+        9: 'Read the printed arrows as the five training examples. Nobody typed them; the shift produced them.',
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'What the model actually sees at each step',
+      md: `The five arrows above are slightly simplified. The model does not see only the single previous token — it sees **everything before the position it is predicting**. The second snippet prints that properly: at each step the input grows by one token and the answer is the next one.
+
+That growing prefix is why the model has to remember and combine what came earlier. To fill the last blank correctly it must have kept "the" from five tokens back.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Step 2: the input is the whole prefix, not just one token',
+      code: `tokens = ['the', 'cat', 'sat', 'on', 'the', 'mat']  # the same six tokens as before
+for i in range(1, len(tokens)):                    # start at 1: position 0 has no prefix to learn from
+    prefix = tokens[:i]                            # every token BEFORE position i
+    print(" ".join(prefix), "==>", tokens[i])      # " ".join(list) glues the list back into one string
+
+# ---- real output ----
+# the ==> cat
+# the cat ==> sat
+# the cat sat ==> on
+# the cat sat on ==> the
+# the cat sat on the ==> mat`,
+      annotations: {
+        2: 'range(1, 6) produces 1,2,3,4,5. Position 0 is skipped because there is nothing in front of the very first token.',
+        3: 'The slice stop value is i, so the prefix ends just before position i. Each turn of the loop makes it one token longer.',
+        4: 'Joining is only for display — the model gets the list of tokens, not the glued string.',
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'Why such a dumb task teaches so much',
+      md: `Predicting the next token sounds like a party trick. It is not, and the reason is that the corpus is broad enough that guessing well requires actually knowing things. Look at what each blank demands:
+
+- *"The capital of France is ___"* — you cannot guess this from grammar. You need the **fact**. Any model that gets it wrong is punished on millions of similar sentences.
+- *"She was born in 1984, so in 2004 she turned ___"* — you need to **subtract two numbers**. Word patterns will not save you.
+- *"def add(a, b): return a ___ b"* — you need to know what the function name promises, which is **understanding code**, not counting symbols.
+- *"The trophy did not fit in the suitcase because it was too ___"* — "big" or "small" depends on whether *it* means the trophy or the suitcase. You need to **track what the pronoun refers to**.
+
+None of these skills were asked for. Each one is simply the cheapest available way to make the guesses better. Across a corpus that contains history, arithmetic, source code and argument, the cheapest way to predict text well turns out to be modelling the things the text is about.
+
+This is also the honest answer to "it is just autocomplete". Yes, the training task is autocomplete. That describes the task, not the machinery the task forces the model to build.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Epochs versus tokens seen',
+      md: `Two counters get confused constantly, so separate them now.
+
+- An **epoch** is one complete pass through your whole dataset. If you have 100 billion tokens and you train for 3 epochs, the model has been shown 300 billion tokens.
+- **Tokens seen** is the total count of token predictions made during training, counting repeats.
+
+Small-data training talks in epochs. Pretraining talks in tokens seen, because the corpus is so large that models often complete **less than one epoch**, or slightly more than one. Saying "trained for 2 epochs" tells a reader nothing unless they also know the corpus size, whereas "trained on 15 trillion tokens" is a complete statement. Every number in the rest of this module is tokens seen, written **D**.`,
+    },
+    {
+      type: 'intuition',
+      title: 'The three quantities you can spend',
+      md: `Only three things go into a pretraining run, and every planning question is about the ratio between them.
+
+- **Parameters (N)** — the adjustable numbers inside the model. Training means finding good values for all of them. A "7B model" has 7 billion parameters. More parameters means more capacity to store patterns.
+- **Tokens (D)** — how many token predictions the model makes during training, as defined above.
+- **Compute budget (C)** — the total arithmetic the run costs, measured in **FLOPs**. A FLOP is one floating-point operation: one multiply, or one add, on decimal numbers. It is the unit chips are sold in, so it converts directly into hours and money.
+
+The rest is the relationship between these three. Two of them determine the third, and choosing them badly wastes the whole budget.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Scaling laws in plain words',
+      md: `Here is the observed pattern, stated carefully because the careful version is the useful one.
+
+- If you grow the model, feed it more tokens, and spend more compute, the training loss goes down in a smooth and **predictable** way. Not in jumps. Not with plateaus. You can fit a curve on a handful of small cheap runs and it keeps holding as you scale up.
+- The three must grow **together**. Growing parameters while keeping tokens fixed gives you a model with capacity it never fills. Growing tokens while keeping parameters fixed gives you a model too small to absorb what it is reading. Either way you paid for something you did not get.
+- Improvement gets steadily more expensive. The relationship is a **power law**, which means each further equal-sized improvement in loss costs a constant *multiple* more compute, not a constant amount more. Going from a bad model to a decent one is cheap; going from very good to slightly better is not.
+- The loss never reaches zero. Language is genuinely unpredictable in places, and there is a floor below which no amount of money helps.
+
+Honesty about the word "law": this is an **empirical trend**, not a law of nature. It is a curve fitted to measurements over a range of sizes, and it has held remarkably well over many orders of magnitude, which is why people trust extrapolating it a little way past where they measured. It is not derived from first principles, the fitted numbers differ between labs and datasets, and nothing guarantees it continues forever. Treat it as a very reliable trend that lets you forecast a run before authorising it.`,
+    },
+    {
+      type: 'intuition',
+      title: 'The compute arithmetic: C = 6ND',
+      md: `You can price a training run with one approximation, and it is worth understanding rather than memorising.
+
+- **Forward pass** — the model makes its guesses. Each parameter takes part in roughly one multiply and one add for each token. That is **2 FLOPs per parameter per token**.
+- **Backward pass** — the model works out how each parameter should change. This does about twice the work of the forward pass, because it computes two sets of adjustments, one flowing back through the network and one for the parameters themselves. That is **4 FLOPs per parameter per token**.
+- Add them: **6 FLOPs per parameter per token**. Multiply by N parameters and D tokens and you get the total: **C ≈ 6 × N × D**.
+
+Concretely, for a 7 billion parameter model trained on 140 billion tokens:
+
+C = 6 × 7,000,000,000 × 140,000,000,000 = 5.88 × 10²¹ FLOPs.
+
+What the approximation leaves out: the attention mechanism has an extra cost that grows with how long the context is, plus the embedding tables and the optimiser bookkeeping. For ordinary context lengths those add up to something like a twenty percent correction, which is fine for a plan and not fine for a paper.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Step 3: turn 6ND into hours and dollars',
+      code: `def training_flops(N, D):        # N = number of parameters, D = number of tokens
+    return 6 * N * D             # the rule: 6 FLOPs per parameter per token
+
+N = 7e9                          # 7e9 is Python for 7 x 10**9, i.e. 7 billion parameters
+D = 140e9                        # 140 billion tokens seen during training
+C = training_flops(N, D)         # call the function and keep the answer
+print("FLOPs needed:", C)        # print the raw total
+
+chip = 989e12                    # one modern training chip, advertised at 989 trillion FLOP/s
+useful = chip * 0.40             # real runs sustain about 40% of the advertised rate
+seconds = C / useful             # total work divided by work per second = seconds
+print("seconds on one chip:", seconds)          # a big, unreadable number
+print("hours on one chip:", seconds / 3600)     # 3600 seconds in an hour
+print("dollars at $2.50/hour:", seconds / 3600 * 2.50)  # rental price per chip-hour
+
+# ---- real output ----
+# FLOPs needed: 5.88e+21
+# seconds on one chip: 14863498.483316481
+# hours on one chip: 4128.749578699022
+# dollars at $2.50/hour: 10321.873946747555`,
+      annotations: {
+        9: 'The advertised rate is a ceiling nobody reaches. Time is lost moving data between chips, loading the next batch, and on work that is not multiplication.',
+        10: 'Sustaining 35 to 50 percent of the advertised rate is a well-run job. Quoting the advertised number instead is the standard way to underestimate a training run by a factor of two or three.',
+        11: 'Dividing total work by work-per-second gives seconds. Everything after this line is unit conversion.',
+        14: 'About 4,100 chip-hours. Rent 256 chips and that is roughly 16 hours of wall-clock time, since the work divides across them.',
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'The compute-optimal split, and the mistake it corrected',
+      md: `Now the interesting question. Suppose the budget C is fixed. Since C ≈ 6ND, choosing N *forces* D — you cannot pick both. So what is the best split?
+
+The measured answer, from sweeping many model sizes at matched budgets, is that N and D should grow at roughly the same rate, which works out to about **20 tokens per parameter**.
+
+Watch what that does to a fixed budget of C = 10²³ FLOPs. Put D = 20N into C = 6ND:
+
+C = 6 × N × 20N = 120 N², so N = √(C / 120) = √(10²³ / 120) ≈ 2.9 × 10¹⁰.
+
+So the best model for that budget is about **29 billion parameters trained on about 577 billion tokens**.
+
+Compare that with what large models used to look like. One well-known 175-billion-parameter model was trained on 300 billion tokens — **1.7 tokens per parameter**, more than ten times short of the ratio above. Spend the same 10²³ FLOPs at that ratio and you get roughly a 113-billion-parameter model on 147 billion tokens. Same money, worse model, because most of those parameters never saw enough text to be worth having. That is what **under-trained** means: capacity paid for and left empty.
+
+The next snippet does the three splits side by side so you can check the numbers.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Step 4: one budget, three ways to split it',
+      code: `budget = 1e23                                  # a fixed compute budget, in FLOPs
+print("ratio      parameters        tokens")   # a header so the columns are readable
+for ratio in [1.3, 20.0, 320.0]:               # tokens per parameter: too few, right, too many
+    N = (budget / (6 * ratio)) ** 0.5          # from C = 6*N*(ratio*N), so N = sqrt(C / (6*ratio))
+    D = ratio * N                              # the tokens that the chosen ratio implies
+    print(f"{ratio:6.1f} {N:15.3e} {D:13.3e}")  # f-string: :6.1f pads to 6 chars, 1 decimal; :15.3e is 15-wide scientific
+
+# ---- real output ----
+# ratio      parameters        tokens
+#    1.3       1.132e+11     1.472e+11
+#   20.0       2.887e+10     5.774e+11
+#  320.0       7.217e+09     2.309e+12`,
+      annotations: {
+        4: '** 0.5 is Python for "raise to the power one half", which is the square root. The algebra above the snippet is the only algebra in this module.',
+        6: 'An f-string lets you drop a variable into text by writing it in braces. Everything after the colon is formatting: e means scientific notation, f means plain decimal, and the number before the dot is the total width used for padding.',
+      },
     },
     {
       type: 'note',
-      md: 'The modern view, and it reversed the 2020 consensus: **data quality and dedup beat raw volume**. Hard-filtered corpora (FineWeb-Edu, the Phi textbook-quality experiments) match or beat much larger dirty corpora at equal compute. This is good news for you — it means the interesting decisions in pretraining are data decisions, and data decisions are the ones a small team can actually make.',
-    },
-    {
-      type: 'intuition',
-      title: 'Scaling laws: the loss curve is a straight line',
-      md: `Analogy: you expected a cliff, and you got a ramp. Plot loss against compute on log-log axes and you get a **straight line** — over seven or more orders of magnitude.
-
-- Loss falls as a **power law** in model size N, dataset size D, and compute C. Smooth, no plateaus, no surprises.
-- There is an **irreducible floor** — the entropy of language itself. Loss never reaches zero, no matter the budget.
-- The real product of scaling laws is not the philosophy. It is **forecasting**: fit the curve on a dozen cheap small runs, extrapolate, and know roughly what the $100M run will score *before* you authorize it. That is how a lab de-risks a training run.
-- The uncomfortable half of "power law": each further constant improvement costs a constant *multiple* more. With the fitted exponent α ≈ 0.076, **halving the reducible loss needs about 9,000× the parameters**. Progress is guaranteed and progress is exponentially expensive, at the same time.`,
-    },
-    {
-      type: 'math',
-      intro: 'The fitted form, and what the exponent implies once you take logs.',
-      latex: [
-        'L(N) \\approx L_{\\infty} + \\left( \\frac{N_c}{N} \\right)^{\\alpha_N}, \\qquad L(D) \\approx L_{\\infty} + \\left( \\frac{D_c}{D} \\right)^{\\alpha_D}, \\qquad \\alpha_N \\approx 0.076',
-        '\\log\\left( L - L_{\\infty} \\right) = -\\alpha_N \\log N + \\text{const} \\quad \\Rightarrow \\quad \\text{a straight line on log-log axes}',
-        '\\text{Halving the reducible loss costs } 2^{1/\\alpha_N} = 2^{13.2} \\approx 9{,}000\\times \\text{ the parameters.}',
-      ],
-    },
-    {
-      type: 'intuition',
-      title: 'C = 6ND — the rule that lets you price any run',
-      md: `Six FLOPs per parameter per token. Memorize this one; it is the arithmetic behind every "how long will this take" question.
-
-- **Forward pass:** each parameter takes part in one multiply and one add per token → **2 FLOPs**.
-- **Backward pass:** you compute the gradient with respect to the inputs *and* with respect to the weights — two passes of the same shape → **4 FLOPs**.
-- Total **6 FLOPs per parameter per token**, so C ≈ 6ND for N parameters over D tokens.
-- What it ignores: attention's O(n²) term (small until context is long), embeddings, and anything the optimizer does. Good to roughly ±20%, which is all you need for a plan.
-- Then divide by what your hardware *actually sustains*, not the spec sheet: an H100 quotes 989 TFLOP/s bf16, and a good run sustains 35–50% of it (**MFU**, model FLOPs utilization). Use 40% and you will not embarrass yourself.`,
-    },
-    {
-      type: 'intuition',
-      title: 'Chinchilla: everyone was training models that were too big',
-      md: `Until 2022 the recipe was "make it bigger". GPT-3 was 175B parameters trained on 300B tokens — **1.7 tokens per parameter**.
-
-- The DeepMind Chinchilla paper redid the compute sweep properly (crucially, matching the learning-rate schedule to each token budget, which the earlier fits had not done).
-- Finding: at compute-optimal, N and D should scale **roughly equally** — about **20 tokens per parameter**.
-- The receipt: Chinchilla, 70B parameters on 1.4T tokens, beat Gopher, 280B parameters on 300B tokens, **at the same compute**. A 4× smaller model won.
-- So the practical inversion: at a fixed compute budget you should often train a **smaller model on much more data**. Parameters are not the resource being optimized — compute is.
-- Arithmetic for a 7B model: D* = 20 × 7e9 = **140B tokens**, and C = 6 × 7e9 × 1.4e11 = **5.88e21 FLOPs**.`,
-    },
-    {
-      type: 'math',
-      intro: 'The compute rule, and solving it for the compute-optimal split at a fixed budget C.',
-      latex: [
-        'C \\approx 6ND \\qquad (2 \\text{ FLOPs forward} + 4 \\text{ backward, per parameter per token})',
-        'D = 20N \\;\\Rightarrow\\; C = 6N(20N) = 120 N^2 \\;\\Rightarrow\\; N^{*} = \\sqrt{C/120}, \\quad D^{*} = 20 N^{*}',
-        'N = 7 \\times 10^{9} \\;\\Rightarrow\\; D^{*} = 1.4 \\times 10^{11} \\text{ tokens}, \\quad C = 6\\,(7\\times 10^{9})(1.4 \\times 10^{11}) = 5.88 \\times 10^{21} \\text{ FLOPs}',
-      ],
+      md: 'Read those three rows again. **The budget is identical in all of them.** The only thing that changed is how it was split between model size and text, and that alone is the difference between 113 billion parameters that are starved, 29 billion that are well fed, and 7 billion that could have been larger. This is why the first question in a training design review is never "how many parameters?" — it is "what is the compute budget?"',
     },
     {
       type: 'visual',
       component: 'PointerBoxDiagram',
       props: {
         title: 'One compute budget, three ways to spend it',
-        notice: 'The budget on the left never changes. Only the split between model size and token count does — and the split decides whether the money bought a good model or a wasted one.',
-        leftLabel: 'the knobs',
+        notice: 'The budget on the left never changes. Only the split between model size and token count moves — and that split alone decides whether the money bought a good model.',
+        leftLabel: 'what you choose',
         rightLabel: 'what you get',
         frames: [
           {
-            note: 'Fix the budget: C = 1e23 FLOPs. The rule C = 6ND ties N and D together, so picking one picks the other. This is a single choice, not two.',
+            note: 'Fix the budget at C = 1e23 FLOPs. Because C = 6ND ties N and D together, picking one of them picks the other. This is one choice, not two.',
             stack: [
               { name: 'budget C', value: '1e23 FLOP' },
               { name: 'N params', to: 'n' },
@@ -128,19 +270,19 @@ None of these were goals. Each one is *instrumentally useful* for lowering a sin
             ],
           },
           {
-            note: 'Spend it on a huge model: 115B parameters leaves only 144B tokens. D/N = 1.3. This is the pre-2022 mistake — a giant model that never saw enough data to fill its own capacity.',
+            note: 'Spend it on a huge model: 113B parameters leaves only 147B tokens, so 1.3 tokens per parameter. The model has capacity it never fills.',
             stack: [
               { name: 'budget C', value: '1e23 FLOP' },
               { name: 'N params', to: 'n', danger: true },
               { name: 'D tokens', to: 'd' },
             ],
             heap: [
-              { id: 'n', value: '115B params', label: 'under-trained', danger: true },
-              { id: 'd', value: '144B tokens', label: 'D/N = 1.3' },
+              { id: 'n', value: '113B params', label: 'under-trained', danger: true },
+              { id: 'd', value: '147B tokens', label: 'D/N = 1.3' },
             ],
           },
           {
-            note: 'Chinchilla split: N* = sqrt(C/120) = 28.9B parameters, D* = 20N* = 577B tokens. Same budget, lowest loss. The whole rule is 20 tokens per parameter.',
+            note: 'The compute-optimal split: N = sqrt(C/120) = 28.9B parameters and D = 20N = 577B tokens. Same budget, lowest loss.',
             stack: [
               { name: 'budget C', value: '1e23 FLOP' },
               { name: 'N params', to: 'n' },
@@ -152,7 +294,7 @@ None of these were goals. Each one is *instrumentally useful* for lowering a sin
             ],
           },
           {
-            note: 'Go too small: 7.2B parameters on 2.31T tokens, D/N = 320. Worse training loss for the same money — the model lacks the capacity to use the data. But hold this frame; it comes back.',
+            note: 'Go too small: 7.2B parameters on 2.31T tokens, 320 tokens per parameter. Worse training loss for the same money, because the model lacks capacity to use the text. Deliberate over-training is a separate argument, made at the end of the module.',
             stack: [
               { name: 'budget C', value: '1e23 FLOP' },
               { name: 'N params', to: 'n' },
@@ -163,401 +305,273 @@ None of these were goals. Each one is *instrumentally useful* for lowering a sin
               { id: 'd', value: '2.31T tokens', label: 'D/N = 320' },
             ],
           },
-          {
-            note: 'The arithmetic for a 7B model: 20 tokens per parameter means 140B tokens, and C = 6ND = 5.88e21 FLOPs. At 40% MFU on H100s that is 4,129 GPU-hours, about 10,000 dollars of rental.',
-            stack: [
-              { name: 'N', value: '7B params' },
-              { name: 'D = 20N', to: 'd' },
-              { name: 'C = 6ND', to: 'c' },
-            ],
-            heap: [
-              { id: 'd', value: '140B tokens', label: '20 x 7B' },
-              { id: 'c', value: '5.88e21 FLOP', label: '~$10k' },
-            ],
-          },
-          {
-            note: 'Why real open models break the rule on purpose: Llama-3 8B saw 15T tokens, D/N = 1875, about 94x past compute-optimal. Training costs more once; every inference is cheaper forever.',
-            stack: [
-              { name: 'N', value: '8B params' },
-              { name: 'D actual', to: 'd' },
-              { name: 'the reason', to: 'w' },
-            ],
-            heap: [
-              { id: 'd', value: '15T tokens', label: 'D/N = 1875' },
-              { id: 'w', value: 'inference wins', label: 'served forever' },
-            ],
-          },
         ],
       },
     },
     {
       type: 'intuition',
-      title: 'Why modern models deliberately over-train (the senior point)',
-      md: `Chinchilla answers one question: *what is the cheapest way to reach a given loss, once?* Production asks a different one: *what is the cheapest total cost of ownership?*
+      title: 'Emergent behaviour, and why the word is contested',
+      md: `**Emergent behaviour** is the claim that certain abilities are absent in smaller models, stay absent as you scale up a bit, and then appear suddenly past some size — three-digit arithmetic and multi-step reasoning are the usual examples. Plotted, it looks like a switch flipping.
 
-- A model is trained **once** and served **billions of times**. Over its lifetime, inference FLOPs dwarf training FLOPs.
-- Inference cost scales with N, not with D. A smaller model is cheaper on every single request, forever — and it fits on smaller GPUs, which changes what you can deploy on.
-- So you take a model smaller than compute-optimal and pour far more tokens into it than Chinchilla says. You pay more to train and less to serve.
-- Llama-3 8B: 15T tokens against a Chinchilla-optimal 160B. That is roughly **94× past compute-optimal**, and it was a deliberate, correct decision.
-- Say this in an interview and you separate yourself instantly: *"Chinchilla is compute-optimal for training. Nobody serving a model at scale is optimizing training compute."*`,
-    },
-    {
-      type: 'code',
-      lang: 'python',
-      title: 'Pricing a pretraining run — C = 6ND, Chinchilla split, and the bill',
-      code: `PEAK = 989e12      # H100 SXM, bf16 dense, FLOP/s from the spec sheet
-MFU = 0.40         # model FLOPs utilization: what a good run actually sustains
-PRICE = 2.50       # $ per GPU-hour, rented
+The serious objection is that the jump is often produced by **how the ability was scored**, not by the model. Suppose you score three-digit addition by exact match: the whole answer counts only if every digit is right. A model whose per-digit accuracy climbs steadily from 30% to 90% scores almost zero for a long time and then suddenly scores well, because getting all digits right at once needs high per-digit accuracy. Score the *same saved models* by per-digit accuracy instead and the curve is smooth and dull.
 
-def compute(N, D):          # C = 6ND: 6 FLOPs per parameter per token
-    return 6 * N * D
-
-def chinchilla_tokens(N):   # compute-optimal: ~20 tokens per parameter
-    return 20 * N
-
-def gpu_hours(C):
-    return C / (PEAK * MFU) / 3600
-
-def dollars(C):
-    return gpu_hours(C) * PRICE
-
-print("model      params      tokens      C (FLOPs)   GPU-hours       cost")
-for name, N in [("GPT-2 XL", 1.5e9), ("7B", 7e9), ("70B", 70e9)]:
-    D = chinchilla_tokens(N)
-    C = compute(N, D)
-    print(f"{name:<10} {N:9.2e} {D:11.2e} {C:11.2e} {gpu_hours(C):10,.0f} {dollars(C):12,.0f}")
-
-print()
-print("tokens per parameter, real runs:")
-for name, N, D in [("GPT-3", 175e9, 300e9), ("Chinchilla", 70e9, 1.4e12), ("Llama-3 8B", 8e9, 15e12)]:
-    print(f"  {name:<12} N={N:8.1e}  D={D:8.1e}  D/N = {D/N:8.1f}")
-
-print()
-print("fixed budget C = 1e23 FLOPs, three ways to spend it:")
-BUDGET = 1e23
-N_opt = (BUDGET / 120) ** 0.5          # C = 6*N*(20N) = 120 N^2
-for label, N in [("too big", 4 * N_opt), ("Chinchilla", N_opt), ("too small", N_opt / 4)]:
-    D = BUDGET / (6 * N)               # spend the whole budget
-    print(f"  {label:<11} N={N:8.2e}  D={D:8.2e}  D/N={D/N:7.1f}")
-print(f"  budget buys {gpu_hours(BUDGET):,.0f} GPU-hours, cost {dollars(BUDGET):,.0f} USD")
-
-# ---------- real output ----------
-# model      params      tokens      C (FLOPs)   GPU-hours       cost
-# GPT-2 XL    1.50e+09    3.00e+10    2.70e+20        190          474
-# 7B          7.00e+09    1.40e+11    5.88e+21      4,129       10,322
-# 70B         7.00e+10    1.40e+12    5.88e+23    412,875    1,032,187
-#
-# tokens per parameter, real runs:
-#   GPT-3        N= 1.8e+11  D= 3.0e+11  D/N =      1.7
-#   Chinchilla   N= 7.0e+10  D= 1.4e+12  D/N =     20.0
-#   Llama-3 8B   N= 8.0e+09  D= 1.5e+13  D/N =   1875.0
-#
-# fixed budget C = 1e23 FLOPs, three ways to spend it:
-#   too big     N=1.15e+11  D=1.44e+11  D/N=    1.3
-#   Chinchilla  N=2.89e+10  D=5.77e+11  D/N=   20.0
-#   too small   N=7.22e+09  D=2.31e+12  D/N=  320.0
-#   budget buys 70,217 GPU-hours, cost 175,542 USD`,
-      annotations: {
-        1: 'Spec-sheet peak. Quoting this number as your throughput is the classic capacity-planning error — no real training run gets close to it.',
-        2: 'MFU is the honest haircut: communication, data loading, pipeline bubbles and non-matmul work. 35-50% is a well-tuned run; below 30% something is wrong.',
-        5: 'The whole rule of thumb: 2 FLOPs forward + 4 backward per parameter per token. Ignores attention n-squared and embeddings — fine to about 20%.',
-        8: 'Chinchilla in one line. Everything downstream is this multiplied out.',
-        12: 'Divide by EFFECTIVE FLOP/s, then by 3600. This is where paper numbers become a schedule someone has to sign off on.',
-        25: 'Three real runs, one column that tells the whole story. GPT-3 is the old world, Chinchilla defined the rule, Llama-3 deliberately ignores it.',
-        31: 'Substituting D = 20N into C = 6ND gives C = 120N-squared, so the optimal parameter count is sqrt(C/120). The only algebra in the module.',
-        33: 'The budget is always fully spent — that is what makes this a split, not a shopping list. Choosing N chooses D.',
-        41: 'A 70B model trained compute-optimally is about a million dollars of GPU rental, with zero failed restarts and perfect utilization. Reality is worse.',
-        46: '1875 tokens per parameter — roughly 94x past compute-optimal, on purpose, because inference cost dominates a served model lifetime.',
-        49: 'The GPT-3 shape: 1.3 tokens per parameter. Same budget, much worse model. This is the frame the diagram flags as wasteful.',
-      },
-    },
-    {
-      type: 'note',
-      md: 'Read the last block once more. The **same** 1e23 FLOPs buys a 115B model that is starved, a 28.9B model that is right, or a 7.2B model that is over-fed. The budget did not change; only the split did. That is the entire Chinchilla result, and it is why "how many parameters?" is the wrong first question in a training design review — the first question is "what is the compute budget?"',
+So the honest position: much of the reported suddenness is a scoring artefact, the underlying ability usually improves smoothly, and a few behaviours still look genuinely new rather than merely better. It remains a live disagreement. Use the term, but say which definition you mean.`,
     },
     {
       type: 'intuition',
-      title: 'Emergent abilities, stated honestly',
-      md: `The claim: some capabilities sit at near-zero on a benchmark across many model sizes, then jump sharply past a scale threshold — 3-digit arithmetic, word unscrambling, multi-step reasoning. It looks like a phase transition, and it got a lot of headlines.
+      title: 'Worked case: budgeting a run end to end',
+      md: `You are handed **$50,000** of GPU rental and asked what model it buys. Work it out in five steps.
 
-- The serious counter-argument (Schaeffer et al., *Are Emergent Abilities a Mirage?*): the jump is often an artifact of a **discontinuous metric**.
-- Exact-match on a 5-digit answer is all-or-nothing. A model going from 30% to 90% per-digit accuracy scores ~0% then suddenly ~60% on exact match — a sharp jump manufactured by the scoring rule, not by the model.
-- Re-score the *same checkpoints* with a continuous metric (per-token accuracy, log-likelihood of the correct answer) and the curve is smooth and boring.
-- The honest position: the underlying capability improves smoothly and predictably; whether it *looks* emergent depends on where you put the threshold. A few things (in-context learning itself) still look qualitatively new, and that remains genuinely debated.
-- Why this is an interview question: it separates people who read the headline from people who read the follow-up.`,
+1. **Money to chip-hours.** At $2.50 per chip-hour, $50,000 buys 50,000 / 2.5 = **20,000 chip-hours**.
+2. **Chip-hours to FLOPs.** One chip advertises 9.89 × 10¹⁴ FLOP/s. At 40% sustained that is 3.956 × 10¹⁴ FLOP/s. Over 3,600 seconds, one chip-hour delivers 3.956 × 10¹⁴ × 3600 ≈ **1.424 × 10¹⁸ FLOPs**.
+3. **Total budget.** 20,000 × 1.424 × 10¹⁸ ≈ **2.85 × 10²² FLOPs**. That is C.
+4. **Split it.** N = √(C / 120) = √(2.85 × 10²² / 120) = √(2.37 × 10²⁰) ≈ **1.54 × 10¹⁰**, so about **15 billion parameters**. Then D = 20N ≈ **308 billion tokens**.
+5. **Check it against reality.** Do you actually have 308 billion tokens of decent text? If your cleaned corpus is 40 billion tokens, this plan is fiction. Either find more text, or train a smaller model, because 40 billion tokens is compute-optimal for roughly 2 billion parameters, not 15.
+
+Two things this estimate quietly assumes: that nothing crashes, and that utilisation stays at 40% for the whole run. Real runs lose days to failed nodes and restarts. Add a margin of at least 30% before promising a date.
+
+And the conclusion an honest engineer draws from step 5: $50,000 does not buy a competitive model from scratch. It buys a very good fine-tune of an existing one, which is the subject of *Fine-Tuning: Full FT, LoRA & QLoRA*.`,
     },
     {
       type: 'intuition',
-      title: 'What pretraining does NOT give you',
-      md: `A base model is a **text completer**. Nothing more. Load one and ask *"What is the capital of France?"* and a very plausible continuation is:
+      title: 'The classic mistake: scaling parameters without scaling data',
+      md: `A team has the same C = 2.85 × 10²² FLOPs from the worked case. Their reasoning: "bigger models are better, so let us build the biggest one the budget allows — 60 billion parameters."
 
-- *"What is the largest city in Germany? What is the currency of Japan?"* — because on the web, a question is very often followed by more questions. The model is not being unhelpful; it is being accurate about its corpus.
-- It does not **follow instructions**. "Summarize this" is just text to continue, not a command to obey.
-- It does not **refuse** anything. The corpus contains toxic paragraphs, so it will happily continue one.
-- It has no concept of a **turn**, a **user**, or an **assistant**, and no reliable sense of when to stop.
-- None of this is a bug in pretraining. Instruction-following was never in the loss function.
+Follow the arithmetic they skipped. The budget is fixed, so the tokens are forced:
 
-The gap between "completes text" and "behaves like an assistant" is closed entirely by **post-training** — supervised fine-tuning on instruction data, then preference optimization (RLHF or DPO). That is the alignment module. Practical consequence today: always check whether a checkpoint is the *base* or the *instruct/chat* variant, and use the model's own chat template. Shipping a base checkpoint as a chatbot is one of the most common junior mistakes.`,
+D = C / (6N) = 2.85 × 10²² / (6 × 6 × 10¹⁰) = 2.85 × 10²² / 3.6 × 10¹¹ ≈ **7.9 × 10¹⁰**, about 79 billion tokens.
+
+That is 79 / 60 ≈ **1.3 tokens per parameter**, against the 20 they should be aiming at. Fifteen times short.
+
+**Why this is wrong, mechanically.** Parameters are storage. Tokens are what fills the storage with useful patterns. A parameter that is only ever nudged by a handful of relevant examples ends up close to where it was initialised, contributing noise rather than knowledge. The team paid for 60 billion parameters and got the usefulness of a much smaller model, while also paying the full inference cost of 60 billion parameters on every future request — twice punished.
+
+**What they should have done.** Same budget, 15 billion parameters, 308 billion tokens. Lower loss, cheaper to run afterwards, and it fits on smaller hardware.
+
+**The tell.** Whenever someone announces a parameter count without a token count, the number is uninterpretable. Ask "trained on how many tokens?" immediately. A closely related tell: a quoted loss or perplexity value means nothing without the tokenizer and the evaluation corpus attached, because a different tokenizer chops the same text into a different number of pieces and mechanically changes the number. Two labs quoting loss on different tokenizers are not comparable at all.`,
     },
     {
       type: 'intuition',
-      title: 'What actually matters for you: choosing a base model',
-      md: `You will almost certainly never pretrain from scratch. You will **choose a base model**, and that choice is a real engineering decision with five axes:
+      title: 'Practice problems',
+      md: `Work these on paper first. Use 6ND, 20 tokens per parameter, and 1.424 × 10¹⁸ FLOPs per chip-hour at 40% sustained.
 
-1. **License** — Apache-2.0 / MIT versus research-only versus a custom community licence with user thresholds. This blocks ship dates, so check it first, not last.
-2. **Size and latency budget** — parameters drive VRAM *and* tokens/sec. A 7B fits comfortably on one 24GB card quantized; a 70B does not. Decide the latency you owe the user, then pick the size that fits it.
-3. **Context length** — and whether it is *real*. A claimed 128k that degrades badly past 32k on a needle-in-a-haystack test is a 32k model with marketing.
-4. **Tokenizer and language fit** — a tokenizer trained mostly on English burns 3–4× more tokens on Hindi or Tamil. That is 3–4× the cost per request *and* an effective context window 3–4× smaller. For a non-English product this can outrank every other axis.
-5. **How it was post-trained** — base vs instruct vs reasoning-tuned, what the chat template is, what refusal behaviour was baked in, and whether the licence permits using its outputs to train other models.`,
+**1.** What is the compute-optimal token count for a 1.5 billion parameter model, and what does the run cost in FLOPs, chip-hours and dollars at $2.50 per chip-hour?
+
+**2.** A model has 70 billion parameters and was trained on 1.4 trillion tokens. Is it compute-optimal? What did it cost in FLOPs and dollars?
+
+**3.** Your compute budget is 10²¹ FLOPs. What is the compute-optimal parameter count and token count?
+
+**4.** Your cleaned corpus is fixed at 300 billion tokens and you cannot get more. Someone proposes a 100 billion parameter model. What size should you train instead, and why?`,
     },
     {
-      type: 'note',
-      md: 'The cost note, said plainly so you draw the right conclusion. A serious pretraining run is **millions of dollars**, a team of twenty-plus, and months of babysitting crashed jobs, loss spikes and hardware failures. The 70B row in the code above is about **$1M of GPU rental** — and that assumes perfect utilization and zero failed restarts, which has never happened to anyone. Your leverage is not here. It is in **fine-tuning** a good open base model (LoRA, next module) and in **retrieval** (RAG, Level 3), both of which cost hundreds of dollars, not millions, and both of which move the metrics your product is actually judged on.',
+      type: 'intuition',
+      title: 'Solutions',
+      md: `**1.** D = 20 × 1.5 × 10⁹ = **3 × 10¹⁰ tokens** (30 billion). C = 6 × 1.5 × 10⁹ × 3 × 10¹⁰ = **2.7 × 10²⁰ FLOPs**. Chip-hours = 2.7 × 10²⁰ / 1.424 × 10¹⁸ ≈ **190**. Cost ≈ 190 × 2.5 ≈ **$474**. A small model really is cheap; the price explodes only at scale.
+
+**2.** D / N = 1.4 × 10¹² / 7 × 10¹⁰ = **20 tokens per parameter**, so yes, exactly compute-optimal. C = 6 × 7 × 10¹⁰ × 1.4 × 10¹² = **5.88 × 10²³ FLOPs**. Chip-hours = 5.88 × 10²³ / 1.424 × 10¹⁸ ≈ **413,000**, so about **$1.03 million** — assuming no failures, which never happens.
+
+**3.** N = √(C / 120) = √(10²¹ / 120) = √(8.33 × 10¹⁸) ≈ **2.89 × 10⁹**, about 2.9 billion parameters. D = 20N ≈ **5.8 × 10¹⁰**, about 58 billion tokens. Sanity check: 6 × 2.89 × 10⁹ × 5.8 × 10¹⁰ ≈ 1.0 × 10²¹. It closes.
+
+**4.** With D fixed, run the ratio the other way: N = D / 20 = 3 × 10¹¹ / 20 = **1.5 × 10¹⁰**, about 15 billion parameters. The proposed 100 billion would see 3 tokens per parameter and would be badly under-trained, costing 6 × 10¹¹ × 3 × 10¹¹ = 1.8 × 10²³ FLOPs to produce something a 15 billion parameter model beats at a fraction of the price. When data is the binding constraint, the data picks the model size.`,
+    },
+    {
+      type: 'intuition',
+      title: 'What pretraining does not give you',
+      md: `A model straight out of pretraining is called a **base model**, and it is a text completer and nothing else. Ask one *"What is the capital of France?"* and a very likely continuation is *"What is the largest city in Germany? What is the currency of Japan?"* — because on the open web, a question is very often followed by more questions. The model is not being unhelpful. It is being accurate about its corpus.
+
+- It does not follow instructions. "Summarise this" is text to continue, not an order.
+- It does not refuse anything, because refusing was never rewarded.
+- It has no idea of a conversation, a user, or an assistant, and no reliable sense of when to stop.
+
+None of this is a defect. Instruction-following was simply not in the training task. Closing that gap is a separate stage covered in *Alignment: RLHF, Reward Models & DPO*, and adapting a base model to your own domain is covered in *Fine-Tuning: Full FT, LoRA & QLoRA*. This module deliberately stops at the base model. The one practical habit to take away now: when you download a checkpoint, check whether it is the base or the instruction-tuned variant. Shipping a base checkpoint as a chatbot is a common and very visible mistake.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Beyond the basics - skip this on your first read',
+      md: `Three refinements, none of which you need to follow the module above.
+
+**The fitted curve.** The measured relationship is usually written as loss ≈ floor + (constant / N) raised to a small power, with that power around 0.076 for parameters. The consequence of such a small exponent is brutal: halving the reducible part of the loss requires roughly 2 raised to the power (1 / 0.076), which is about 9,000 times the parameters. Steady progress and exponentially rising cost are the same fact.
+
+**Deliberate over-training.** The 20-tokens-per-parameter rule answers exactly one question: what is the cheapest way to reach a given loss, once. Production asks a different question, because a model is trained once and then answers requests billions of times, and the cost of each request scales with N and not with D. So it is often correct to train a model *smaller* than compute-optimal on far more tokens than the rule suggests — you pay more once and save on every request forever, and a smaller model also fits on cheaper hardware. Widely used open 8-billion-parameter models trained on 15 trillion tokens sit at roughly 1,875 tokens per parameter, nearly a hundred times past compute-optimal, entirely on purpose.
+
+**Data quality moves the curve.** The scaling relationship assumes a fixed data distribution. Change the data and you shift the whole curve: removing duplicates and low-quality pages lets a smaller corpus match a much larger dirty one at equal compute. Duplicated text also pushes the model towards memorising exact strings, and any benchmark text sitting in the corpus quietly invalidates the scores you report. For a small team this is the highest-leverage knob available, because nobody is going to out-spend a frontier lab on compute.`,
     },
   ],
   quiz: [
     {
-      question: 'Why does a model trained only to predict the next token end up knowing facts and writing working code?',
+      question: 'Where do the training labels in pretraining come from?',
       options: [
-        {
-          text: 'Facts and code are separate auxiliary objectives added alongside next-token prediction',
-          explanation: 'There is exactly one objective in pretraining. No auxiliary heads for facts or code exist.',
-        },
-        {
-          text: 'Those capabilities are instrumentally useful for lowering next-token loss on a corpus that contains facts and code',
-          explanation: 'Correct. Predicting "Paris" needs a fact; predicting a return statement needs code semantics. The cheapest way to lower one number across all of human text is to model the world the text describes.',
-        },
-        {
-          text: 'The corpus is annotated with topic tags that teach the model what domain it is in',
-          explanation: 'Pretraining data is unlabeled — that is precisely why trillions of tokens are affordable. No tags are involved.',
-        },
+        { text: 'Human annotators label each sentence with its topic before training', explanation: 'No annotation happens. Paying humans per example is exactly what makes trillion-token corpora impossible, which is why the self-labelling trick matters.' },
+        { text: 'The text labels itself: the target sequence is the input sequence shifted one position, so each token is the answer for everything before it', explanation: 'Correct. That one shift turns any piece of text into a pile of question-and-answer pairs for free.' },
+        { text: 'A smaller pretrained model generates the labels for the larger one', explanation: 'That describes a distillation setup, which is a different technique. Ordinary pretraining needs no other model.' },
       ],
       correct: 1,
     },
     {
-      question: 'In C ≈ 6ND, where does the 6 come from?',
+      question: 'In C = 6ND, where does the 6 come from?',
       options: [
-        { text: 'Six layers per transformer block', explanation: 'Layer count is part of N, not a separate factor. The 6 is per parameter, whatever the depth.' },
-        {
-          text: '2 FLOPs per parameter per token in the forward pass, plus 2 more for the optimizer step',
-          explanation: 'The optimizer step is per parameter per STEP, not per token, and it is negligible here. The missing 4 come from the backward pass.',
-        },
-        {
-          text: '2 FLOPs forward (one multiply, one add) plus 4 backward (gradients w.r.t. inputs and w.r.t. weights) per parameter per token',
-          explanation: 'Correct. The backward pass is roughly twice the forward pass because it computes two sets of gradients. 2 + 4 = 6.',
-        },
+        { text: 'Six layers per block in a standard transformer', explanation: 'Layer count is already inside N. The 6 is per parameter, whatever the depth happens to be.' },
+        { text: '2 FLOPs in the forward pass plus 4 more for the optimiser update', explanation: 'The optimiser update happens once per training step, not once per token, and it is small. The missing 4 come from the backward pass.' },
+        { text: '2 FLOPs forward (one multiply and one add per parameter per token) plus 4 backward, since the backward pass does about twice the work', explanation: 'Correct. 2 + 4 = 6 FLOPs per parameter per token, then multiply by N and D.' },
       ],
       correct: 2,
     },
     {
-      question: 'What is the compute-optimal token count for a 3B-parameter model?',
+      question: 'What is the compute-optimal token count for a 3 billion parameter model?',
       options: [
-        { text: 'About 60B tokens — 20 tokens per parameter', explanation: 'Correct. 20 × 3e9 = 6e10. And C = 6 × 3e9 × 6e10 ≈ 1.08e21 FLOPs.' },
-        { text: 'About 3B tokens — one token per parameter', explanation: 'That is roughly the GPT-3 era ratio (1.7), which Chinchilla showed to be badly under-trained.' },
-        { text: 'About 600B tokens — 200 tokens per parameter', explanation: 'That is 10× past compute-optimal. Defensible for a model you will serve heavily, but it is not the compute-optimal answer.' },
+        { text: 'About 60 billion tokens', explanation: 'Correct: 20 x 3e9 = 6e10. The run costs C = 6 x 3e9 x 6e10 = 1.08e21 FLOPs.' },
+        { text: 'About 3 billion tokens, one per parameter', explanation: 'That is roughly the ratio of the old very large models, and it is about twenty times short.' },
+        { text: 'About 600 billion tokens', explanation: 'That is ten times past compute-optimal. Defensible for a model you will serve heavily, but not the compute-optimal answer.' },
       ],
       correct: 0,
     },
     {
-      question: 'GPT-3 was 175B parameters trained on 300B tokens. What does Chinchilla say about that run?',
+      question: 'A team fixes its compute budget and then doubles the parameter count without changing anything else. What happens to the number of tokens the model sees?',
       options: [
-        { text: 'It was compute-optimal for its budget', explanation: 'At 1.7 tokens per parameter it was more than 10× short of the 20:1 ratio.' },
-        { text: 'The model should have been even larger', explanation: 'That was the pre-2022 instinct, and it is the one Chinchilla overturned.' },
-        {
-          text: 'It was under-trained: at the same compute, a much smaller model on far more tokens reaches lower loss',
-          explanation: 'Correct. The receipt is Chinchilla itself — 70B on 1.4T tokens beat Gopher 280B on 300B tokens at equal compute.',
-        },
-      ],
-      correct: 2,
-    },
-    {
-      question: 'Llama-3 8B was trained on 15T tokens — about 1875 tokens per parameter, roughly 94× past compute-optimal. Why is that a good decision rather than a mistake?',
-      options: [
-        { text: 'The Chinchilla result was later shown to be wrong', explanation: 'It was not. Chinchilla is still the right answer to the question it asks — cheapest path to a given loss, training only.' },
-        {
-          text: 'Compute-optimal minimizes TRAINING cost; for a model served billions of times, inference dominates lifetime cost, so you over-train a smaller model',
-          explanation: 'Correct. Inference cost scales with N, not D. Pay once at training to make every future request cheaper and to fit smaller GPUs.',
-        },
-        { text: 'Extra tokens are essentially free once the cluster is already rented', explanation: 'Tokens cost compute linearly — C = 6ND. 94× the tokens is a very large, deliberate bill.' },
+        { text: 'It stays the same, since tokens and parameters are independent settings', explanation: 'They are not independent once the budget is fixed. C = 6ND ties them together, so choosing one forces the other.' },
+        { text: 'It halves, because C = 6ND is fixed, so doubling N must halve D', explanation: 'Correct, and that is the whole trap: the bigger model is now trained on half the text and may well be worse.' },
+        { text: 'It doubles, because bigger models need more data', explanation: 'They do need more data, which is exactly the problem — a fixed budget will not give it to them.' },
       ],
       correct: 1,
     },
     {
-      question: 'Loss falls as a power law in compute. What does that imply practically?',
+      question: 'Someone tells you a new model reaches a loss of 1.94. What is the first thing you should ask?',
       options: [
-        {
-          text: 'Each further constant improvement in loss costs a constant MULTIPLE more compute',
-          explanation: 'Correct. Straight line on log-log axes. With α ≈ 0.076, halving the reducible loss needs about 9,000× the parameters.',
-        },
-        { text: 'Loss falls linearly with dollars spent', explanation: 'Linear on log-log is very much not linear on linear axes — that is the whole point.' },
-        { text: 'Loss reaches zero at a finite, computable compute budget', explanation: 'There is an irreducible term — the entropy of language itself. The curve approaches a floor, never zero.' },
+        { text: 'Which tokenizer and which evaluation corpus that number came from', explanation: 'Correct. A different tokenizer chops the same text into a different number of pieces, which changes the loss mechanically. Without both, the number cannot be compared to anything.' },
+        { text: 'How many GPUs the run used', explanation: 'Useful for cost, but it tells you nothing about whether 1.94 is good or bad.' },
+        { text: 'Whether the loss was measured in the last epoch', explanation: 'Epoch counts are nearly meaningless in pretraining, where corpora are often seen once. Tokens seen is the meaningful counter.' },
       ],
       correct: 0,
     },
     {
-      question: 'What is the strongest published counter-argument to "emergent abilities"?',
+      question: 'What is the strongest objection to reported "emergent" abilities?',
       options: [
-        { text: 'The benchmarks were contaminated by training-set leakage', explanation: 'Contamination is a real and separate problem, but it is not the emergence critique.' },
-        { text: 'The small models in those studies were under-trained relative to Chinchilla', explanation: 'True of many older runs, and it muddies comparisons — but it is not the metric argument that the critique rests on.' },
-        {
-          text: 'Discontinuous metrics such as exact match manufacture sharp jumps; re-scoring the same checkpoints with continuous metrics shows smooth improvement',
-          explanation: 'Correct — Schaeffer et al. Per-digit accuracy rising steadily produces a near-zero-then-sudden exact-match curve purely as a scoring artifact.',
-        },
-      ],
-      correct: 2,
-    },
-    {
-      question: 'You load a raw base checkpoint (no post-training) and prompt it with "What is the capital of France?". What is the most likely output?',
-      options: [
-        { text: 'A refusal, because it has no safety training', explanation: 'Refusal is a learned behaviour from post-training. A base model has no notion of refusing.' },
-        {
-          text: 'A plausible continuation of that text — often more questions, as on an FAQ page — rather than a direct answer',
-          explanation: 'Correct. A base model completes text; it does not answer. Instruction-following was never in the pretraining loss.',
-        },
-        { text: 'Nothing — base models cannot generate until they are fine-tuned', explanation: 'They generate perfectly well. They just generate continuations, not answers.' },
+        { text: 'The benchmarks were contaminated with training data', explanation: 'Contamination is a real and serious problem, but it is a different criticism and does not explain the sharp shape of the curve.' },
+        { text: 'All-or-nothing scoring such as exact match manufactures a sudden jump; rescoring the same saved models with a continuous measure shows smooth improvement', explanation: 'Correct. Per-digit accuracy climbing steadily produces a near-zero-then-sudden exact-match curve purely from the scoring rule.' },
+        { text: 'The small models in those comparisons were trained with different optimisers', explanation: 'Not the argument, and mostly not true. The criticism is about the measurement, not the training setup.' },
       ],
       correct: 1,
     },
   ],
   interviewQuestions: [
     {
-      question: 'Explain scaling laws, and tell me what they are actually FOR.',
+      question: 'Explain the pretraining objective, and why one task teaches so many skills.',
       answer:
-        'Empirically, loss falls as a power law in model size, dataset size and compute — a straight line on log-log axes over seven-plus orders of magnitude, approaching an irreducible floor set by the entropy of language. The form is L ≈ L_inf + (N_c/N)^alpha with alpha around 0.076 for parameters. The philosophical reading ("scale works") is the boring half. The useful half is forecasting: you fit the curve on a dozen cheap small runs and extrapolate, so you know approximately what a 100-million-dollar run will score before you authorize it. That is how a lab de-risks a capital expenditure it cannot iterate on. The second implication is sobering: a power law means each constant improvement costs a constant multiple more — with alpha = 0.076, halving the reducible loss needs about 9,000x the parameters. Progress is smooth AND exponentially expensive at the same time.',
+        'The objective is next-token prediction and there is no second one. You take a stream of tokens, use it as the input, use the same stream shifted one position as the target, and train the model to make the target likely. Nobody labels anything, which is what makes trillions of tokens affordable. The reason it teaches so much is that the corpus is broad, so predicting well requires knowing things: filling the blank in "the capital of France is" needs a fact, "born in 1984, so in 2004 she turned" needs arithmetic, a return statement needs code semantics, and "it was too big" needs tracking what the pronoun refers to. None of those were goals. Each is simply the cheapest available route to lower loss, and across a broad enough corpus the cheapest route turns out to be modelling what the text describes.',
       isCaseBased: false,
     },
     {
-      question: 'Derive C ≈ 6ND and then use it: how long does a 7B model on 140B tokens take on 256 H100s?',
+      question: 'Derive C = 6ND and then use it: how long does a 7B model on 140B tokens take on 256 chips?',
       answer:
-        'Derivation: in the forward pass every parameter participates in one multiply and one add per token, so 2 FLOPs per parameter per token. The backward pass computes gradients with respect to both the layer inputs and the weights — two passes of the same shape — so roughly 4 more. Total 6, giving C = 6ND. It ignores the attention n-squared term (minor until context is long) and embeddings, so it is good to about 20%. Now the numbers: C = 6 × 7e9 × 1.4e11 = 5.88e21 FLOPs. An H100 peaks at 989 TFLOP/s bf16, and a well-tuned run sustains 35-50% MFU, so call it 400 TFLOP/s effective. 5.88e21 / 4e14 = about 1.47e7 GPU-seconds = about 4,100 GPU-hours. Across 256 GPUs that is roughly 16 hours of wall clock, and at 2.50 dollars per GPU-hour about 10,000 dollars. The line that scores points is quoting MFU rather than spec-sheet peak — that distinction is what separates people who have run training jobs from people who have read about them.',
+        'In the forward pass each parameter takes part in about one multiply and one add per token, giving 2 FLOPs per parameter per token. The backward pass does roughly twice that work, because it computes both the signal flowing back through the network and the update for each parameter, giving 4 more. Total 6, so C = 6ND. It ignores the attention term that grows with context length, the embeddings and optimiser bookkeeping, so it is good to about twenty percent. Numbers: C = 6 x 7e9 x 1.4e11 = 5.88e21 FLOPs. A chip advertising 989 TFLOP/s sustains roughly 40 percent in a well-tuned run, so about 4e14 FLOP/s. That is 5.88e21 / 4e14 = 1.47e7 chip-seconds, about 4,100 chip-hours, so roughly 16 hours across 256 chips, and about $10,000 at $2.50 per chip-hour. The important detail is using the sustained rate rather than the advertised one.',
       isCaseBased: false,
     },
     {
-      question: 'What exactly did the Chinchilla paper change, and what was wrong with the earlier scaling-law fits?',
+      question: 'What is the compute-optimal split, and what mistake did it correct?',
       answer:
-        'Before Chinchilla the consensus (from the Kaplan fits) was that model size mattered far more than data, so labs scaled parameters aggressively: GPT-3 was 175B on 300B tokens, 1.7 tokens per parameter. Chinchilla redid the compute sweep with a crucial methodological fix — matching the learning-rate schedule to each run\'s token budget, rather than using one schedule tuned for a longer run, which had systematically handicapped the long-data runs in the earlier fits. With that fixed, N and D come out scaling roughly equally: about 20 tokens per parameter at compute-optimal. The empirical receipt is Chinchilla 70B on 1.4T tokens outperforming Gopher 280B on 300B tokens at the same compute — a 4x smaller model winning. The practical inversion is the takeaway: at a fixed compute budget, prefer a smaller model on more data, because compute is the constrained resource, not parameters.',
+        'For a fixed compute budget, C = 6ND means choosing the parameter count forces the token count, so the real question is the split. Sweeping many sizes at matched budgets shows the two should grow at roughly the same rate, which comes out near 20 tokens per parameter. Substituting D = 20N into C = 6ND gives C = 120N squared, so N = sqrt(C/120) and D = 20N. The mistake it corrected was the earlier belief that parameter count mattered far more than data, which led to very large models on comparatively little text — one prominent 175 billion parameter model saw 300 billion tokens, about 1.7 tokens per parameter. At matched compute, a model several times smaller trained on far more tokens reaches a lower loss. I would add the caveat that this is an empirical fit, not a law, and the constant shifts with data quality and setup.',
       isCaseBased: false,
     },
     {
-      question: 'Case: leadership hands you 200,000 dollars of GPU budget and asks for a from-scratch model for an internal code assistant. Walk me through it.',
+      question: 'How honest is the phrase "scaling law"? Trend or law?',
       answer:
-        'First do the arithmetic out loud, because it is the argument. At 2.50 dollars per GPU-hour and 40% MFU on H100s, 200k dollars buys about 80,000 GPU-hours, roughly 1.1e23 FLOPs. Chinchilla-optimal for that is N = sqrt(C/120) ≈ 30B parameters on 600B tokens — and a from-scratch 30B trained on 600B tokens of whatever data we can assemble in a quarter will be far worse than an off-the-shelf 8B that saw 15T curated tokens. Also missing from that estimate: the data pipeline (crawl, dedup, filter, mix), the eval harness, failed restarts, and the fact that we have no post-training. So the recommendation is: do not pretrain. Instead spend perhaps 5k on LoRA fine-tuning a strong open code base model on our internal repos, 20k on building the retrieval layer over our codebase and docs, and hold the rest for evaluation and serving. If leadership insists on a from-scratch artifact, the honest counter-offer is continued pretraining — take an existing base checkpoint and train it further on 50-100B tokens of our own domain data, which captures most of the domain benefit for a small fraction of the budget. Naming the thing you would NOT build is the answer they are testing for.',
+        'Trend, and a well-supported one. What was actually done is fitting a curve to measured loss across a range of model sizes, dataset sizes and budgets, finding it is close to a straight line on log-log axes, and observing that it keeps holding over many orders of magnitude. That is strong empirical regularity, not a derivation from first principles. Practically it earns its keep as a forecasting tool: fit on a dozen cheap small runs, extrapolate a little, and know roughly what a very expensive run will score before you authorise it, which is the only way to de-risk a spend you cannot iterate on. The honest caveats are that the fitted constants differ between labs and datasets, that changing the data distribution shifts the whole curve, that extrapolating far past the measured range is an act of faith, and that loss is not the thing anyone actually cares about — the mapping from loss to useful behaviour is much less predictable than the loss curve itself.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Case: leadership gives you $200,000 of GPU budget and asks for a from-scratch model for an internal code assistant. Walk me through it.',
+      answer:
+        'Do the arithmetic out loud, because the arithmetic is the argument. At $2.50 per chip-hour that is 80,000 chip-hours. At 40 percent sustained, one chip-hour is about 1.42e18 FLOPs, so the budget is roughly 1.1e23 FLOPs. Compute-optimal is N = sqrt(C/120), about 30 billion parameters on 600 billion tokens. Then ask the questions the number hides. Do we have 600 billion tokens of good code and documentation, cleaned and deduplicated? Almost certainly not, and assembling it is a multi-month project on its own. The estimate also assumes no crashed jobs and steady utilisation, neither of which is real, and it contains nothing for the stage that makes a model follow instructions. Meanwhile an existing open base model has already seen many trillions of curated tokens. So the recommendation is not to pretrain: spend a small amount fine-tuning a strong open code model on our repositories, spend more on retrieval over our codebase and docs, and hold the rest for evaluation and serving. If leadership needs a from-scratch artefact, the honest counter-offer is continued pretraining — take an existing checkpoint and train it further on 50 to 100 billion tokens of our own domain text, which captures most of the domain benefit for a fraction of the budget. Naming what you would not build is the substance of the answer.',
       isCaseBased: true,
     },
     {
-      question: 'Case: your company will serve one model at 50M requests per day for three years. Do you train Chinchilla-optimal or deliberately over-train a smaller model?',
+      question: 'Case: your company will serve one model at 50 million requests a day for three years. Do you train compute-optimal, or over-train a smaller model?',
       answer:
-        'Over-train the smaller model, and the argument is total cost of ownership rather than training cost. Chinchilla minimizes the compute to reach a given loss once. Here the model is trained once and run about 5.5e10 times over three years, so inference FLOPs dwarf training FLOPs by orders of magnitude. Inference cost scales with N and not with D, so every parameter you remove pays back on every request forever — and a smaller model also fits on cheaper GPUs, needs a smaller KV cache, and hits lower latency, which affects conversion, not just cost. Concretely: instead of the compute-optimal 30B on 600B tokens, train an 8B on 5-10T tokens. You pay several times more to train and you recover it in weeks of serving. Llama-3 8B at 1875 tokens per parameter is exactly this decision made in public. The caveats worth naming: returns from over-training do saturate, so past some multiple of optimal you are buying very little loss; and if quality at the top end is the product, a larger model can still be the right call with distillation or quantization as the serving mitigation.',
+        'Over-train the smaller one, and the reason is that compute-optimal answers the wrong question here. The 20-tokens-per-parameter rule minimises the compute needed to reach a given loss once. This model is trained once and then run about 5.5e10 times over three years, so the cost of serving dwarfs the cost of training. Serving cost scales with the parameter count and not with the tokens seen, so every parameter you remove pays back on every request forever, and a smaller model also fits on cheaper hardware, needs less memory for the running conversation, and answers faster, which affects the product and not just the bill. Concretely, instead of a compute-optimal 30 billion on 600 billion tokens, train an 8 billion on 5 to 10 trillion tokens. You pay several times more to train and recover it within weeks of serving. Widely used open 8 billion models at roughly 1,875 tokens per parameter are exactly this decision made in public. Two caveats worth stating: the returns from over-training do flatten, so past some multiple you are buying very little; and if top-end quality is the product, a bigger model with quantisation or distillation for serving can still win.',
       isCaseBased: true,
     },
     {
-      question: 'Why does deduplication of pretraining data matter more than people expect?',
+      question: 'Case: you are picking a base model for a Hindi-language customer support product. What do you check, in order?',
       answer:
-        'Three separate reasons, and interviewers want at least two. First, generalization: duplicated passages shift the model toward memorizing exact strings instead of learning the distribution, and duplication is heavily skewed — boilerplate, licences and scraped-and-rescraped articles appear thousands of times. Second, evaluation integrity: if benchmark text appears in the corpus, every score you report is contaminated, and near-duplicate leakage is much harder to catch than exact leakage. Third, extraction and privacy risk: text seen many times is far more likely to be regurgitated verbatim, which is the mechanism behind training-data-extraction attacks and the memorized-PII problem. The tooling is MinHash or SimHash with LSH over shingles for near-duplicates, at document and sometimes paragraph granularity. And the wider point it connects to: the modern consensus is that data quality and dedup beat raw volume — hard-filtered corpora match much larger dirty ones at equal compute.',
-      isCaseBased: false,
-    },
-    {
-      question: 'Are emergent abilities real? Give me both sides.',
-      answer:
-        'The claim is that some capabilities — 3-digit arithmetic, word unscrambling, multi-step reasoning — stay at chance across many model scales and then jump sharply past a threshold, which would mean capability is not smoothly predictable from scaling laws. The serious rebuttal is Schaeffer et al., "Are Emergent Abilities a Mirage?": the sharpness often comes from the METRIC. Exact match on a multi-digit answer is all-or-nothing, so a model whose per-digit accuracy climbs steadily from 30% to 90% scores near zero and then suddenly well — the discontinuity is manufactured by the scoring rule. Re-score the same checkpoints with per-token accuracy or the log-likelihood of the correct answer and the curves are smooth. My position: the underlying capability improves smoothly and largely predictably, and most published emergence claims are metric artifacts; but a few things, in-context learning most of all, still look qualitatively new rather than merely better, and that remains genuinely open. The reason to know both sides is that it demonstrates you read the follow-up paper, not just the headline.',
-      isCaseBased: false,
-    },
-    {
-      question: 'Why can you not ship a base model as a chatbot? Be specific about what is missing.',
-      answer:
-        'A base model is a text completer optimized for one thing: the likelihood of the next token given a web-scale corpus. Prompt it with "What is the capital of France?" and a high-likelihood continuation is more questions, because on the web questions cluster on FAQ pages. Four concrete gaps. It does not follow instructions — "summarize this" is text to continue, not a command. It has no refusal behaviour — the corpus contains harmful text so it will continue harmful text. It has no notion of turns, of a user, or of an assistant persona, and no reliable stopping behaviour. And it has no calibrated helpfulness — it will confidently continue in whatever register the prompt establishes. All four are fixed by post-training: supervised fine-tuning on instruction and dialogue data teaches the format, then preference optimization (RLHF or DPO) tunes helpfulness and refusal. Practically this means always checking whether a Hugging Face checkpoint is the base or the instruct variant, and using the exact chat template that model was tuned with — a mismatched template quietly costs a large amount of quality.',
-      isCaseBased: false,
-    },
-    {
-      question: 'Case: you are picking a base model for a Hindi-language customer-support product. Rank what you check and why.',
-      answer:
-        'Tokenizer and language fit comes first here, which is unusual and is the point of the question. A tokenizer trained mostly on English can burn 3-4x more tokens per Devanagari sentence, which triples the cost per request AND shrinks the effective context window by the same factor — a claimed 32k context becomes an effective 8-10k of Hindi. Measure it directly: run a few thousand real support transcripts through each candidate tokenizer and compare tokens per message. Second, whether the pretraining mix actually contained meaningful Hindi, which you test with perplexity on held-out in-domain text rather than trusting the model card. Third, licence, because a support product is commercial and a research-only or user-threshold licence blocks the ship date. Fourth, size against the latency budget — support chat needs fast first-token latency, so an 8B served with a good runtime usually beats a 70B that is technically smarter. Fifth, post-training state: an instruct variant with a documented chat template, and refusal behaviour that will not fire on ordinary billing complaints. Then plan a LoRA fine-tune on real transcripts and a retrieval layer over the help-centre docs — those two move the metrics far more than swapping the base model again.',
+        'Tokenizer fit comes first here, which is unusual and is the point of the question. A tokenizer trained mostly on English can spend three to four times more tokens on the same Devanagari sentence, which multiplies the cost of every request by the same factor and shrinks the usable context window by it too, so a claimed 32,000-token window becomes an effective 8,000 to 10,000 of Hindi. Measure it directly: push a few thousand real transcripts through each candidate tokenizer and compare tokens per message. Second, whether the pretraining corpus genuinely contained Hindi, which you test by measuring loss on held-out in-domain text rather than trusting the model card. Third, licence, because this is a commercial product and a research-only licence blocks the launch. Fourth, size against the latency budget — support chat needs a fast first response, so a well-served small model usually beats a much larger one. Fifth, the post-training state: is there an instruction-tuned variant with a documented chat template, and does its refusal behaviour misfire on ordinary billing complaints. Then plan a fine-tune on real transcripts plus retrieval over the help-centre articles, since those two move the metrics far more than swapping base models again.',
       isCaseBased: true,
     },
     {
-      question: 'Someone dismisses LLMs as "just autocomplete". Respond.',
+      question: 'Why can you not ship a base model as a chatbot?',
       answer:
-        'Agree with the premise and reject the conclusion. Yes, the objective is literally next-token prediction, and yes, that is autocomplete. But the objective describes the training signal, not the mechanism the model must build to satisfy it. To predict the next token well across ALL of human text you have to get facts right, track coreference, respect code semantics, do arithmetic, hold meter and rhyme, and follow multi-step arguments — because each of those is instrumentally useful for lowering that one number, and on a broad enough corpus there is no cheaper shortcut than actually modelling the structure the text describes. The compression framing makes it sharp: lowest achievable loss equals best compression of the corpus, and compressing text well requires modelling what generated it. Then close honestly, because the honesty is what makes the argument credible: the objective gives you no instruction-following, no refusals, no calibration and no grounding in truth beyond what correlates with likely text — which is exactly why post-training and retrieval exist as separate stages.',
-      isCaseBased: false,
-    },
-    {
-      question: 'How would you decide the data mixing weights for a pretraining run?',
-      answer:
-        'Weights are a hyperparameter, so treat them like one: fit them at small scale and transfer. The procedure is to train a family of small models (a few hundred million parameters, a few billion tokens) under different mixes and compare on a downstream eval suite rather than on overall loss, because overall loss is dominated by whichever source is largest and rewards the wrong thing. Known priors worth stating: code is upsampled well beyond its natural web share because it appears to improve general reasoning and structured output; high-quality small sources such as Wikipedia, textbooks and curated math are repeated several epochs while bulk web is seen once or twice; and repeating a small high-quality source up to about four epochs is roughly as good as fresh tokens, after which returns fall off sharply. Multilingual share is a product decision, not a loss decision — it buys you capability the English evals will not show. Also worth naming: mixes are often annealed, with the highest-quality data concentrated in the final phase of training, which measurably helps. And the meta-point — this is the highest-leverage knob a small team actually controls, since nobody is out-spending the frontier labs on compute.',
+        'Because a base model is optimised for exactly one thing: the likelihood of the next token given web-scale text. Prompt it with "What is the capital of France?" and a high-likelihood continuation is more questions, because questions cluster together on FAQ pages. Four concrete gaps follow from that. It does not follow instructions, since "summarise this" is text to continue rather than a command. It has no refusal behaviour, because the corpus contains harmful text and continuing it is exactly what it was trained to do. It has no notion of turns, of a user or of an assistant persona, and no reliable stopping behaviour. And it has no calibrated helpfulness; it adopts whatever register the prompt establishes. All four are addressed by a later stage: supervised fine-tuning on instruction and dialogue data teaches the format, then preference optimisation tunes helpfulness and refusal. Practically this means always checking whether a downloaded checkpoint is the base or the instruction-tuned variant, and using the exact chat template it was tuned with, since a mismatched template costs a surprising amount of quality.',
       isCaseBased: false,
     },
   ],
   flashcards: [
-    { front: 'The pretraining objective, and why it teaches everything', back: 'Next-token prediction: minimize -1/T Σ log p(x_t | x_<t), no labels needed. Facts, grammar, arithmetic and code semantics are all instrumentally useful for lowering that one number — not goals, just the cheapest path to it.' },
-    { front: 'Data pipeline, five stages', back: 'Crawl → dedup (MinHash/LSH) → quality filter → mix weights across sources → tokenize into one flat token stream. Quality and dedup beat raw volume.' },
-    { front: 'Scaling law form', back: 'L ≈ L_inf + (N_c/N)^α — a straight line on log-log axes over 7+ orders of magnitude, approaching an irreducible floor (the entropy of language).' },
-    { front: 'What a power law costs you', back: 'Each constant improvement costs a constant MULTIPLE more. With α ≈ 0.076, halving the reducible loss needs about 9,000× the parameters.' },
-    { front: 'C ≈ 6ND', back: '6 FLOPs per parameter per token: 2 forward (multiply + add), 4 backward (grad w.r.t. inputs and weights). Ignores attention n² and embeddings; good to ~20%.' },
-    { front: 'Chinchilla rule + the 7B arithmetic', back: '~20 tokens per parameter at compute-optimal. 7B → 140B tokens, C = 5.88e21 FLOPs ≈ 4,100 H100-hours ≈ $10k. At fixed C: N* = sqrt(C/120), D* = 20N*.' },
-    { front: 'Why modern models over-train', back: 'Chinchilla minimizes TRAINING compute. Inference cost scales with N and is paid billions of times, so you train a smaller model far past optimal. Llama-3 8B: 15T tokens, D/N = 1875.' },
-    { front: 'Emergent abilities — the honest version', back: 'Sharp jumps are largely artifacts of discontinuous metrics (exact match). Continuous metrics on the same checkpoints show smooth improvement. In-context learning is the debated exception.' },
-    { front: 'What a base model is NOT', back: 'A text completer. No instruction-following, no refusals, no turns, no assistant persona. Post-training (SFT → RLHF/DPO) closes that gap.' },
-    { front: 'Picking a base model — five axes', back: 'Licence, size vs latency budget, real (not claimed) context length, tokenizer/language fit (English tokenizers burn 3–4× on Hindi), and how it was post-trained.' },
+    { front: 'The pretraining objective in one line', back: 'Next-token prediction. Inputs are the token stream, targets are the same stream shifted one position left. No human labels, which is why trillions of tokens are affordable.' },
+    { front: 'Self-supervised', back: 'The labels come out of the data itself rather than out of a human. In "the cat sat", the token "cat" is the label for the input "the".' },
+    { front: 'Why next-token prediction teaches facts and arithmetic', back: 'Because a broad corpus makes them the cheapest way to guess well: "the capital of France is" needs a fact, "born 1984, in 2004 turned" needs subtraction. Not goals, just useful.' },
+    { front: 'Epoch vs tokens seen', back: 'An epoch is one full pass through the dataset. Tokens seen counts every prediction including repeats. Pretraining quotes tokens seen, because corpora are often seen once or less.' },
+    { front: 'C = 6ND', back: '6 FLOPs per parameter per token: 2 forward (a multiply and an add) plus 4 backward. Ignores the attention term, embeddings and optimiser, so good to about 20 percent.' },
+    { front: 'The compute-optimal split', back: 'About 20 tokens per parameter. Put D = 20N into C = 6ND to get C = 120N squared, so N = sqrt(C/120) and D = 20N. A 7B model wants 140B tokens, costing 5.88e21 FLOPs.' },
+    { front: 'The classic under-training mistake', back: 'Growing parameters at a fixed budget forces tokens down, since C = 6ND. 60B parameters on a 2.85e22 budget gets only 79B tokens, 1.3 per parameter — capacity paid for and left empty.' },
+    { front: 'Scaling law: trend or law?', back: 'A fitted empirical trend, not a derivation. Straight on log-log over many orders of magnitude, with an irreducible floor. Constants shift with data quality; extrapolating far past the measured range is faith.' },
   ],
   mindmapMarkdown: `- Pretraining & Scaling Laws
   - The objective
-    - next-token prediction, one loss
-    - self-labeled: x_t labels x_<t
-    - perplexity = exp(loss)
-    - forced to learn facts, code, arithmetic, meter
-    - all instrumentally useful, none a goal
-  - Data pipeline
-    - crawl (Common Crawl, strip boilerplate)
-    - dedup: MinHash/LSH near-duplicates
-    - quality filter + PII/toxicity
-    - mixing weights: web / code / books / math
-    - tokenize into one flat stream
-    - quality + dedup > raw volume
+    - next-token prediction, one task only
+    - inputs = tokens, targets = tokens shifted left by one
+    - self-supervised: the text labels itself
+    - corpus = the pile of text you train on
+    - whole window scored at once, not one pair at a time
+  - Why it teaches so much
+    - "capital of France is" needs a fact
+    - "born 1984, in 2004 turned" needs arithmetic
+    - a return statement needs code semantics
+    - "it was too big" needs pronoun tracking
+    - none were goals, all are cheapest route to lower loss
+  - Counting
+    - epoch = one full pass over the dataset
+    - tokens seen = total predictions, repeats included
+    - pretraining quotes tokens seen, written D
+  - The three quantities
+    - N = parameters, the adjustable numbers
+    - D = tokens seen
+    - C = compute budget, measured in FLOPs
   - Scaling laws
-    - power law in N, D, C
-    - straight line on log-log, 7+ orders
-    - irreducible floor L_inf
-    - alpha ~ 0.076
-    - halving reducible loss ~ 9000x params
-    - real use: forecast the big run cheaply
+    - loss falls smoothly and predictably
+    - N, D and C must grow together
+    - power law: equal gains cost a constant multiple more
+    - irreducible floor, loss never reaches zero
+    - a fitted trend, not a law of nature
   - C = 6ND
-    - 2 FLOPs forward per param per token
+    - 2 FLOPs forward per parameter per token
     - 4 FLOPs backward
-    - ignores attention n^2, embeddings
-    - divide by MFU (35-50%), not peak
-  - Chinchilla
-    - GPT-3: 175B / 300B = 1.7 tok/param
-    - fix: LR schedule matched to token budget
-    - optimal ~20 tokens per parameter
-    - 70B on 1.4T beat Gopher 280B on 300B
-    - N* = sqrt(C/120), D* = 20N*
-    - 7B -> 140B tokens -> 5.88e21 FLOPs
-  - Over-training on purpose
-    - inference cost scales with N, not D
-    - trained once, served billions of times
-    - Llama-3 8B: 15T tokens, D/N = 1875
-    - Chinchilla = training-optimal, not TCO-optimal
-  - Emergent abilities
-    - claim: abrupt jumps past a scale threshold
-    - counter: discontinuous metrics manufacture jumps
-    - continuous metrics -> smooth curves
-    - in-context learning still debated
-  - What pretraining does NOT give
+    - 7B on 140B tokens = 5.88e21 FLOPs
+    - divide by sustained rate (~40%), not the advertised one
+    - 1 chip-hour = about 1.42e18 FLOPs
+  - Compute-optimal split
+    - about 20 tokens per parameter
+    - N = sqrt(C/120), D = 20N
+    - C = 1e23 -> 28.9B params, 577B tokens
+    - old style: 175B params on 300B tokens = 1.7 per param
+  - The classic mistake
+    - fixed budget, doubled params, halved tokens
+    - 60B params -> only 79B tokens -> 1.3 per param
+    - capacity paid for and left empty
+    - also: a loss number without its tokenizer is meaningless
+  - Worked case
+    - $50,000 / $2.50 = 20,000 chip-hours
+    - x 1.424e18 = 2.85e22 FLOPs
+    - N = sqrt(C/120) = 15B params, D = 308B tokens
+    - check the corpus actually exists
+    - add 30% margin for crashes
+  - Emergent behaviour
+    - claim: abilities appear suddenly past a size
+    - counter: all-or-nothing scoring manufactures the jump
+    - continuous measures give smooth curves
+    - contested term, say which definition you mean
+  - What pretraining does not give
     - base model completes text, does not answer
-    - no instruction-following
-    - no refusals, no turns, no persona
-    - gap closed by post-training (SFT -> RLHF/DPO)
-    - always check base vs instruct + chat template
-  - Choosing a base model
-    - licence blocks ship dates
-    - size vs latency/VRAM budget
-    - context length: real vs claimed
-    - tokenizer fit: 3-4x tokens on Hindi
-    - post-training state
-  - Cost reality
-    - 70B compute-optimal ~ $1M GPU rental
-    - millions of dollars, 20+ people, months
-    - your leverage: fine-tuning + RAG`,
+    - no instruction-following, no refusals, no turns
+    - closed by Alignment: RLHF, Reward Models & DPO
+    - adapted by Fine-Tuning: Full FT, LoRA & QLoRA
+    - check base vs instruct before shipping`,
 }
 
 export default m
