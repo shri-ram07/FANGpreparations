@@ -34,9 +34,9 @@ export const math: SubjectDef = {
     - Loss surface
     - Walking downhill blindfolded`,
   modules: [
-    mod('math-l0-vectors-dot-product', 0, 'Vectors & the Dot Product (= Similarity)', 45, () => import('./l0-vectors-dot-product')),
+    mod('math-l0-vectors-dot-product', 0, 'Vectors & the Dot Product (= Similarity)', 40, () => import('./l0-vectors-dot-product')),
     mod('math-l0-matrices-transformations', 0, 'Matrices as Transformations', 45, () => import('./l0-matrices-transformations')),
     mod('math-l1-calculus-gradients', 1, 'Slopes, Derivatives & the Gradient', 36, () => import('./l1-calculus-gradients')),
-    mod('math-l1-probability-stats', 1, 'Probability, Bayes & the Statistics ML Actually Uses', 55, () => import('./l1-probability-stats')),
+    mod('math-l1-probability-stats', 1, 'Probability and Statistics, Built From Counting', 52, () => import('./l1-probability-stats')),
   ],
 }

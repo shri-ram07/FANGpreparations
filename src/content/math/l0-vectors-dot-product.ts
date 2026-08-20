@@ -6,443 +6,573 @@ const m: Module = {
   level: 0,
   title: 'Vectors & the Dot Product (= Similarity)',
   whyItMatters:
-    'Every "find me something like this" system on earth — semantic search, recommenders, RAG, the attention inside GPT — is computing dot products. It is the highest-leverage formula in ML: one line of arithmetic that turns "do these two things mean the same thing?" into a single number. Learn it here on four-dimensional toys and you will recognise it, unchanged, inside a 96-layer transformer.',
-  estMinutes: 45,
+    'A vector is a list of numbers, and the dot product is one line of arithmetic you do on two of them. That one line is how a search engine decides which document matches your query, how a recommender decides which film you will like, and how every layer of every large language model decides which words to pay attention to. This module builds it from zero: two small lists of numbers, multiplied and added by hand, then the same answer produced a second way out of two lengths and an angle. Nothing here needs any machine learning background.',
+  assumes: [
+    'You know what a square root is, and what squaring a number means',
+    'You have seen a graph with an x-axis and a y-axis, and can plot the point (3, 4) on it',
+    'You remember Pythagoras: in a right-angled triangle, the long side squared equals the sum of the squares of the other two sides',
+    'You have seen a Python list, a for loop, and a function definition',
+    'No machine learning, no calculus, no numpy. Every term used here is defined here.',
+  ],
+  estMinutes: 40,
   sections: [
     {
       type: 'intuition',
-      title: 'A vector, three ways',
-      md: `A flat is: 2 bedrooms, 850 sq ft, 4 km from the office, floor 7. Write that as **[2, 850, 4, 7]**. You just made a vector.
+      title: 'A vector is a list of numbers',
+      md: `Write down three steps right and four steps up: **[3, 4]**. That is a vector. There is nothing else to it — a vector is an ordered list of numbers.
 
-- **A list of numbers.** The ML view. Each slot is one *feature* — one measured property of one thing.
-- **An arrow in space.** Starts at the origin, points somewhere. Gives you direction and length.
-- **A point.** Just the arrow's tip. Gives you "things near each other are alike".
-- All three are the same object. Switching views freely is the whole trick of linear algebra.
-- ML almost always *starts* in the list view: a row of a spreadsheet, a 768-number embedding of a sentence, an image flattened out.
-- The payoff comes from the arrow view: once your data is arrows, **geometry answers questions about meaning**.`,
-    },
-    {
-      type: 'note',
-      md: `"768-dimensional" sounds like science fiction. It is not — it means 768 numbers in the list. You cannot picture it and you never need to: every rule below is written for n dimensions and behaves in 768 exactly as it does in 2. **Reason in 2D, compute in 768D.**`,
+- Because there are two numbers, you can draw it. Put your pencil at the origin, the point (0, 0). Go 3 steps right along the x-axis, then 4 steps up. Draw an arrow from the origin to where you landed. That arrow *is* [3, 4].
+- The order matters. [3, 4] and [4, 3] are different arrows pointing in different directions.
+- Each number in the list is called a **component**. [3, 4] has two components: its first component is 3, its second is 4.
+- A vector does not have to have two components. A flat can be described as **[2, 850, 4]** — 2 bedrooms, 850 square feet, 4 km from the office. Three numbers, three components, one vector.
+- You cannot easily draw [2, 850, 4], and that is fine. Every rule in this module is arithmetic on the components, so it works for a list of 3 numbers, or 768 of them, exactly as it works for 2.
+
+The habit to build: **think in 2 components because you can see them, compute with any number of components because the arithmetic never changes.**`,
     },
     {
       type: 'intuition',
-      title: 'Two moves: add and scale',
-      md: `That is the entire grammar. Two operations, one rule each.
+      title: 'How long is a vector? Pythagoras, and nothing else',
+      md: `The arrow [3, 4] starts at the origin and ends at the point (3, 4). How long is it?
 
-- **Addition** is componentwise: [2, 1] + [3, 0] = [5, 1]. Geometrically: walk the first arrow, then walk the second from where you landed. Tip-to-tail.
-- **Scalar multiplication** stretches: 2·[2, 1] = [4, 2] — same direction, twice as long.
-- A negative scalar flips it: −1·[2, 1] = [−2, −1] — same line, opposite way. A zero scalar collapses it to the origin.
-- Notice scaling never rotates. It only changes length (and possibly which end you are on).
-- Every layer of every neural network is these two moves repeated: scale each input by a weight, add the results. Nothing more exotic is happening in there.`,
-    },
-    {
-      type: 'math',
-      intro: 'Componentwise, for vectors of any length n. c is a plain number (a "scalar").',
-      latex: [
-        'a + b = (a_1 + b_1,\\; a_2 + b_2,\\; \\dots,\\; a_n + b_n)',
-        'c\\,a = (c\\,a_1,\\; c\\,a_2,\\; \\dots,\\; c\\,a_n)',
-      ],
-    },
-    {
-      type: 'intuition',
-      title: 'Length: the norm',
-      md: `How long is the arrow [3, 4]? Pythagoras, and nothing else: sqrt(3² + 4²) = **5**.
-
-- That is the **L2 norm**, written ‖a‖ (or ‖a‖₂) — straight-line distance from the origin to the tip.
-- It generalises with zero drama: square every component, add them, take the square root. Same in 768 dimensions as in 2.
-- There is a sibling: the **L1 norm** — just add the absolute values. ‖[3, 4]‖₁ = 7. That is "taxi distance": you must travel along the grid, no diagonal shortcut.
-- The difference in one line: L2 punishes one big component hard (it is squared); L1 charges the same rate per unit, wherever that unit sits.
-- That is not trivia. It is exactly why **Ridge (an L2 penalty) shrinks weights toward zero while Lasso (an L1 penalty) drives them exactly to zero** — the regularization module cashes this in.`,
-    },
-    {
-      type: 'math',
-      intro: 'Two ways to measure "how big". Both come back later as regularization penalties.',
-      latex: [
-        '\\|a\\|_2 = \\sqrt{a_1^2 + a_2^2 + \\cdots + a_n^2} = \\sqrt{a \\cdot a}',
-        '\\|a\\|_1 = |a_1| + |a_2| + \\cdots + |a_n|',
-        '\\hat{a} = \\frac{a}{\\|a\\|_2} \\qquad \\text{so } \\|\\hat{a}\\| = 1',
-      ],
-    },
-    {
-      type: 'intuition',
-      title: 'Unit vectors: keep the direction, drop the length',
-      md: `Divide a vector by its own length and you get a **unit vector** — length exactly 1, direction untouched. [3, 4] ÷ 5 = [0.6, 0.8]. That division is all "normalizing" means.
-
-- Written â ("a-hat"). Check it worked by re-measuring: ‖â‖ must be 1.0.
-- Why bother: it separates *which way* from *how much*. Very often only "which way" carries the meaning.
-- Embeddings are the headline case. A sentence embedding's **direction** encodes what the sentence is about; its **length** mostly encodes incidentals — how long the passage was, how confident the encoder felt.
-- So vector databases normalize on insert. After that, comparing two vectors is one cheap multiply-and-add away from a clean similarity score.
-- Keep the reflex: if length is an artifact of your data pipeline rather than a fact about the world, normalize it away.`,
-    },
-    {
-      type: 'intuition',
-      title: 'The dot product — the star of this module',
-      md: `Two vectors in, **one number** out. Multiply matching slots, add the results. [2, 1, 0, 1] · [3, 2, 0, 1] = 6 + 2 + 0 + 1 = **9**.
-
-- That is the arithmetic, and it is trivial. What makes it matter is the *second* formula for the same number: **a · b = ‖a‖ ‖b‖ cos θ**, where θ is the angle between the arrows.
-- Read it right to left: how long a is, times how long b is, times **how much they agree on direction**.
-- All the meaning lives in cos θ. It is 1 when the arrows point the same way, 0 at a right angle, −1 when they point opposite.
-- So the *sign alone* already answers a question: **positive = same direction, zero = unrelated (orthogonal), negative = opposed**.
-- One number that says "do these two things agree?", computed in a single pass, perfectly parallel on a GPU, and differentiable. That combination is why it is everywhere.`,
-    },
-    {
-      type: 'math',
-      intro: 'The same number, written twice. The first line is how you compute it; the second is what it means.',
-      latex: [
-        'a \\cdot b = \\sum_{i=1}^{n} a_i b_i = a_1 b_1 + a_2 b_2 + \\cdots + a_n b_n',
-        'a \\cdot b = \\|a\\| \\, \\|b\\| \\cos\\theta',
-        '\\cos\\theta = \\frac{a \\cdot b}{\\|a\\| \\, \\|b\\|} \\qquad \\text{(this is cosine similarity)}',
-      ],
-    },
-    {
-      type: 'intuition',
-      title: 'Dot product = similarity. This is THE takeaway.',
-      md: `Forget everything else in this module and keep this one sentence: **the dot product is a similarity score.** Large = alike. Zero = unrelated. Negative = opposed.
-
-- **Attention** (so: every LLM). Each token asks "who here should I listen to?" — the answer is its vector dotted against every other token's vector.
-- **Semantic search and RAG.** Your query becomes a vector, every document is a vector, retrieval is literally "give me the largest dot products".
-- **Recommenders.** user vector · item vector = predicted taste match. That is the core of matrix factorization.
-- **kNN.** "Nearest" is a distance, and squared Euclidean distance is built out of dot products (you will see the expansion below).
-- Same three lines of arithmetic in all four. The application changes; the formula does not.`,
-    },
-    { type: 'visual', component: 'VectorPlayground', props: {} },
-    {
-      type: 'note',
-      md: 'Drag b until the readout says the dot product is **zero** — the arrows sit at 90°. That is orthogonality, and it is the whole reason PCA looks for perpendicular directions: they carry non-overlapping information. Now drag b past a and watch the sign flip to negative: the shadow lands on the wrong side of the origin.',
-    },
-    { type: 'visual', component: 'AttentionHeatmap', props: {} },
-    {
-      type: 'note',
-      md: `Every single cell in that grid is **one dot product** — the row token's query vector dotted with the column token's key vector. That is the raw score, before softmax turns each row into percentages. Look at the "it" row: it lights up on "cat". Nobody hand-wrote that rule; the model learned vectors whose dot product happens to be large for exactly that pair. This is the *same component* the GenAI attention module uses — you are meeting the picture here in plain vector language, and will meet the machinery around it there.`,
-    },
-    {
-      type: 'intuition',
-      title: 'Cosine similarity vs raw dot product',
-      md: `The raw dot product has a flaw you must know about: it rewards **length**. A long document gets a big vector, so it scores high against everything — including queries it has nothing to do with.
-
-- Fix: divide both lengths out. That is **cosine similarity** — the dot product of the *normalized* vectors, always between −1 and 1.
-- Cosine asks only "same direction?". Document size and word count stop counting as relevance.
-- Use **cosine** when length is an artifact: text embeddings, semantic search, RAG, deduplication, clustering documents.
-- Use the **raw dot product** when length is real signal: recommenders where a genuinely popular item *should* score higher, or attention inside a model that has learned its own scale.
-- The shortcut everyone ships: normalize once on insert, and then the fast plain dot product **is** the cosine. Cosine's correctness at the dot product's speed.`,
+- Draw the right-angled triangle: 3 across, then 4 up, and the arrow itself is the slanted long side.
+- Pythagoras: the long side squared equals 3² + 4² = 9 + 16 = 25. So the long side is the square root of 25, which is **5**.
+- That number, 5, is the **magnitude** of the vector, also called its **length** or its **norm**. All three words mean the same thing. It is written with double bars: ‖a‖ = 5.
+- The recipe in words: **square every component, add them all up, take the square root**. For [3, 4] that is sqrt(9 + 16) = 5.
+- The recipe does not care how many components there are. For [1, 2, 2] it is sqrt(1 + 4 + 4) = sqrt(9) = **3**.
+- A length is never negative. Squaring removes the minus signs, so ‖[−3, −4]‖ is also 5. That arrow points the opposite way, but it is just as long.`,
     },
     {
       type: 'code',
       lang: 'python',
-      title: 'Three toy sentence embeddings — watch raw dot product get it wrong',
-      code: `import numpy as np
+      title: 'Step 1: the length of a vector, with a for loop',
+      code: `a = [3, 4]
 
-# 4 dims, tiny numbers, so every result below is checkable by hand.
-s1 = np.array([2, 1, 0, 1])   # "a cat sits on the mat"
-s2 = np.array([3, 2, 0, 1])   # "a kitten rests on a rug"   -> same meaning as s1
-s3 = np.array([4, 0, 6, 2])   # "quarterly revenue report"  -> other topic, LONGER vector
+total = 0
+for x in a:
+    total = total + x * x
 
-def cosine(a, b):
-    return float(a @ b / (np.linalg.norm(a) * np.linalg.norm(b)))
+length_a = total ** 0.5
+print(total)
+print(length_a)
 
-print("raw dot", s1 @ s2, s1 @ s3, s2 @ s3)
-# raw dot 9 10 14        <- the finance doc beats the real match (9). Wrong answer.
-
-print("norms", [round(float(np.linalg.norm(v)), 3) for v in (s1, s2, s3)])
-# norms [2.449, 3.742, 7.483]     = sqrt(6), sqrt(14), sqrt(56)
-
-print("cosine", [round(cosine(a, b), 3) for a, b in ((s1, s2), (s1, s3), (s2, s3))])
-# cosine [0.982, 0.546, 0.5]      <- s1-s2 now wins, by a mile. Right answer.
-
-# Hand check, no computer:
-#   s1 . s2 = 2*3 + 1*2 + 0*0 + 1*1 = 9
-#   s2 . s3 = 3*4 + 2*0 + 0*6 + 1*2 = 14
-#   |s2| = sqrt(14), |s3| = sqrt(56)  ->  14 / sqrt(14*56) = 14 / 28 = 0.5, exactly
-#   cos = 0.5 is an angle of exactly 60 degrees.  s1 vs s2 is only 10.9 degrees apart.
-
-# Normalize first, and the plain dot product IS the cosine:
-u1, u2 = s1 / np.linalg.norm(s1), s2 / np.linalg.norm(s2)
-print(round(float(u1 @ u2), 3), round(float(np.linalg.norm(u1)), 3))
-# 0.982 1.0      <- same similarity, and the unit vector really does have length 1`,
+# ---- real output ----
+# 25
+# 5.0`,
       annotations: {
-        6: 'This is the whole trap in one line: s3 is about nothing you asked for, but its numbers are big, so its norm is big.',
-        9: '@ is NumPy\'s dot product (np.dot(a, b) is the same thing). float() keeps the printed output clean.',
-        12: 'Ranking by raw dot: s2-s3 (14) > s1-s3 (10) > s1-s2 (9). The long document tops every pairing it appears in.',
-        18: 'Ranking by cosine: 0.982 >> 0.546 > 0.500. Divide the lengths out and the semantics come back.',
-        27: 'Normalizing = dividing by your own norm. Do this once on insert and every later comparison is free.',
+        1: 'A plain Python list holding the two components. This is literally the vector — no special type, no library.',
+        3: 'A running total, starting at zero. It will collect the squares.',
+        4: 'Walk through the list one component at a time. On the first pass x is 3, on the second x is 4.',
+        5: 'x * x is that component squared, and we add it to the running total. After both passes total is 9 + 16 = 25.',
+        7: '** is Python\'s power operator, and raising to the power 0.5 is exactly the same as taking a square root. So this line is sqrt(25).',
+        8: 'Prints the sum of squares, 25 — the number sitting under the square root sign.',
+        9: 'Prints the length, 5.0. Python shows 5.0 rather than 5 because the power operation produced a decimal number.',
       },
     },
     {
-      type: 'note',
-      md: `One honest note on **projection**, because you will meet the word. Shine a light straight down onto the line through b: the shadow that a casts has length **a · b / ‖b‖**. That is all a projection is — "how much of a points along b". If b is already a unit vector it collapses to just **a · b**, which is one more reason unit vectors are worth the trouble. This is the machinery under PCA (project the data onto the best directions) and under least squares (project the target onto what your features can reach).`,
+      type: 'intuition',
+      title: 'The dot product: multiply matching slots, add the results',
+      md: `Take two vectors with the same number of components, a = **[2, 1]** and b = **[3, 2]**. The **dot product** of a and b, written a · b, is computed like this, by hand, right now:
+
+- Line them up. The first component of a is 2, the first component of b is 3. Multiply: 2 × 3 = **6**.
+- The second component of a is 1, the second of b is 2. Multiply: 1 × 2 = **2**.
+- Add the results: 6 + 2 = **8**. So a · b = 8.
+- That is the whole operation. Multiply matching slots, add everything up. Two vectors go in and **one single number comes out** — not a vector, a plain number.
+- It works at any size, as long as both lists are the same size: [2, 1, 0, 1] · [3, 2, 0, 1] = 6 + 2 + 0 + 1 = **9**.
+- If the two lists have different sizes there is nothing to multiply the leftover slots by, so the dot product is simply undefined. That is a bug in your code, not a small number.`,
+    },
+    {
+      type: 'intuition',
+      title: 'What the answer means: the sign already tells you something',
+      md: `The dot product is not just arithmetic. Its value says how the two arrows point relative to each other. Here are three pairs, each computed by hand, each easy to picture.
+
+- **Pointing the same way.** a = [2, 1], b = [3, 2]. Both arrows go right and up. a · b = 6 + 2 = **8**, comfortably positive.
+- **At a right angle.** a = [3, 4] goes up and right. b = [4, −3] goes right and down. a · b = 3×4 + 4×(−3) = 12 − 12 = **0**. Exactly zero.
+- **Pointing opposite.** a = [2, 1] and b = [−2, −1], which is a turned around. a · b = −4 − 1 = **−5**, negative.
+
+Read those three results as one rule:
+
+- **Large and positive** = the arrows point roughly the same way. They agree.
+- **Zero** = the arrows sit at a right angle. They neither agree nor disagree. The word for this is **orthogonal**, which is the mathematician\'s word for perpendicular.
+- **Negative** = the arrows point roughly opposite ways. They disagree.
+
+So one number, produced by multiplying and adding, answers the question "do these two things point the same way?"`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Step 2: the dot product, and the three cases above',
+      code: `def dot(u, v):
+    total = 0
+    for i in range(len(u)):
+        total = total + u[i] * v[i]
+    return total
+
+print(dot([2, 1], [3, 2]))
+print(dot([3, 4], [4, -3]))
+print(dot([2, 1], [-2, -1]))
+
+# ---- real output ----
+# 8
+# 0
+# -5`,
+      annotations: {
+        1: 'Defines a function taking two lists, u and v, which must be the same length. Every later snippet reuses this function.',
+        2: 'A running total starting at zero, exactly as in step 1.',
+        3: 'len(u) is how many components there are — 2 here — so range(len(u)) gives i = 0, then 1. i is the slot number, and Python counts slots from 0.',
+        4: 'u[i] and v[i] are the two components sitting in the same slot. Multiply them and add to the total. This single line is the whole definition of the dot product.',
+        5: 'Hand back the accumulated number. One number out, never a list.',
+        7: 'The same-direction pair. Prints 8, matching the hand calculation 6 + 2.',
+        8: 'The right-angle pair. Prints 0 — not a rounded 0, an exactly-zero 12 − 12.',
+        9: 'The opposite pair. Prints -5, and the minus sign is the whole message: these two arrows disagree.',
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'The same number, computed a completely different way',
+      md: `Here is the fact that makes the dot product useful rather than merely convenient. A **second** formula produces the exact same number out of completely different ingredients: the two lengths, and the angle between the arrows.
+
+The **angle between two vectors** is what you would measure with a protractor at the origin, between the two arrows. Call it θ (theta). The second formula is **a · b = ‖a‖ × ‖b‖ × cos θ**.
+
+Check it by hand on one pair, both ways, and get the same number twice. Take **a = [4, 0]** and **b = [3, 4]**.
+
+- **Way 1, multiply matching slots.** 4 × 3 = 12, and 0 × 4 = 0. Add them: **a · b = 12**.
+- **Way 2, lengths and angle.** ‖a‖ = sqrt(16 + 0) = **4**. ‖b‖ = sqrt(9 + 16) = **5**.
+- Now the angle, with no dot product involved. a lies flat along the x-axis, so θ is simply how far b is tilted above the x-axis. Drop b onto its right triangle: 3 across, 4 up, slanted side 5. From school trigonometry the cosine of an angle is the side next to it divided by the long side, so **cos θ = 3/5 = 0.6**.
+- Put them together: ‖a‖ × ‖b‖ × cos θ = 4 × 5 × 0.6 = **12**.
+
+Twelve both times. The two recipes never disagree, on any pair, at any size. That equivalence is the heart of this module, because it lets you read a plain multiply-and-add as a statement about geometry: **‖a‖ and ‖b‖ say how big the two things are, and cos θ says how much they agree on direction.**
+
+- cos θ = 1 when θ = 0°, the arrows lie on top of each other. Maximum agreement.
+- cos θ = 0 when θ = 90°, a right angle. That is the orthogonal case, and it is why the dot product came out 0 earlier.
+- cos θ = −1 when θ = 180°, the arrows point exactly opposite. Maximum disagreement.
+- cos θ never leaves the range −1 to 1, so all the direction information is squeezed into that one factor.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Step 3: both formulas, same pair, same answer',
+      code: `import math
+
+def length(v):
+    return math.sqrt(dot(v, v))
+
+a = [4, 0]
+b = [3, 4]
+cos_theta = dot(a, b) / (length(a) * length(b))
+angle = math.degrees(math.acos(cos_theta))
+print(dot(a, b))
+print(length(a), length(b))
+print(round(cos_theta, 4), round(angle, 2))
+print(length(a) * length(b) * cos_theta)
+
+# ---- real output ----
+# 12
+# 4.0 5.0
+# 0.6 53.13
+# 12.0`,
+      annotations: {
+        1: 'math ships with Python — nothing to install. It gives us sqrt, acos and degrees.',
+        3: 'A function for the length of one vector, reusing dot from step 2.',
+        4: 'dot(v, v) multiplies every component by itself and adds the results, which is exactly the sum of squares. The square root of that is the length — the step 1 recipe in one line.',
+        6: 'a lies flat along the x-axis: 4 across, 0 up.',
+        7: 'b is the 3-across, 4-up arrow whose length is 5.',
+        8: 'Rearranged from a · b = ‖a‖‖b‖cos θ: divide the dot product by both lengths and what is left is cos θ. Here 12 / (4 × 5) = 0.6, the same 3/5 the triangle gave.',
+        9: 'acos is the reverse of cos: hand it a cosine, get the angle back, measured in radians. math.degrees converts radians into the degrees you are used to.',
+        10: 'Prints 12 — way 1, multiply matching slots and add.',
+        11: 'Prints the two lengths, 4.0 and 5.0.',
+        12: 'Prints cos θ = 0.6 and the angle it corresponds to, 53.13 degrees. round(x, 4) trims decimals so the output stays readable.',
+        13: 'Prints ‖a‖ × ‖b‖ × cos θ = 12.0 — way 2, and the same number as line 10. The two formulas agree.',
+      },
     },
     {
       type: 'math',
-      intro: 'The shadow, as a length and as a vector.',
+      intro: 'The same three facts in symbols. The subscript i means "the component in slot i", and n is how many components the vectors have.',
       latex: [
-        '\\text{comp}_b(a) = \\frac{a \\cdot b}{\\|b\\|} \\qquad \\text{proj}_b(a) = \\frac{a \\cdot b}{\\|b\\|^2}\\, b',
+        'a \\cdot b = a_1 b_1 + a_2 b_2 + \\cdots + a_n b_n',
+        'a \\cdot b = \\|a\\| \\, \\|b\\| \\cos\\theta \\qquad \\text{where } \\|a\\| = \\sqrt{a_1^2 + \\cdots + a_n^2}',
+        '\\cos\\theta = \\frac{a \\cdot b}{\\|a\\| \\, \\|b\\|} \\qquad \\text{(this is called cosine similarity)}',
+      ],
+    },
+    { type: 'visual', component: 'VectorPlayground', props: {} },
+    {
+      type: 'note',
+      md: `Use that panel deliberately, not idly. There are two arrowheads, one for a and one for b; drag either one and the readout under the picture updates. Three things to do, in order. **One:** drag b until it lies almost on top of a. Watch the dot product grow large and positive while the angle shrinks toward 0°. **Two:** now swing b around until the dot product reads **0** — stop there and look at the picture. The two arrows sit at a right angle and the angle readout says 90. That is orthogonality, seen rather than asserted. **Three:** keep swinging past that point. The dot product turns negative the instant the angle passes 90°, and the shadow of b — the dashed line the checkbox turns on — flips to the wrong side of the origin. That shadow is the projection, explained two sections below.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Unit vectors: keeping the direction, throwing away the length',
+      md: `Divide every component of a vector by that vector\'s own length and you get a **unit vector**: an arrow pointing in exactly the same direction, but with length exactly 1.
+
+- [3, 4] has length 5. Divide both components by 5: **[0.6, 0.8]**.
+- Check it really is length 1: sqrt(0.6² + 0.8²) = sqrt(0.36 + 0.64) = sqrt(1) = **1**. It worked.
+- Dividing every component by the same positive number cannot rotate the arrow — it only makes it shorter or longer. So the direction is untouched and only the length changed.
+- This operation is called **normalizing** the vector. That is the entire meaning of the word: divide by your own length.
+- Why do it: it separates *which way* a vector points from *how big* it is. Very often only "which way" carries the meaning you care about.
+- A unit vector is often written with a small hat: â, said "a-hat".`,
+    },
+    {
+      type: 'intuition',
+      title: 'Cosine similarity, and why embeddings use it instead of raw distance',
+      md: `First, one word you will need. An **embedding** is a list of numbers a model produces to stand for a piece of text. Similar sentences get similar lists. That is all you need here — embeddings are vectors, so everything above applies to them unchanged.
+
+Now the problem. Suppose you compare a query to two documents using the raw dot product. A long document has more words, so its embedding tends to hold bigger numbers, so it has a bigger length. And a · b = ‖a‖ ‖b‖ cos θ says the score is *multiplied* by that length. So the long document scores high against **everything**, including queries it has nothing to do with. Its size is masquerading as relevance.
+
+The fix is to divide both lengths back out:
+
+- **Cosine similarity** = a · b divided by (‖a‖ × ‖b‖). Look at the second formula: dividing by both lengths leaves exactly **cos θ**. Nothing but the angle survives.
+- So cosine similarity always sits between −1 and 1, whatever the vectors\' sizes. 1 means same direction, 0 means orthogonal, −1 means opposite.
+- That is why it beats raw distance for comparing embeddings: **a document\'s length is mostly an accident of how much text it contained, while its direction is what the text is about.** Cosine drops the accident and keeps the meaning.
+- Raw distance — "how far apart are the two arrow tips?" — has the same flaw for the same reason: a long arrow lands far from everything, including things it points straight at.
+- The equivalent shortcut that production systems actually use: normalize every vector once, when you store it. Both lengths are then 1, so the plain dot product **is** the cosine, with no division at query time.
+
+One honest exception. If length is real information rather than an accident, do not throw it away. In a recommender a popular item genuinely deserves to score higher for more people, and its vector length is often where that popularity ended up stored.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Step 4: three toy documents, where the raw dot product gets it wrong',
+      code: `def cosine(u, v):
+    return dot(u, v) / (length(u) * length(v))
+
+d1 = [2, 1, 0, 1]
+d2 = [3, 2, 0, 1]
+d3 = [4, 0, 6, 2]
+
+print(dot(d1, d2), dot(d1, d3), dot(d2, d3))
+print(round(cosine(d1, d2), 3), round(cosine(d1, d3), 3), round(cosine(d2, d3), 3))
+
+# ---- real output ----
+# 9 10 14
+# 0.982 0.546 0.5`,
+      annotations: {
+        1: 'Cosine similarity, written straight from the formula: the dot product with both lengths divided out.',
+        2: 'Reuses dot and length from the earlier steps. Nothing new happens here — it is one division.',
+        4: 'A four-number toy embedding standing for "a cat sits on the mat".',
+        5: 'A toy embedding for "a kitten rests on a rug" — different words, same meaning as d1, so this is the pair we want judged most similar.',
+        6: 'A toy embedding for a long finance report. Unrelated topic, but notice the numbers are bigger: its length is sqrt(16 + 0 + 36 + 4) = sqrt(56) = 7.48, three times d1\'s 2.45.',
+        8: 'Raw dot products. The output 9 10 14 says the d2-d3 pair (14) beats the d1-d2 pair (9), so the finance report is ranked the best match for both sentences. Wrong answer, caused entirely by its size.',
+        9: 'The same three pairs by cosine. Now d1-d2 scores 0.982 and everything involving d3 drops to about 0.5. Divide the lengths out and the meaning comes back.',
+      },
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Step 5: normalize once, and the plain dot product becomes the cosine',
+      code: `def unit(v):
+    n = length(v)
+    out = []
+    for x in v:
+        out.append(x / n)
+    return out
+
+u1 = unit(d1)
+u2 = unit(d2)
+print(round(length(u1), 6))
+print(round(dot(u1, u2), 3))
+print(round(cosine(d1, d2), 3))
+
+# ---- real output ----
+# 1.0
+# 0.982
+# 0.982`,
+      annotations: {
+        1: 'Turns any vector into a unit vector — same direction, length 1.',
+        2: 'Measure the vector\'s own length first and remember it in n.',
+        3: 'An empty list that will collect the divided components.',
+        4: 'Walk through the components one at a time.',
+        5: 'append adds one item to the end of a list. Here we add the component divided by the length. Every component is divided by the same n, so the direction cannot change.',
+        6: 'Hand back the new list — the normalized vector.',
+        8: 'Normalize d1. Its components 2, 1, 0, 1 each get divided by its length 2.449.',
+        9: 'Normalize d2 the same way.',
+        10: 'Prints 1.0: re-measuring the normalized vector confirms its length really is exactly 1.',
+        11: 'The plain dot product of the two unit vectors: 0.982. No division happens in this step at all.',
+        12: 'The cosine of the two ORIGINAL vectors: also 0.982. Identical, which is the point — normalize once when storing, and every later comparison is a bare multiply-and-add.',
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'Projection: the shadow one vector casts on another',
+      md: `You met the dashed shadow in the interactive panel. Here is what it is.
+
+Shine a light straight down onto the line b lies along. The shadow a casts on that line has a length, and that length is **a · b divided by ‖b‖**.
+
+- In words: **how much of a points along b**. If a is aimed straight down b\'s line, the shadow is the whole of a. If a is at a right angle to b, the shadow has length 0 — none of a points along b.
+- Check it on numbers. a = [3, 4], b = [4, 0]. a · b = 12, ‖b‖ = 4, so the shadow is 12/4 = **3**. Picture it: b lies flat along the x-axis, and the part of a lying along the x-axis is its first component, 3. Correct.
+- The name for this shadow is the **projection** of a onto b.
+- If b happens to be a unit vector then ‖b‖ = 1, and the formula collapses to plain **a · b**. One more reason unit vectors are worth the trouble.
+- So the dot product and the projection are one idea wearing two hats: the dot product is the shadow length, scaled up by how long b is.`,
+    },
+    {
+      type: 'math',
+      intro: 'The shadow, first as a plain length and then as an arrow lying along b.',
+      latex: [
+        '\\text{shadow length} = \\frac{a \\cdot b}{\\|b\\|} \\qquad \\text{shadow as a vector} = \\frac{a \\cdot b}{\\|b\\|^2}\\, b',
       ],
     },
     {
       type: 'intuition',
-      title: 'Orthogonality: the zero case, and why it is prized',
-      md: `Two vectors are **orthogonal** when their dot product is exactly 0 — a right angle, cos θ = 0. Check: [3, 4] · [4, −3] = 12 − 12 = 0.
+      title: 'Worked case: ranking three help-desk articles by hand',
+      md: `A user searches for **"reset my password"**. Three articles sit in the index. Every vector below has four slots, and to keep the arithmetic small, read the slots as how much each text is about [login, password, billing, shipping].
 
-- In plain words: they share nothing. Knowing where something sits along one direction tells you nothing about the other.
-- That is why orthogonality is prized rather than merely tidy: orthogonal directions carry **non-redundant** information.
-- **PCA** requires its components to be orthogonal for exactly this reason — each new direction must explain variance the earlier ones could not.
-- Orthogonal (uncorrelated) features are also the easy case for training: the loss surface is a round bowl instead of a stretched ravine.
-- Strange but true: in very high dimensions almost every pair of random vectors is *nearly* orthogonal. That is the geometry behind the **curse of dimensionality** — everything ends up looking equally unrelated to everything.`,
+- Query q = **[1, 2, 0, 0]**.
+- Article A, a short password-reset guide: **[1, 3, 0, 0]**.
+- Article B, a short billing FAQ: **[0, 0, 3, 1]**.
+- Article C, a long combined handbook covering everything: **[4, 4, 5, 5]**.
+
+**Raw dot products, by hand.**
+
+- q · A = 1×1 + 2×3 + 0 + 0 = 1 + 6 = **7**.
+- q · B = 0 + 0 + 0 + 0 = **0**.
+- q · C = 1×4 + 2×4 + 0×5 + 0×5 = 4 + 8 = **12**.
+- Ranking by raw dot product: **C (12), then A (7), then B (0)**. The handbook wins. It should not — the user wanted the password guide.
+
+**Now the lengths.**
+
+- ‖q‖ = sqrt(1 + 4) = sqrt(5) = 2.236.
+- ‖A‖ = sqrt(1 + 9) = sqrt(10) = 3.162.
+- ‖C‖ = sqrt(16 + 16 + 25 + 25) = sqrt(82) = 9.055. C is nearly three times as long as A, purely because it is a longer document.
+
+**Cosine similarity, by hand.**
+
+- cos(q, A) = 7 / (2.236 × 3.162) = 7 / 7.071 = **0.990**.
+- cos(q, C) = 12 / (2.236 × 9.055) = 12 / 20.248 = **0.593**.
+- cos(q, B) = 0 divided by anything = **0**. Zero means orthogonal: the billing FAQ and this query share no direction at all, which is exactly right.
+- Ranking by cosine: **A (0.990), then C (0.593), then B (0)**. The password guide wins, and it wins by a wide margin.
+
+Same three articles, same arithmetic, two different winners. The difference is entirely C\'s length, 9.055 against A\'s 3.162. Multiply by it and C climbs; divide it out and C falls back to where it belongs.`,
     },
     {
-      type: 'note',
-      md: `Three places this exact formula reappears, one line each. **GenAI:** an attention score is a query-key dot product, scaled by sqrt(d) and softmaxed — that is the entire operation. **ML (kNN):** squared Euclidean distance expands to ‖a‖² − 2(a · b) + ‖b‖², so "nearest neighbour" is decided by a dot product. **ML (PCA):** the principal directions must be mutually orthogonal, i.e. every pair dots to zero. If you want to *watch* these arrows move while you learn, 3Blue1Brown's **Essence of Linear Algebra** is the best hour on the internet for it — queue its sibling, *Essence of Calculus*, for the derivatives module.`,
+      type: 'intuition',
+      title: 'The classic mistake, walked into on purpose',
+      md: `A team ships search over their documentation. They embed every page, they embed the query, and they rank by the raw dot product because it is the fastest thing their database offers. Testing looked fine. In production, users complain that the same three enormous pages come back for every single query.
+
+- The diagnosis in one line: **a · b = ‖a‖ ‖b‖ cos θ, and they left ‖b‖ in.** A 40-page document has a long vector. Length multiplies the score. So it outranks a short, perfect answer.
+- Watch it happen on the numbers from the worked case. Article C had cos θ = 0.593 against the query — genuinely a mediocre match. But its length 9.055 multiplied that mediocre agreement up to 12, beating article A\'s excellent 0.990 agreement, because A is short and its length only multiplied it up to 7.
+- Notice what is **not** wrong. The embeddings are fine. The dot product computed the correct number. The model is fine. The only wrong thing is that the score being ranked on contains a factor — document size — that has nothing to do with relevance.
+- The mistake is easy to make because raw dot product and cosine agree on toy tests. If all your test documents are roughly the same size, the length factor is roughly constant across them and cancels out of the comparison. It only breaks when real, uneven documents arrive.
+- The fix is one line: normalize every vector when you store it, and normalize the query too. Then every length is 1, the raw dot product **is** the cosine, and you keep the speed while losing the bias.
+
+The general form of the mistake, worth carrying beyond this module: **before you rank on a number, ask what that number is a product of.** If one of the factors is something you do not care about, it will quietly dominate the ranking as soon as it starts to vary.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Practice problems',
+      md: `Do these on paper first. The arithmetic is small on purpose and every square root is a friendly one.
+
+1. For a = **[6, 8]**: compute ‖a‖, write down the unit vector â, then verify by hand that ‖â‖ = 1.
+2. For a = **[1, 2, 2]** and b = **[3, 0, 4]**: compute a · b, ‖a‖, ‖b‖, and the cosine similarity. Are they pointing more the same way, or more differently?
+3. Find a number k that makes **[2, k]** orthogonal to **[6, 3]**. Show the dot product really is zero.
+4. Take a = **[1, 0]** and b = **[10, 0]**. Compute a · b and the cosine similarity. Explain in one sentence why the two numbers are so far apart, and which one you would rank documents by.
+5. Take c = **[1, 1]** and d = **[−1, 1]**. Compute c · d, both lengths, and the angle between them in degrees. Then say what the sign of c · d told you before you computed the angle.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Worked solutions',
+      md: `Check every step against your own working, not just the last number.
+
+1. ‖a‖ = sqrt(36 + 64) = sqrt(100) = **10**. Divide both components by 10: â = **[0.6, 0.8]**. Check: sqrt(0.36 + 0.64) = sqrt(1) = **1**. Notice this is the same unit vector [3, 4] gave — because [6, 8] is just [3, 4] made twice as long, and normalizing deletes exactly that difference.
+2. a · b = 1×3 + 2×0 + 2×4 = 3 + 0 + 8 = **11**. ‖a‖ = sqrt(1 + 4 + 4) = sqrt(9) = **3**. ‖b‖ = sqrt(9 + 0 + 16) = sqrt(25) = **5**. Cosine = 11 / (3 × 5) = 11/15 = **0.733**. Well above 0 and well below 1, so they point broadly the same way but are far from identical — about 43 degrees apart.
+3. The dot product is 2×6 + k×3 = 12 + 3k. Set it to zero: 3k = −12, so **k = −4**. Check: [2, −4] · [6, 3] = 12 − 12 = **0**. Sketch it if you like: [6, 3] leans right and slightly up, [2, −4] leans right and steeply down, and they meet at a right angle.
+4. a · b = 1×10 + 0×0 = **10**. ‖a‖ = 1 and ‖b‖ = 10, so cosine = 10 / (1 × 10) = **1**. They differ because b is ten times as long as a while pointing in precisely the same direction: the raw dot product is reporting that length, the cosine is reporting the perfect agreement. For ranking documents you want the cosine — a document is not a better answer for being ten times longer.
+5. c · d = 1×(−1) + 1×1 = −1 + 1 = **0**. ‖c‖ = sqrt(2) = 1.414 and ‖d‖ = sqrt(2) = 1.414. Cosine = 0 / 2 = 0, and the angle whose cosine is 0 is **90 degrees**. The sign gave you the answer in advance: a dot product of exactly zero means orthogonal, so you knew it was a right angle before touching a square root.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Beyond the basics - skip this on your first read',
+      md: `Everything above stands on its own. This section only names ideas you will meet later, so the words are not new when you get there.
+
+- **Attention inside a language model.** Each word is turned into two vectors, and the score saying how much word 5 should listen to word 2 is one dot product between them. A whole attention layer is that same multiply-and-add run for every pair of words at once. You will meet the machinery in the GenAI modules; the arithmetic is what you did in step 2.
+- **Why orthogonality is prized.** Two orthogonal directions carry information that does not overlap — knowing where something sits along one tells you nothing about the other. That is the requirement behind PCA, a method that finds a few mutually orthogonal directions to summarise data with.
+- **A second way to measure size.** Instead of squaring, add the absolute values: [3, 4] measured this way is 3 + 4 = 7, the distance a taxi drives along a grid rather than the 5 a bird flies. It comes back later as the difference between two ways of penalising large model weights.
+- **Very high dimensions are strange.** Pick two random 768-component vectors and their dot product is almost always close to zero — nearly every random pair is nearly orthogonal. This is one face of what people call the curse of dimensionality, and it is why "nearest" means less as the number of components grows.
+- **Distance and cosine are relatives.** The squared straight-line distance between two arrow tips works out to ‖a‖² − 2(a · b) + ‖b‖². When both are unit vectors that is just 2 − 2(a · b), so smallest distance and largest dot product produce the same ranking, in opposite order.`,
     },
   ],
   quiz: [
     {
-      question: 'You dot two embeddings together and get exactly 0.0. What does that tell you?',
+      question: 'a = [3, 4] and b = [4, -3]. What is a · b, and what does it tell you?',
       options: [
         {
-          text: 'The two vectors are identical',
-          explanation: 'Backwards. Identical vectors give the LARGEST dot product possible for their lengths (cos θ = 1), never zero.',
+          text: '0 — the two arrows sit at a right angle, so they are orthogonal',
+          explanation: 'Correct. 3×4 + 4×(−3) = 12 − 12 = 0. An exactly-zero dot product means a 90 degree angle, which means the two directions share nothing.',
         },
+        { text: '24, because both vectors have length 5', explanation: 'Both lengths are 5, but the dot product multiplies matching slots and adds them; it is not built from the lengths alone. The arithmetic gives 12 − 12 = 0.' },
+        { text: 'It is undefined because one component is negative', explanation: 'Negative components are perfectly normal — they only mean the arrow goes left or down. The arithmetic is unchanged.' },
+      ],
+      correct: 0,
+    },
+    {
+      question: 'What is the length (the magnitude) of the vector [1, 2, 2]?',
+      options: [
+        { text: '5, because 1 + 2 + 2 = 5', explanation: 'That adds the components, which is not the recipe. Length squares each component first, then adds, then takes the square root.' },
         {
-          text: 'They are orthogonal — a right angle, cos θ = 0, no shared direction',
-          explanation: 'Correct. Zero is the "unrelated" reading: neither agreeing nor opposing. In embedding space it means the two items share no measured direction.',
+          text: '3, because sqrt(1 + 4 + 4) = sqrt(9)',
+          explanation: 'Correct. Square every component: 1, 4, 4. Add: 9. Square root: 3. The same recipe works for any number of components.',
         },
-        {
-          text: 'One of them has the wrong shape',
-          explanation: 'A shape mismatch raises an error, it does not quietly return 0.0. A clean zero is a geometric statement.',
-        },
+        { text: '9, because 1² + 2² + 2² = 9', explanation: 'That is the sum of squares, the number under the square root sign. You still have to take the root, which gives 3.' },
       ],
       correct: 1,
     },
     {
-      question: 'For a = [3, 4], what are the L2 norm and the L1 norm?',
+      question: 'a and b are both unit vectors. What does a · b equal?',
       options: [
         {
-          text: '5 and 7',
-          explanation: 'Correct. L2 = sqrt(9 + 16) = 5, the straight-line length. L1 = 3 + 4 = 7, the taxi route along the grid. This same L1/L2 split becomes Lasso vs Ridge.',
+          text: 'Exactly cos θ, the cosine of the angle between them',
+          explanation: 'Correct. a · b = ‖a‖‖b‖cos θ and both lengths are 1, so only cos θ survives. That is why systems normalize on storage: the cheap dot product then already is the cosine similarity.',
         },
-        { text: '7 and 5', explanation: 'Swapped. L2 is the square-root-of-squares one, and it is always ≤ L1 because the diagonal beats the grid route.' },
-        { text: '5 and 25', explanation: 'L2 is 5, but 25 is the sum of squares — you forgot nothing squares in L1. L1 is just |3| + |4| = 7.' },
+        { text: 'Always 1, because both have length 1', explanation: 'Only if they also point the same way. Unit length fixes how long they are, not which way they face — two unit vectors can be opposite, giving −1.' },
+        { text: 'The angle θ itself, in degrees', explanation: 'It is the cosine of the angle, not the angle. You would have to apply acos to recover θ, exactly as step 3 did.' },
       ],
       correct: 0,
     },
     {
-      question: 'a and b are both unit vectors. What is a · b?',
+      question: 'Normalizing a vector (dividing every component by that vector\'s own length) changes what?',
       options: [
+        { text: 'The direction, while the length stays the same', explanation: 'Backwards. Dividing every component by the same positive number cannot rotate an arrow.' },
         {
-          text: 'Exactly cos θ',
-          explanation: 'Correct. a · b = ‖a‖‖b‖cos θ, and both norms are 1. This is precisely why vector DBs normalize on insert: the cheap dot product then IS the cosine similarity.',
+          text: 'The length, which becomes exactly 1, while the direction is unchanged',
+          explanation: 'Correct. That is the whole point: keep "which way", discard "how much". Verify it by re-measuring — the length must come back exactly 1.0.',
         },
-        { text: 'Always 1', explanation: 'Only if they point the same way. Unit length pins the magnitude, not the direction — two unit vectors can be opposite (−1).' },
-        { text: 'The angle θ, in radians', explanation: 'It is the COSINE of the angle, not the angle. You would need arccos to recover θ itself.' },
-      ],
-      correct: 0,
-    },
-    {
-      question: 'Normalizing a vector (dividing it by its own norm) changes what?',
-      options: [
-        { text: 'Its direction; the length stays the same', explanation: 'Backwards. Dividing by a positive number cannot rotate anything.' },
-        {
-          text: 'Its length, which becomes exactly 1; the direction is unchanged',
-          explanation: 'Correct. That is the entire point: keep "which way", discard "how much". Verify by re-measuring — ‖â‖ must come back 1.0.',
-        },
-        { text: 'Both length and direction', explanation: 'Only length. Scalar multiplication by a positive number never changes direction.' },
+        { text: 'Both the length and the direction', explanation: 'Only the length. Every component shrinks by the same factor, so the shape of the arrow, and therefore its direction, is untouched.' },
       ],
       correct: 1,
     },
     {
-      question: 'Your vector search returns the same handful of very long documents no matter what the query is. Most likely cause?',
+      question: 'Your document search returns the same few very long pages for almost every query. Most likely cause?',
       options: [
         {
-          text: 'You are ranking on the raw dot product with unnormalized embeddings — long documents have large norms, so they score high against everything',
-          explanation: 'Correct. a · b scales with ‖b‖, so length masquerades as relevance. L2-normalize on insert (and at query time) and the same dot product becomes cosine similarity.',
+          text: 'You are ranking on the raw dot product with unnormalized vectors, so a long page\'s large length multiplies its score up against everything',
+          explanation: 'Correct. a · b = ‖a‖‖b‖cos θ, so length is a factor in the score. Normalize on storage and at query time, and the same dot product then measures direction only.',
         },
-        {
-          text: 'The embedding dimension is too small',
-          explanation: 'Too few dimensions makes results generally mushy — it does not produce a systematic bias toward LONG documents specifically.',
-        },
-        {
-          text: 'The index does not have enough documents in it',
-          explanation: 'Adding documents will not stop the long ones from dominating. The scoring rule is what is broken, not the corpus size.',
-        },
+        { text: 'The vectors have too few components', explanation: 'Too few components makes every result vague, but it does not create a systematic bias toward long pages specifically.' },
+        { text: 'There are not enough documents in the index', explanation: 'Adding documents does not stop the long ones dominating. What is broken is the scoring rule, not the size of the collection.' },
       ],
       correct: 0,
     },
     {
-      question: 'In an attention matrix, before softmax, one single cell is:',
+      question: 'Why is cosine similarity usually preferred over raw distance when comparing text embeddings?',
       options: [
+        { text: 'Because it is faster to compute than distance', explanation: 'It is not — cosine needs two lengths and a division, while raw distance is a subtract-and-square. Speed is not the reason.' },
         {
-          text: "The dot product of one token's query vector with another token's key vector",
-          explanation: 'Correct. Every cell of that heatmap is exactly one dot product — which is why attention is just "dot product = similarity" run for all pairs at once.',
+          text: 'Because a vector\'s length mostly reflects how much text there was, while its direction reflects what the text is about — cosine drops the length and keeps the direction',
+          explanation: 'Correct. Length is an accident of the input, direction is the meaning. Raw distance is sensitive to length, so a long document sits far from everything, including what it actually matches.',
         },
-        {
-          text: 'The number of times those two tokens co-occurred in the training data',
-          explanation: 'That is a statistical n-gram idea. Attention is computed live from vectors, fresh for each input sequence.',
-        },
-        {
-          text: 'The cosine similarity of the two token embeddings',
-          explanation: 'Close but not right. Attention uses the RAW dot product (scaled by sqrt(d_k), a constant) — it does not divide by each vector\'s own norm, because the model learns its own useful scale.',
-        },
-      ],
-      correct: 0,
-    },
-    {
-      question: 'When is the raw dot product the right choice over cosine similarity?',
-      options: [
-        {
-          text: 'Never — cosine is strictly safer',
-          explanation: 'Too absolute. Normalizing deletes magnitude, and sometimes magnitude is genuine signal you paid to learn.',
-        },
-        {
-          text: 'When vector length carries real information — e.g. a recommender where a popular item should legitimately score higher',
-          explanation: 'Correct. In matrix factorization the norm often absorbs popularity. Normalize it away and niche items surge while click-through falls.',
-        },
-        {
-          text: 'When the two vectors have different dimensions',
-          explanation: 'Neither one works then — the dot product is undefined for mismatched lengths. That is a bug, not a metric choice.',
-        },
+        { text: 'Because cosine can be negative and distance cannot', explanation: 'True as a fact, but not the reason. For embeddings the useful property is that dividing both lengths out leaves only the angle.' },
       ],
       correct: 1,
     },
   ],
   interviewQuestions: [
     {
-      question: 'Explain the dot product to a product manager in thirty seconds.',
+      question: 'Explain the dot product to someone non-technical in thirty seconds.',
       answer:
-        '"It is one number that says how much two things agree. We turn each thing — a search query, a document, a song — into a list of numbers. Multiply the matching entries and add them up: a big number means they point the same way, so they are about the same thing; zero means unrelated." If they want the mechanism: a · b = ‖a‖‖b‖cos θ — a\'s length, b\'s length, and how well their directions agree. What is being tested is whether you can strip a formula down to its job.',
+        'It is one number saying how much two things agree. We describe each thing as a list of numbers — a search query, a document, a song. Then we multiply the matching entries and add them up. A big number means the two lists point the same way, so they are about the same thing; zero means unrelated; a negative number means opposed. If they want the mechanism, add the second formula: the score is the size of the first thing, times the size of the second, times how well their directions agree. That third factor carries the meaning, and dividing the two sizes out isolates it.',
       isCaseBased: false,
     },
     {
       question: 'Why is a · b = ‖a‖ ‖b‖ cos θ? Give the intuition, not a proof.',
       answer:
-        'Start with b as a unit vector. Then a · b is exactly the length of a\'s shadow on b\'s line — how far along b you land if you drop a straight down — and basic trigonometry says that shadow is ‖a‖cos θ. Now let b have its own length: scaling b scales the score linearly, giving ‖a‖‖b‖cos θ. So the dot product is "shadow length × the other vector\'s length". The cos θ factor is the only part that depends on alignment, which is exactly why dividing both lengths out (cosine similarity) isolates pure direction agreement.',
+        'Start with b as a unit vector, length 1. Then a · b is the length of a\'s shadow on b\'s line — how far along b you land if you drop a straight down onto it. School trigonometry says that shadow is ‖a‖ cos θ, because cosine is the adjacent side over the hypotenuse in the right triangle you just drew. Now let b have a real length instead of 1: scaling b scales the score in proportion, so the shadow gets multiplied by ‖b‖, giving ‖a‖ ‖b‖ cos θ. So the dot product is shadow length times the other vector\'s length. Only cos θ depends on alignment, which is why dividing both lengths out leaves pure direction agreement.',
       isCaseBased: false,
     },
     {
-      question: 'Case: your vector search works fine in testing but in production long documents come back for almost every query. Diagnose and fix it.',
+      question: 'Case: your vector search works in testing but in production long documents come back for almost every query. Diagnose it and fix it.',
       answer:
-        'The symptom is length bias, so suspect the scoring rule first. (1) Are you ranking on the raw dot product with unnormalized embeddings? A long document has a larger norm and the raw dot product multiplies by norm, so it outscores short, genuinely relevant chunks. Fix: L2-normalize every vector on insert and at query time — then the plain dot product is cosine, i.e. direction only. (2) Check chunking: if long documents were embedded whole, one vector is being asked to represent ten topics and becomes a mushy average that is vaguely near everything. Fix: chunk to a few hundred tokens with overlap. (3) Confirm the index metric matches your intent — most vector DBs let you pick inner-product vs cosine vs L2, and a mismatch between how you store and how you score reproduces this exactly. Order matters: normalization is a one-line fix, re-chunking is a full re-index.',
+        'The symptom is length bias, so suspect the scoring rule first. (1) Check whether ranking uses the raw dot product on unnormalized vectors. Since a · b = ‖a‖ ‖b‖ cos θ, a long document\'s large length multiplies its score against every query, so it beats short but genuinely relevant chunks. Fix: normalize every vector to length 1 on insert and normalize the query too; the plain dot product then equals the cosine, which measures direction only. That is a one-line change and it costs nothing at query time. (2) Check chunking. If a long document was embedded whole, one vector is being asked to represent ten topics, so it becomes a vague average sitting mildly near everything. Fix: split into chunks of a few hundred words with a little overlap, and embed each. (3) Confirm the database\'s configured similarity matches your intent — most let you choose inner product, cosine, or Euclidean, and storing vectors one way while scoring them another reproduces this exactly. Order the work by cost: normalization first, re-chunking second, since that means re-indexing everything.',
       isCaseBased: true,
     },
     {
-      question: 'Cosine similarity vs Euclidean distance for embeddings — do they ever give the same ranking?',
+      question: 'When would you keep the raw dot product instead of switching to cosine similarity?',
       answer:
-        'For unit vectors, they give the identical ranking. Expand the distance: ‖a − b‖² = ‖a‖² − 2(a · b) + ‖b‖², which is 2 − 2(a · b) when both norms are 1. Distance is then a strictly decreasing function of the dot product, so "smallest distance" and "largest cosine" sort the same way. For unnormalized vectors they diverge — Euclidean is sensitive to magnitude, cosine ignores it. The practical consequence: normalize once, then use whichever metric your ANN index runs fastest.',
+        'When length is real signal rather than an accident. The clearest case is a recommender trained on user interactions: an item vector\'s length often ends up encoding popularity, so a widely liked item legitimately scores higher for many users. Normalize that away and niche items surge to the top while engagement falls. The same argument applies inside a trained model, where attention scores use the raw dot product because the model learned its own useful scale. The test is simple: ask what the length is a measurement of. If it is document size or encoder confidence, it is an artifact and cosine is right. If it is something you deliberately trained the model to represent, deleting it throws away information you paid for.',
       isCaseBased: false,
     },
     {
-      question: 'Case: a colleague wants to switch your recommender from raw dot product to cosine similarity "because it is more principled". What do you say?',
+      question: 'Case: a colleague wants to switch your recommender from raw dot product to cosine "because it is more principled". What do you say?',
       answer:
-        'Ask what magnitude currently encodes. In matrix factorization trained on interactions, an item vector\'s norm typically absorbs popularity — a blockbuster ends up with a long vector and correctly scores high for many users. Normalize that away and you will see niche items surge and engagement drop. So: keep the dot product as the relevance score. If the actual complaint is that a few hits dominate every list, that is a diversity problem — fix it with re-ranking, popularity dampening, or an explicit exploration slot, not by destroying a signal you trained. Cosine is right when magnitude is an artifact (document length, encoder confidence) and wrong when magnitude is the signal. Then close the way seniors close: A/B it, and name the metric that would decide.',
+        'I would ask what magnitude currently encodes in this specific model. In a recommender trained on interaction counts, item vector length typically absorbs popularity, and that is doing useful work: a blockbuster ends up with a long vector and correctly ranks high for many users. Normalizing removes it, so expect niche items to surge and engagement to drop. So my default is to keep the dot product as the relevance score. Then I would check what the real complaint is. If it is that a handful of hits dominate every list, that is a diversity problem, and the right tools are re-ranking, popularity dampening, or an explicit exploration slot — not deleting a signal the model learned. Cosine is correct when magnitude is an artifact, like document length in text search, and wrong when magnitude is the signal. Either way the decision is settled by an experiment: run both arms, and agree in advance on the metric that decides and the guardrail metric that would veto a win.',
       isCaseBased: true,
     },
     {
-      question: 'Why do production vector databases normalize embeddings on insert?',
+      question: 'What does orthogonality mean, and why does anyone care?',
       answer:
-        'Two reasons, one semantic and one about speed. Semantic: for text, direction encodes meaning while length mostly reflects incidentals like passage length or encoder confidence, so normalizing removes length as a relevance factor. Speed: after normalization cosine similarity IS the plain dot product — one fused multiply-add sweep, no per-query square roots or divisions — and it maps straight onto the inner-product mode that ANN indexes (HNSW, IVF-PQ) implement fastest. You pay the cost once per vector at write time and get both correctness and the fastest kernel at read time.',
+        'Two vectors are orthogonal when their dot product is exactly zero, which by the second formula means the angle between them is 90 degrees. In plain terms they share no direction: knowing where something sits along one tells you nothing about where it sits along the other. That is why orthogonality is prized rather than merely tidy — orthogonal directions carry non-overlapping information. PCA requires its directions to be mutually orthogonal for exactly this reason, so each new direction explains something the earlier ones could not and the reported percentages do not double-count. In feature design, strongly correlated columns are the opposite case: they duplicate information, which makes individual fitted coefficients unstable.',
       isCaseBased: false,
     },
     {
-      question: 'What does orthogonality actually buy you — in PCA, or in feature design?',
+      question: 'Case: the same nearest-neighbour code scores well on one dataset and badly on another, where one feature is annual salary and another is a 0/1 flag. What is going on?',
       answer:
-        'Orthogonal (dot product zero) means non-redundant: position along one direction tells you nothing about the other. In PCA that is a requirement rather than an aesthetic — each successive component must capture variance the earlier ones could not, otherwise you count the same information twice and the "explained variance" numbers lie. In feature design, correlated (non-orthogonal) features stretch the loss surface into a ravine, which slows gradient descent and makes individual coefficients unstable: a little noise and the weight jumps between two correlated columns, wrecking interpretability. That instability is exactly what Ridge (L2) damps.',
-      isCaseBased: false,
-    },
-    {
-      question: 'Case: the same kNN code scores 92% on one dataset and 61% on another where one feature is annual salary and another is a 0/1 flag. What is going on?',
-      answer:
-        'Distances and dot products are sums over features, so a feature measured in hundreds of thousands drowns out one living in [0, 1] — the model is effectively kNN on salary alone. The geometry is not wrong; the units are. Fix: standardize (z-score) or min-max scale before computing any distance. Two follow-ups that show depth: (a) switching to cosine does not rescue you either, because the giant feature still dominates the direction; (b) if there are also many features, add the curse of dimensionality — in high dimensions nearly all pairs are almost orthogonal and all distances converge, so "nearest" stops meaning anything. Then reduce dimension (PCA) or learn a metric.',
+        'Dot products and distances are sums over the components, so a component measured in hundreds of thousands dominates the sum while a component living between 0 and 1 contributes almost nothing. Effectively the model is doing nearest-neighbour on salary alone and the flag is invisible. The geometry is not wrong, the units are. Fix: rescale every feature to a comparable range before computing anything — subtract the mean and divide by the standard deviation, or map each column into 0 to 1. Two extra points worth making. First, switching to cosine does not rescue this, because the giant component still dominates the direction, not only the length. Second, if there are also very many features, add the high-dimension problem: almost all pairs become nearly orthogonal and all distances converge, so "nearest" carries less and less information. Then the answer is to reduce the number of components first, or to learn a distance rather than assume one.',
       isCaseBased: true,
     },
     {
-      question: 'What is a projection, and where does it show up in ML?',
+      question: 'What is a projection, and where does it show up?',
       answer:
-        'The projection of a onto b is a\'s shadow on b\'s line: scalar length a · b / ‖b‖, or as a vector (a · b / ‖b‖²)·b. Read it as "how much of a points along b". It shows up in PCA (dimensionality reduction is literally projecting each point onto the top principal directions), in least squares (the fitted values are the projection of y onto the column space of X, which is why the residual comes out orthogonal to every feature), and in embedding surgery (project a direction out to remove an unwanted attribute). If b is a unit vector the formula collapses to plain a · b — one more argument for normalizing.',
-      isCaseBased: false,
-    },
-    {
-      question: 'In transformer attention, scores are divided by sqrt(d_k) before softmax. What does that have to do with the dot product?',
-      answer:
-        'A dot product is a sum of d_k products. If query and key components are roughly independent with unit variance, that sum has variance about d_k, so raw scores grow like sqrt(d_k) as head dimension grows. Feed large-magnitude scores into softmax and it saturates: one token takes essentially all the weight and the gradient through softmax collapses toward zero, so the layer stops learning. Dividing by sqrt(d_k) returns the scores to unit scale where softmax is still responsive. Note what this is NOT: it is not cosine normalization — it divides by a constant, not by each vector\'s own norm, so the relative magnitudes the model learned survive.',
-      isCaseBased: false,
-    },
-    {
-      question: 'Given a 768-dimensional embedding, what does each individual dimension mean?',
-      answer:
-        'Individually, usually nothing you can name. The honest answer is that meaning lives in directions and relative positions, not in axes: the model was free to rotate its representation arbitrarily during training, so dimension 412 is not "sentiment". This is why you never interpret a single coordinate and why every downstream operation is a dot product, a distance, or a projection — all of which are about relationships between vectors, not about individual slots. When people do find interpretable directions (gender, tense, toxicity) they find them by fitting a direction across many examples, then projecting onto it.',
+        'The projection of a onto b is a\'s shadow on the line through b: as a plain length it is a · b divided by ‖b‖, and as an arrow it is that length pointed along b. Read it as "how much of a points along b". If b is already a unit vector the formula collapses to plain a · b, which is one more argument for normalizing. It shows up in PCA, where reducing dimensions is literally projecting each point onto a few chosen directions; in least squares fitting, where the fitted values are the projection of the target onto what the features can reach, which is why the leftover error comes out orthogonal to every feature; and in embedding editing, where an unwanted attribute is removed by projecting its direction out of every vector.',
       isCaseBased: false,
     },
   ],
   flashcards: [
     {
-      front: 'A vector, three ways',
-      back: 'A list of numbers (ML view: one slot per feature) · an arrow from the origin · a point. Same object — pick whichever view answers the question.',
+      front: 'Vector, and component',
+      back: 'A vector is an ordered list of numbers, drawable as an arrow from the origin when there are two of them. Each number in the list is a component.',
     },
     {
-      front: 'L2 norm vs L1 norm',
-      back: 'L2 = sqrt(sum of squares) = straight-line length = sqrt(a·a). L1 = sum of absolute values = taxi distance. The split behind Ridge vs Lasso.',
+      front: 'Magnitude / length / norm',
+      back: 'Square every component, add them, take the square root. ‖[3, 4]‖ = sqrt(9 + 16) = 5. Same recipe at any size. Never negative.',
     },
     {
-      front: 'Normalize / unit vector',
-      back: 'â = a / ‖a‖. Length becomes exactly 1, direction unchanged. Keeps "which way", drops "how much".',
+      front: 'Dot product (the arithmetic)',
+      back: 'Multiply matching slots and add the results. [2, 1] · [3, 2] = 6 + 2 = 8. Two vectors in, one plain number out.',
     },
     {
-      front: 'Dot product, both formulas',
-      back: 'a·b = Σ aᵢbᵢ  =  ‖a‖‖b‖cos θ. The first is how to compute it; the second is what it means.',
+      front: 'Dot product (the meaning)',
+      back: 'a · b = ‖a‖ ‖b‖ cos θ. Size of a, times size of b, times how much their directions agree. Both formulas always give the same number.',
     },
     {
-      front: 'Reading the sign of a·b',
-      back: 'Positive = same direction. Zero = orthogonal, unrelated. Negative = pointing opposite.',
+      front: 'Reading the sign of a · b',
+      back: 'Large positive = pointing the same way. Exactly zero = right angle, orthogonal, no shared direction. Negative = pointing opposite ways.',
     },
     {
-      front: 'The one-line takeaway',
-      back: 'Dot product = similarity score. It powers attention, semantic search/RAG, recommenders and kNN — all the same arithmetic.',
+      front: 'Unit vector / normalizing',
+      back: 'Divide every component by the vector\'s own length. Direction unchanged, length becomes exactly 1. [3, 4] / 5 = [0.6, 0.8].',
     },
     {
-      front: 'Cosine similarity',
-      back: 'a·b / (‖a‖‖b‖) — the dot product of the normalized vectors. Always in [−1, 1]. Length stops counting as relevance.',
-    },
-    {
-      front: 'Cosine vs raw dot: which when?',
-      back: 'Cosine when length is an artifact (text embeddings, RAG, dedup). Raw dot when length is real signal (popularity in recommenders, attention).',
-    },
-    {
-      front: 'Orthogonal',
-      back: 'a·b = 0, right angle, zero shared information. PCA requires it; in high dimensions almost every random pair is nearly orthogonal.',
+      front: 'Cosine similarity, and why embeddings use it',
+      back: 'a · b divided by both lengths, which leaves cos θ, always between −1 and 1. Length mostly reflects how much text there was; direction reflects what it is about.',
     },
     {
       front: 'Projection (the shadow)',
-      back: 'How much of a points along b: a·b / ‖b‖ (just a·b if b is a unit vector). PCA and least squares are projections.',
+      back: 'How much of a points along b: a · b / ‖b‖. Collapses to plain a · b when b is a unit vector.',
     },
   ],
   mindmapMarkdown: `- Vectors & the Dot Product (= Similarity)
-  - Vector = list = arrow = point
-    - ML view: one slot per feature
-    - Add componentwise, scale to stretch or flip
-  - Norms (how long)
-    - L2 = sqrt(sum of squares) = sqrt(a·a)
-    - L1 = sum of |values| → Lasso vs Ridge
+  - Vector = ordered list of numbers
+    - Two numbers = an arrow you can draw
+    - Each number is a component
+  - Length (magnitude, norm)
+    - Square, add, square root
+    - Pythagoras: ‖[3, 4]‖ = 5
+  - Dot product, way 1
+    - Multiply matching slots, add
+    - [2, 1] · [3, 2] = 8
+  - Dot product, way 2
+    - ‖a‖ ‖b‖ cos θ
+    - Same number, every time
+  - Reading the sign
+    - Positive = same direction
+    - Zero = orthogonal (right angle)
+    - Negative = opposite
   - Unit vectors
-    - â = a / ‖a‖, length exactly 1
-    - Why embeddings get normalized
-  - Dot product
-    - Sum of matching products
-    - = ‖a‖‖b‖cos θ
-    - Sign: + same, 0 orthogonal, − opposite
-  - Dot product = similarity
-    - Attention scores (GenAI)
-    - Semantic search / RAG / vector DB
-    - Recommenders and kNN distance
-  - Cosine vs raw dot
-    - Cosine when length is an artifact
-    - Raw dot when length is real signal
-    - Normalize on insert → dot IS cosine
-  - Orthogonality
-    - a·b = 0, zero shared information
-    - PCA needs orthogonal directions
-    - High dims: almost every pair is near-orthogonal
+    - Divide by your own length
+    - Length 1, direction unchanged
+  - Cosine similarity
+    - Dot product with both lengths divided out
+    - Length is an accident, direction is the meaning
+    - Normalize on insert, then dot IS cosine
   - Projection
-    - Shadow a·b / ‖b‖ — under PCA and least squares`,
+    - Shadow of a on b = a · b / ‖b‖
+    - Plain a · b when b is a unit vector`,
 }
 
 export default m
