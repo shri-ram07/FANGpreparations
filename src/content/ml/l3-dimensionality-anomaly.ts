@@ -6,575 +6,747 @@ const m: Module = {
   level: 3,
   title: 'PCA, t-SNE & Anomaly Detection',
   whyItMatters:
-    '"PCA assumptions" is a named FAANG interview theme, and most candidates fail it — they can recite "maximize variance" but cannot say when that is a lie. This module gives you the mechanism, the four gotchas with a live counterexample where PCA keeps 99.66% of the variance and destroys the model, the honest limits of a t-SNE picture, and Isolation Forest: the one algorithm that finds outliers by refusing to model the normal data at all.',
-  estMinutes: 55,
+    'Two everyday jobs, built from scratch here. The first is squashing wide data down to a few numbers per row without losing much, which is what PCA does. The second is finding the rows that do not look like the others, which is what anomaly detection does. Everything below is done with real numbers you can check by hand first, and only then with a library.',
+  assumes: [
+    'You know what an average is, and how to square a number',
+    'You have seen a Python list, a for loop, and a function definition',
+    'You have read the Math module *Vectors & the Dot Product (= Similarity)* — we use the dot product here, and nothing else from it',
+    'No linear algebra beyond that, and no ML background. Every other term is defined on this page.',
+  ],
+  estMinutes: 57,
   sections: [
     {
       type: 'intuition',
-      title: 'Why throw columns away on purpose',
-      md: `You have 4,000 features. Deleting information sounds insane. Five reasons it is not.
+      title: 'Six points that lean',
+      md: `Six students. For each one we wrote down two numbers: hours slept last night, and hours studied last week (divided by ten so both numbers are small).
 
-- **Storage and speed.** Half the columns, half the RAM, and most algorithms scale badly in feature count (kernel SVM, k-NN distance loops, anything inverting a matrix).
-- **The curse of dimensionality.** In high dimensions every point is far from every other point, and "nearest neighbour" stops meaning anything. Distance-based models rot.
-- **Visualization.** Humans see 2-D. To eyeball whether classes are separable at all, you must get to 2-D.
-- **Noise removal.** Directions with almost no variance are usually measurement jitter. Dropping them can raise test accuracy.
-- **Decorrelation.** Many models hate correlated features (unstable regression coefficients, redundant splits). The output of PCA is uncorrelated by construction.`,
-    },
-    {
-      type: 'note',
-      md: `The curse, concretely. Sample 1,000 random points in a unit cube. In 2-D the nearest neighbour of a point is roughly 0.03 away and the farthest is 1.2 — a 40x gap, so "near" is meaningful. Run the same measurement in 500-D and the farthest of those 1,000 points is only about **17%** farther than the nearest (~11% at 1,000-D — the L2 module measures exactly this). A 40x spread has collapsed to a 1.17x one: near and far stop being different questions, and k-NN is choosing between neighbours that are all equally useless. Related fact: to keep the same density you would need exponentially more data per added dimension. This is why the L2 module warned you about k-NN in wide data.`,
+- Student 1: **(1.6, 2.3)**. Student 2: **(3.6, 3.3)**. Student 3: **(4.0, 5.5)**. Student 4: **(6.0, 6.5)**. Student 5: **(6.4, 8.7)**. Student 6: **(8.4, 9.7)**.
+- Draw them on graph paper, first number across, second number up. They do not sit in a round blob. They march up and to the right in an almost-straight line, with a small wobble either side of it.
+- Each student needs **two** numbers to be written down. Two numbers per row is what we mean by **two dimensions**. A dimension is just one column of your table.
+- But look at the picture again. If someone tells you a student is far up the line, you already know both of their numbers, roughly. The second number is nearly free.
+- So here is the question this whole module answers: can we describe each student with **one** number instead of two, and how much do we lose?
+
+That is dimensionality reduction. Not deleting a column, as you will see, but re-describing every row using fewer numbers.`,
     },
     {
       type: 'intuition',
-      title: 'PCA: find the long axis of the cloud',
-      md: `Photograph a chair. Straight from the front it is a blob. Rotate to a three-quarter angle and you see legs, back, seat — same object, one *good* viewing direction. PCA finds that direction, mathematically.
+      title: 'The one move: how far along a direction does this point sit',
+      md: `Put a ruler down on the graph paper, lying along the line the points lean along. Now for each point, walk from the point straight to the ruler by the shortest path, and read off the mark you land on.
 
-- Plot your data as a cloud of points. It is almost never a round ball — it is stretched, like a cigar or a pancake.
-- **PC1** = the single direction along which the data varies MOST. The long axis of the cigar.
-- **PC2** = the direction with the next most variance, forced to be *orthogonal* (perpendicular) to PC1. Then PC3 orthogonal to both, and so on.
-- With d features you get d components, ranked by how much variance each captures.
-- **Reduction = keep the top k, project every point onto them, discard the rest.** Each row now has k numbers instead of d.
-- PCA is a rotation of the axes, not a selection of columns. You are re-describing the same cloud from a better angle.`,
+- A **direction** is an arrow: two numbers saying how far across and how far up. We always use arrows of length 1, so that the arrow says *which way* and nothing about *how far*. The arrow **(0.6, 0.8)** has length 1, because 0.6 squared plus 0.8 squared is 0.36 + 0.64 = 1.
+- A **projection** is that shortest walk onto the ruler, and the number you read off is how far along the ruler you landed. That single number is the point\'s new, one-dimensional description.
+- The bit you walked, from the point to the ruler, is the part you did not keep. It is what gets lost.
+
+Now do exactly that, for one point, with real arithmetic.`,
     },
     {
-      type: 'math',
-      intro:
-        'The mechanism in one line: PCA is the eigen-decomposition of the covariance matrix. This is the payoff for the eigen-intuition in Math L0 "Matrices as Transformations" — eigenvectors are the directions a matrix leaves alone, and here the matrix is your data covariance.',
-      latex: [
-        'C = \\frac{1}{n-1} X^{\\top} X \\quad (X \\text{ centred}), \\qquad C v_k = \\lambda_k v_k',
-        '\\text{PC}_k = v_k \\ (\\text{unit vector}), \\qquad \\text{explained variance ratio}_k = \\frac{\\lambda_k}{\\sum_{j} \\lambda_j}',
-        'X = U \\Sigma V^{\\top} \\; \\Rightarrow \\; \\text{columns of } V \\text{ are those same } v_k, \\quad \\lambda_k = \\frac{\\sigma_k^2}{n-1}',
-      ],
+      type: 'code',
+      lang: 'python',
+      title: 'Project one point onto one direction, by hand',
+      code: `point = [4.0, 3.0]
+direction = [0.6, 0.8]
+along = point[0] * direction[0] + point[1] * direction[1]
+print('how far along:', round(along, 2))
+shadow = [along * direction[0], along * direction[1]]
+print('shadow point :', [round(shadow[0], 2), round(shadow[1], 2)])
+left = [point[0] - shadow[0], point[1] - shadow[1]]
+print('left over    :', [round(left[0], 2), round(left[1], 2)])
+print('its length   :', round((left[0] ** 2 + left[1] ** 2) ** 0.5, 2))
+
+# ---- real output ----
+# how far along: 4.8
+# shadow point : [2.88, 3.84]
+# left over    : [1.12, -0.84]
+# its length   : 1.4`,
+      annotations: {
+        1: 'One data point: 4.0 across, 3.0 up. A plain list of two floats, nothing more.',
+        2: 'The direction of our ruler, as an arrow of length 1. We chose this one by hand for now; later the computer will choose it.',
+        3: 'Multiply the across-parts together, multiply the up-parts together, add. 4.0 * 0.6 = 2.4, and 3.0 * 0.8 = 2.4, so the total is 4.8. This is the whole projection: the answer 4.8 is how far along the ruler the point landed.',
+        4: 'round(x, 2) trims the float to 2 decimal places so the output is readable. Printed: 4.8.',
+        5: 'Where on the ruler is that, back in the original two numbers? Walk 4.8 units along the arrow: 4.8 * 0.6 across and 4.8 * 0.8 up. That gives (2.88, 3.84), the point\'s shadow on the ruler.',
+        6: 'Print the shadow, each of its two numbers rounded. This is what the point becomes if we keep only the ruler.',
+        7: 'The original point minus its shadow: (4.0 - 2.88, 3.0 - 3.84) = (1.12, -0.84). This is the walk from the point to the ruler, and it is exactly the information the projection throws away.',
+        8: 'Print that leftover, rounded.',
+        9: 'How long is the leftover walk? Square both parts, add, take the square root: 1.12 squared is 1.2544, 0.84 squared is 0.7056, and they add to 1.96, whose square root is 1.4. So this point sits 1.4 units off the ruler. The ** operator is Python\'s power: ** 2 squares, ** 0.5 takes the square root.',
+      },
     },
     {
       type: 'note',
-      md: `Read the eigen line as English: the eigenvector of the covariance matrix with the biggest eigenvalue IS the direction of maximum variance, and its eigenvalue IS that variance. Nothing more mystical is happening. In practice libraries never build C — they run **SVD** on the centred data directly, because it is numerically safer (squaring X to form XᵀX squares the condition number too) and works when d is huge.`,
+      md: `Line 3 has a name you have already met. Multiply matching parts and add them up: that is the **dot product**, taught in the Math module *Vectors & the Dot Product (= Similarity)*. So a projection onto a length-1 direction is nothing more than a dot product with that direction, and you know how to do it already. The other Math module you will hear echoed here is *Matrices as Transformations* — projecting many points onto many directions at once is exactly a matrix doing its job, and a library will do it that way for speed. Neither is needed to follow this page; every projection below is the same dot product, done one point at a time.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Centring, and why PCA cannot skip it',
+      md: `Before choosing a direction we move the whole cloud so its middle sits at the origin, the point (0, 0). That is **centring**: subtract the average of a column from every value in that column.
+
+- Why it is required: we are about to score a direction by how *spread out* the projections are along it. Spread has to be measured around some agreed centre, and the only honest centre is the middle of the data.
+- Skip centring and the arithmetic instead measures spread around (0, 0), which for our students is far below and to the left of the actual cloud. Then every point projects to a large positive number, they are all large together, and the "spread" you measure is mostly the distance from the origin to the cloud, not the shape of the cloud.
+- The practical effect: the first direction comes out pointing at the cloud from the origin, which tells you where your cloud sits, not how it varies. That is not what you asked for.
+- Centring never distorts the shape. It slides the whole cloud without rotating or stretching it, and the ruler you find can always be slid back afterwards.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Centre the six students',
+      code: `pts = [[1.6, 2.3], [3.6, 3.3], [4.0, 5.5], [6.0, 6.5], [6.4, 8.7], [8.4, 9.7]]
+mean_x = 0.0
+mean_y = 0.0
+for p in pts:
+    mean_x = mean_x + p[0] / 6
+    mean_y = mean_y + p[1] / 6
+print('centre:', round(mean_x, 2), round(mean_y, 2))
+centred = []
+for p in pts:
+    centred.append([round(p[0] - mean_x, 2), round(p[1] - mean_y, 2)])
+for c in centred:
+    print(c)
+
+# ---- real output ----
+# centre: 5.0 6.0
+# [-3.4, -3.7]
+# [-1.4, -2.7]
+# [-1.0, -0.5]
+# [1.0, 0.5]
+# [1.4, 2.7]
+# [3.4, 3.7]`,
+      annotations: {
+        1: 'The six students, each a list of two numbers, all inside one outer list.',
+        2: 'A running total for the average of the first column. Starting at 0.0 rather than 0 to make clear it holds decimals.',
+        3: 'The same for the second column.',
+        4: 'Walk the six points. p is one student, a two-item list.',
+        5: 'Add one sixth of this student\'s first number. Adding p[0]/6 six times is the same as adding all six and dividing at the end, and it keeps the loop to one line.',
+        6: 'The same for the second number.',
+        7: 'The centre of the cloud comes out at exactly (5.0, 6.0). That is the middle student who does not exist, the average of all six.',
+        8: 'An empty list that will hold the shifted points.',
+        9: 'Walk the six points again.',
+        10: 'Subtract the centre from both numbers and append the result. append adds one item to the end of a list. Student 1 at (1.6, 2.3) becomes (-3.4, -3.7): 3.4 left of centre and 3.7 below it.',
+        11: 'Walk the shifted points to print them.',
+        12: 'Print one shifted point per line. Notice the six now sit around zero, three negative and three positive, which is what centring means.',
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'Scoring a direction: variance',
+      md: `Now we can ask which ruler is best. We need one number per candidate direction saying how spread out the projections are along it.
+
+- **Variance** is the standard way to measure spread. Take the centred values, square each one, and average the squares. Squaring makes left-of-centre and right-of-centre count the same, and it makes far-out points count much more than near ones.
+- For a direction, we project every centred point onto it, then take the variance of those projected numbers. Call that the spread along the direction.
+- Useful fact we will check with numbers: the spread along the across-axis plus the spread along the up-axis equals the **total spread** of the cloud, and that total does not change no matter which pair of perpendicular rulers you use. The cloud has a fixed amount of spread in it; a direction can only claim a share of it.
+- The **explained variance ratio** of a direction is exactly that share: spread along the direction divided by total spread. It is a number between 0 and 1, and it is how you report what a projection kept.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Measure the spread along three different rulers',
+      code: `centred = [[-3.4, -3.7], [-1.4, -2.7], [-1.0, -0.5], [1.0, 0.5], [1.4, 2.7], [3.4, 3.7]]
+
+def spread_along(points, d):
+    total = 0.0
+    for p in points:
+        t = p[0] * d[0] + p[1] * d[1]
+        total = total + t * t / 6
+    return total
+
+flat = spread_along(centred, [1.0, 0.0])
+tall = spread_along(centred, [0.0, 1.0])
+tilt = spread_along(centred, [0.634, 0.773])
+print('spread along the x-axis  :', round(flat, 3))
+print('spread along the y-axis  :', round(tall, 3))
+print('spread along the tilt    :', round(tilt, 3))
+print('total spread             :', round(flat + tall, 3))
+print('fraction kept by the tilt:', round(tilt / (flat + tall), 4))
+
+# ---- real output ----
+# spread along the x-axis  : 4.84
+# spread along the y-axis  : 7.077
+# spread along the tilt    : 11.683
+# total spread             : 11.917
+# fraction kept by the tilt: 0.9803`,
+      annotations: {
+        1: 'The six centred points from the previous snippet, typed in directly so this snippet runs on its own.',
+        3: 'A function taking the points and one direction d, and returning the spread along d.',
+        4: 'A running total for the variance, starting at zero.',
+        5: 'Walk the points, one at a time.',
+        6: 'The projection of this point onto d: the same dot product as before. t is how far along the ruler this point landed.',
+        7: 'Square t and add one sixth of it. Six of these sixths make the average of the squares, which is the variance, because the points are already centred so their projections average to zero.',
+        8: 'Hand back the total.',
+        10: 'Score the plain across-axis, the arrow (1, 0). Projecting onto it just keeps the first number of each point.',
+        11: 'Score the plain up-axis, the arrow (0, 1). It keeps the second number.',
+        12: 'Score a tilted ruler pointing up and to the right at roughly 50 degrees. This is the direction the cloud leans along, guessed by eye for now.',
+        13: 'The across-axis holds 4.84 of the spread.',
+        14: 'The up-axis holds 7.077. Neither axis alone is impressive.',
+        15: 'The tilted ruler holds 11.683, far more than either axis. One well-chosen direction beats both of the original columns.',
+        16: '4.84 + 7.077 = 11.917 is the total spread of the cloud.',
+        17: '11.683 / 11.917 = 0.9803. Describing each student by one number along the tilted ruler keeps 98.03% of the spread and throws away 1.97%.',
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'That is PCA',
+      md: `We guessed the tilted direction by eye. The only thing left to do is stop guessing.
+
+- The **first principal component**, written PC1, is the direction with the largest spread of all possible directions. There is no magic in it: it is the winner of a search.
+- **PC2** is the best of the directions perpendicular to PC1, PC3 the best perpendicular to both, and so on. With two columns you get two components; with 400 columns you get 400.
+- **PCA** is the whole procedure: centre the data, find the components in that order, keep the first few, and describe each row by how far along each kept component it sits.
+- Real libraries do not search angle by angle, because that does not work beyond two dimensions. They compute the answer directly with linear algebra, which is what the *Beyond the basics* section at the end sketches. The answer they get is the same one the search below finds.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Find PC1 by trying every angle',
+      code: `import math
+
+best_spread = -1.0
+best_dir = None
+for degrees in range(180):
+    angle = math.radians(degrees)
+    d = [math.cos(angle), math.sin(angle)]
+    s = spread_along(centred, d)
+    if s > best_spread:
+        best_spread = s
+        best_dir = [round(d[0], 3), round(d[1], 3)]
+print('best direction :', best_dir)
+print('spread along it:', round(best_spread, 3))
+print('fraction kept  :', round(best_spread / 11.917, 4))
+
+# ---- real output ----
+# best direction : [0.629, 0.777]
+# spread along it: 11.688
+# fraction kept  : 0.9808`,
+      annotations: {
+        1: 'math is Python\'s built-in maths library. We need it for angles.',
+        3: 'The best spread found so far. Starting at -1.0 guarantees the first real candidate beats it, since a variance is never negative.',
+        4: 'The direction that achieved it. None is Python\'s placeholder for "nothing yet".',
+        5: 'Try every whole angle from 0 to 179 degrees. Beyond 180 the arrows just point backwards along rulers we already tried.',
+        6: 'Convert degrees to radians, which is the unit the maths library uses.',
+        7: 'cos and sin turn an angle into an arrow of length exactly 1. At 0 degrees this is (1, 0); at 90 degrees it is (0, 1); at 50 degrees it is roughly (0.64, 0.77).',
+        8: 'Score this candidate with the same function from the previous snippet, which must still be defined.',
+        9: 'Is this the best so far?',
+        10: 'If so, remember the score.',
+        11: 'And remember the arrow that got it, rounded for printing.',
+        12: 'The winner is (0.629, 0.777), an angle of 51 degrees. That is PC1 for these six students, and it is close to the direction we guessed by eye.',
+        13: 'Its spread is 11.688, slightly more than our guess scored.',
+        14: '11.688 / 11.917 = 0.9808. PC1 keeps 98.08% of the spread. The remaining 1.92% is PC2, the perpendicular wobble.',
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'Reconstruction: seeing what you dropped',
+      md: `Each student is now one number: how far along PC1 they sit. **Reconstruction** is going back the other way — from that one number, rebuild a guess at the two original numbers, and compare.
+
+- To rebuild: walk that far along the PC1 arrow, then add the centre back on, because we subtracted it earlier.
+- Student 1 sits at t = -5.01 along PC1. Walking -5.01 along (0.629, 0.777) gives (-3.15, -3.90), and adding the centre (5.0, 6.0) gives **(1.85, 2.10)**.
+- The real student 1 was **(1.6, 2.3)**. So we miss by 0.25 in the first number and 0.20 in the second.
+- That miss is the wobble off the ruler, the same leftover we computed by hand for a single point earlier. It is the price of using one number instead of two.
+- Whether that price is acceptable is not a mathematical question. If the wobble is measurement noise, you lost nothing. If the wobble is the one thing that separates the students you care about, you just destroyed your data.`,
     },
     {
       type: 'visual',
-      component: 'PointerBoxDiagram',
+      component: 'PythonPlayground',
       props: {
-        title: 'PCA on five points: rotate, project, discard',
-        notice:
-          'Left column = the five data points. Right column = what PCA has decided to keep. Watch two numbers per point become one — and watch what falls on the floor in the last frame.',
-        leftLabel: 'points (x, y)',
-        rightLabel: 'what PCA keeps',
-        frames: [
-          {
-            note: 'Frame 1. Five 2-D points. They are not scattered randomly — they lie almost along one diagonal. That "almost" is the entire opportunity: two columns are storing what is nearly one number.',
-            stack: [
-              { name: 'p1', value: '(2.0, 2.2)' },
-              { name: 'p2', value: '(4.0, 3.8)' },
-              { name: 'p3', value: '(6.0, 6.3)' },
-              { name: 'p4', value: '(8.0, 7.7)' },
-              { name: 'p5', value: '(10.0, 10.1)' },
-            ],
-            heap: [{ id: 'store', value: '2 numbers per row', label: 'nothing chosen yet' }],
-          },
-          {
-            note: 'Frame 2. Centre the cloud, then find the direction of maximum variance: PC1 = (0.711, 0.703), essentially the 45-degree diagonal. PC2 is not chosen freely — it is forced perpendicular to PC1, and gets whatever variance is left.',
-            stack: [
-              { name: 'p1', value: 'projects onto', to: 'pc1' },
-              { name: 'p2', value: 'projects onto', to: 'pc1' },
-              { name: 'p3', value: 'projects onto', to: 'pc1' },
-              { name: 'p4', value: 'projects onto', to: 'pc1' },
-              { name: 'p5', value: 'projects onto', to: 'pc1' },
-            ],
-            heap: [
-              { id: 'pc1', value: 'PC1 = (0.711, 0.703)', label: '99.83% of variance' },
-              { id: 'pc2', value: 'PC2 = (-0.703, 0.711)', label: '0.17% — orthogonal' },
-            ],
-          },
-          {
-            note: 'Frame 3. Project: drop each point perpendicularly onto the PC1 line and keep only how far along it landed. Two numbers collapse to one. Explained variance ratio of the kept component: 0.9983 — we removed half the columns and lost 0.17% of the variance.',
-            stack: [
-              { name: 'p1', value: 't = -5.53', to: 'pc1' },
-              { name: 'p2', value: 't = -2.98', to: 'pc1' },
-              { name: 'p3', value: 't = +0.20', to: 'pc1' },
-              { name: 'p4', value: 't = +2.60', to: 'pc1' },
-              { name: 'p5', value: 't = +5.71', to: 'pc1' },
-            ],
-            heap: [
-              { id: 'pc1', value: '1 number per row', label: 'kept: 99.83%' },
-              { id: 'pc2', value: 'PC2 coordinates', label: 'discarded', freed: true },
-            ],
-          },
-          {
-            note: 'Frame 4. What exactly did we lose? The PC2 residuals — the tiny wobble off the line. Rebuild p1 from PC1 alone and you get (2.07, 2.13), not (2.0, 2.2). Now the interview question: is that wobble measurement noise, or is it the only thing that tells your two classes apart? PCA cannot tell you. It never saw your labels.',
-            stack: [
-              { name: 'p1 residual', value: '+0.09', danger: true },
-              { name: 'p2 residual', value: '-0.17', danger: true },
-              { name: 'p3 residual', value: '+0.20', danger: true },
-              { name: 'p4 residual', value: '-0.21', danger: true },
-              { name: 'p5 residual', value: '+0.09', danger: true },
-            ],
-            heap: [
-              { id: 'rec', value: 'p1 rebuilt = (2.07, 2.13)', label: 'truth was (2.0, 2.2)' },
-              { id: 'gone', value: 'residuals thrown away', label: 'noise? or signal?', freed: true },
-            ],
-          },
-        ],
+        code: `centred = [[-3.4, -3.7], [-1.4, -2.7], [-1.0, -0.5], [1.0, 0.5], [1.4, 2.7], [3.4, 3.7]]
+d = [0.629, 0.777]
+for c in centred:
+    t = c[0] * d[0] + c[1] * d[1]
+    rebuilt_x = 5.0 + t * d[0]
+    rebuilt_y = 6.0 + t * d[1]
+    gap_x = (c[0] + 5.0) - rebuilt_x
+    gap_y = (c[1] + 6.0) - rebuilt_y
+    print('t =', round(t, 2), 'rebuilt', round(rebuilt_x, 2), round(rebuilt_y, 2), 'miss by', round(gap_x, 2), round(gap_y, 2))`,
+        precomputedOutput: `t = -5.01 rebuilt 1.85 2.1 miss by -0.25 0.2
+t = -2.98 rebuilt 3.13 3.69 miss by 0.47 -0.39
+t = -1.02 rebuilt 4.36 5.21 miss by -0.36 0.29
+t = 1.02 rebuilt 5.64 6.79 miss by 0.36 -0.29
+t = 2.98 rebuilt 6.87 8.31 miss by -0.47 0.39
+t = 5.01 rebuilt 8.15 9.9 miss by 0.25 -0.2`,
+        caption: 'One number per student goes in; two numbers come back out, wrong by about a quarter of a unit each. That error is the 1.92% of spread PC1 did not keep.',
+        annotations: {
+          1: 'The six centred students again.',
+          2: 'PC1, the winning direction from the angle search.',
+          3: 'Walk the six centred points.',
+          4: 'Project: the dot product with PC1 gives t, the single number we keep for this student.',
+          5: 'Rebuild the first number from t alone: walk t along the arrow, then add back the centre we subtracted.',
+          6: 'Rebuild the second number the same way.',
+          7: 'The rebuilding error in the first number: original (centred plus centre) minus rebuilt.',
+          8: 'The same error in the second number.',
+          9: 'Print the kept number, the rebuilt pair, and how far off it is. Every miss is between 0.2 and 0.5, and no miss is zero, because no student sat exactly on the ruler.',
+        },
       },
     },
     {
       type: 'intuition',
-      title: 'How many components? Scree plot and the 95% rule',
-      md: `Each component comes with an **explained variance ratio**: its share of the total variance. They sum to 1 and always decrease.
+      title: 'What PCA is not',
+      md: `Two things get assumed about PCA that are false, and both are worth saying plainly.
 
-- **Scree plot** = plot those ratios in order. It usually falls off a cliff then flattens. The flat part is the "scree" — rubble at the base of the mountain.
-- Rule of thumb 1: **keep enough components to reach 95% cumulative variance** (90% and 99% are used too — say which you picked and why).
-- Rule of thumb 2: keep components up to the **elbow**, where the curve stops dropping steeply.
-- For plotting, you take 2 or 3 no matter what the variance says — and you report how little variance those 2 actually captured, honestly.
-- In scikit-learn you can pass the target directly: n_components=0.95 asks for "however many I need for 95%".`,
-    },
-    {
-      type: 'code',
-      lang: 'python',
-      title: 'PCA on the wine dataset — and what happens if you skip the scaler',
-      code: `import numpy as np
-from sklearn.datasets import load_wine
-from sklearn.preprocessing import StandardScaler
-from sklearn.decomposition import PCA
-
-X, y = load_wine(return_X_y=True)          # 178 rows, 13 chemical features
-Xs = StandardScaler().fit_transform(X)     # PCA is scale-sensitive: standardize FIRST
-
-evr = PCA().fit(Xs).explained_variance_ratio_
-print('top 5 explained variance:', evr[:5].round(3))
-print('cumulative              :', np.cumsum(evr)[:5].round(3))
-print('components for 95%%     : %d' % PCA(n_components=0.95).fit(Xs).n_components_)
-
-raw = PCA().fit(X)                         # same data, NOT standardized
-print('unscaled PC1 share      :', raw.explained_variance_ratio_[0].round(4))
-print('it just copied          :', load_wine().feature_names[np.argmax(abs(raw.components_[0]))])
-
-# ---- real output ----
-# top 5 explained variance: [0.362 0.192 0.111 0.071 0.066]
-# cumulative              : [0.362 0.554 0.665 0.736 0.802]
-# components for 95%     : 10
-# unscaled PC1 share      : 0.9981
-# it just copied          : proline`,
-      annotations: {
-        7: 'The single most important line. Skip it and PCA answers a different question than you asked — see the last two prints.',
-        9: 'One array, 13 numbers, summing to 1. This is the scree plot as data.',
-        12: '13 features -> 10 components for 95%. Honest result: this dataset is NOT very compressible. PCA is not always a win, and reporting "10 of 13" is a better answer than pretending you found 2.',
-        14: 'Same rows, same code, no scaler. Watch what PC1 becomes.',
-        16: 'PC1 captures 99.81% of the variance and is essentially just the proline column — proline is measured in the hundreds, every other feature is order 1. Variance in raw units is a unit-of-measurement contest, not a discovery.',
-      },
-    },
-    {
-      type: 'note',
-      md: `That last result is the interview answer to "why standardize before PCA", in one sentence: **PCA maximizes variance, and variance is measured in the units of your columns** — so a salary in rupees (variance ~10⁸) will annihilate an age in years (variance ~100) and PC1 becomes a copy of the salary column. StandardScaler puts every feature at mean 0, variance 1, so components are chosen on *shared structure* rather than on who was measured with the biggest ruler. And always fit the scaler and PCA on the training split only — fitting on all data before splitting leaks test information into your components.`,
+- **PCA is not feature selection.** Feature selection keeps some of your original columns and drops the rest, so you can stop collecting the dropped ones. PCA keeps *all* of them, mixed together: PC1 for the students was 0.629 of the first column plus 0.777 of the second. Every original column is still needed to compute it. If your goal is to stop paying for a data feed, PCA does not help.
+- **The components are usually not interpretable.** With two columns you can squint at (0.629, 0.777) and say "mostly both, roughly equally". With 200 columns, PC1 is 200 weights and it is a mixture with no name. You cannot tell a customer "your loan was refused because of PC3", and you often cannot tell yourself what PC3 is.
+- One more that matters later: **PCA never looks at what you are trying to predict.** It ranks directions by spread only. A direction can have tiny spread and still be the only one that separates the two groups you care about, and PCA will drop it without hesitating.`,
     },
     {
       type: 'intuition',
-      title: 'PCA assumptions — the question they actually ask',
-      md: `"What does PCA assume?" is a named interview theme. Four assumptions, and every one of them can be false on your data.
+      title: 'Scaling: the second thing PCA needs',
+      md: `Centring fixed *where* the cloud sits. **Scaling** fixes how big each column is.
 
-- **The interesting structure is LINEAR.** PCA can only rotate and project. Data on a spiral or a Swiss roll has its real structure in a curve; no linear projection recovers it. (Kernel PCA or a non-linear method is the fix.)
-- **High variance = high information.** Nothing guarantees this. A noisy sensor has huge variance and zero information; a clean binary flag has tiny variance and perfect information.
-- **Scale is meaningful.** It is not, unless you made it so. PCA is scale-sensitive, so standardize first — always, unless every feature is already in identical units.
-- **You do not need interpretable features.** After PCA, "PC1" is a weighted mix of ALL original features. You can no longer tell a regulator "we declined the loan because of income". Interpretability is gone.
-- Plus the big structural one: **PCA is unsupervised.** It never looks at y. It ranks directions by variance, not by usefulness for your task.`,
+- To scale a column you divide every value in it by that column\'s spread, so afterwards each column has variance 1. Combined with centring, this is called standardising.
+- Why PCA needs it: variance is measured in the units of the column. A salary column in rupees has a variance in the hundreds of millions. An age column in years has a variance around a hundred. Nothing about that comparison is meaningful — it is a contest between a rupee and a year.
+- PCA picks the direction with the most variance. So without scaling, it will hand you the column with the biggest measuring unit, and call it a discovery.
+- The exception is when every column is already in the same unit and their relative sizes are real, for example pixel brightnesses in an image. Then scaling would blow up dead pixels into equal citizens, and you skip it deliberately.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Why squashing a table can help a model at all',
+      md: `One more reason to reduce dimensions, and this one comes from a measurement rather than from an argument.
+
+- Many models decide by distance: to classify a new row they find the nearest rows in the training data. That only works if "nearest" means something — if the closest row is genuinely much closer than the farthest one.
+- With many columns, it stops meaning something. The snippet below drops 500 random points into a box with 2, 10, 100 and 1000 columns, and measures the closest and farthest distance from one point to the rest.
+- Read the last column of its output: the farthest point is 67 times farther than the nearest when there are 2 columns, and only 1.11 times farther when there are 1000. Everything ends up the same distance away.
+- That is the honest version of the phrase you will hear, "the curse of dimensionality". It is not a mystery, it is the ratio in that last column collapsing toward 1.`,
     },
     {
       type: 'code',
       lang: 'python',
-      title: 'The counterexample: PCA keeps 99.66% of the variance and destroys the model',
+      title: 'Measure how distances behave as columns are added',
       code: `import numpy as np
-from sklearn.decomposition import PCA
-from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import cross_val_score
 
 rng = np.random.default_rng(0)
-y = np.repeat([0, 1], 200)
-noise = rng.normal(0, 10, 400)                 # loud, carries no class info
-signal = y + rng.normal(0, 0.3, 400)           # quiet, separates the classes perfectly
-X = np.column_stack([noise, signal])
-
-print('both features :', cross_val_score(LogisticRegression(), X, y, cv=5).mean().round(3))
-p = PCA(n_components=1).fit(X)
-print('PC1 keeps     :', p.explained_variance_ratio_[0].round(4), 'of the variance')
-print('after PCA(1)  :', cross_val_score(LogisticRegression(), p.transform(X), y, cv=5).mean().round(3))
+for d in [2, 10, 100, 1000]:
+    pts = rng.random((500, d))
+    first = pts[0]
+    gaps = np.sqrt(((pts[1:] - first) ** 2).sum(axis=1))
+    print(d, round(gaps.min(), 3), round(gaps.max(), 3), round(gaps.max() / gaps.min(), 2))
 
 # ---- real output ----
-# both features : 0.955
-# PC1 keeps     : 0.9966 of the variance
-# after PCA(1)  : 0.532`,
+# 2 0.014 0.937 67.13
+# 10 0.578 1.918 3.32
+# 100 3.634 4.953 1.36
+# 1000 12.295 13.618 1.11`,
       annotations: {
-        8: 'Standard deviation 10. Pure noise, identical for both classes. This column will win the variance contest by a mile.',
-        9: 'Standard deviation 0.3 around the class label. This column alone separates the classes almost perfectly.',
-        14: 'PCA reports 99.66% variance retained — a number that would sail through any review. It is retaining the noise.',
-        15: '0.955 accuracy becomes 0.532, i.e. coin flip. The discarded low-variance direction WAS the signal. Say this example out loud in the interview; it beats any definition.',
+        1: 'numpy is the library for arrays of numbers. An array is a grid of numbers that arithmetic can be applied to all at once.',
+        3: 'A random number generator with a fixed starting seed of 0, so this experiment gives the same numbers every time anyone runs it.',
+        4: 'Run the same experiment four times, with 2 columns, then 10, then 100, then 1000.',
+        5: 'rng.random((500, d)) makes a grid of 500 rows and d columns, every entry a random number between 0 and 1. So: 500 points scattered evenly in a box.',
+        6: 'pts[0] is the first row, our reference point.',
+        7: 'Read it inside out. pts[1:] is all rows except the first. Subtracting first from that grid subtracts it from every row at once, which is numpy broadcasting: a smaller shape is repeated to match a bigger one. ** 2 squares every entry. .sum(axis=1) adds along each row, giving one number per row. np.sqrt takes the square root of each. The result, gaps, is the distance from the first point to each of the other 499.',
+        8: 'Print the number of columns, the closest distance, the farthest distance, and the ratio between them. With 2 columns the farthest is 67 times the nearest, so near and far are very different. With 1000 columns the ratio is 1.11: the nearest neighbour is barely nearer than the farthest stranger, and any model that decides by distance is choosing between rows that are all equally far away.',
       },
     },
     {
-      type: 'note',
-      md: `The fix when labels exist: **LDA (Linear Discriminant Analysis)** projects to maximize class *separation* rather than variance — supervised by design, and it would have kept the signal direction here. Alternatives worth naming: supervised feature selection (mutual information, L1 regularization from the L1 module), or simply letting a tree ensemble pick features itself. PCA is not a feature-selection method; it is a decorrelating compressor.`,
-    },
-    {
-      type: 'note',
-      md: `**Use PCA when:** features are many and heavily correlated; a distance-based or O(d³) model is choking on width; you need a 2-D picture; the noise directions are genuinely noise (image pixels, sensor arrays, spectra). **Skip PCA when:** you need interpretable coefficients; features are few or already independent; the model is a tree ensemble (trees are scale-invariant and handle irrelevant columns, and PCA's oblique combinations actively hurt axis-aligned splits); the structure is non-linear; or the signal you care about is rare and quiet. Default reflex: try the model without PCA first, and make PCA prove it earns its place.`,
+      type: 'intuition',
+      title: 't-SNE and UMAP: for looking, not for feeding',
+      md: `PCA finds straight rulers. **t-SNE** and **UMAP** are two other methods with a different aim: place every row somewhere on a page so that rows which were close together in the original data end up close together on the page. They are allowed to bend, and they do.
+
+- They are for **looking at data**, and that is the whole use. You run one, you get a picture with blobs, and you eyeball whether your groups look separable at all.
+- Do not feed their output to a model. The two numbers per row they produce were chosen to make a nice picture, not to mean anything, and there is no honest way to place a new row into the same picture afterwards.
+- **Distances between blobs in the picture do not mean what they look like.** Two blobs on opposite sides of the page may be more similar than two touching blobs. Only "these points ended up neighbours" is meaningful, and even that shifts when you change the settings or the random starting point.
+- Blob *sizes* mean nothing either. The methods stretch sparse regions and squeeze dense ones as a matter of course.
+- UMAP is the faster of the two and keeps a little more of the large-scale layout. Both carry the warnings above.`,
     },
     {
       type: 'intuition',
-      title: 't-SNE and UMAP: pictures, not features',
-      md: `PCA asks "which straight directions vary most". t-SNE asks a different question: "can I place these points on a page so that **things that were neighbours stay neighbours**?"
+      title: 'Anomaly detection: the other half of this module',
+      md: `New problem. An **anomaly**, also called an **outlier**, is a row that does not look like the rest of the data. Card fraud, a machine about to fail, a sensor that started lying, a typo in a data feed.
 
-- It preserves **local neighbourhoods** — who is near whom — and deliberately does not care about the global map.
-- The result is often gorgeous: tight, well-separated blobs where PCA showed mush.
-- Price paid: global distances are **distorted on purpose**. The optimization is non-convex and randomly initialized.
-- **UMAP** is the modern alternative: much faster, similar quality, and preserves somewhat more global structure. It also has a transform() for new points, which t-SNE genuinely lacks.
-- Both are **for visualization only**. That is not a stylistic preference — it is the plan's rule and the interview's expected answer.`,
-    },
-    {
-      type: 'note',
-      md: `How to read a t-SNE plot without lying to yourself. **Cluster sizes mean nothing** — t-SNE expands sparse regions and shrinks dense ones, so a fat blob is not a big group. **Distances between clusters mean nothing** — two blobs far apart may be more similar than two blobs touching. **Perplexity changes the picture** (roughly "how many neighbours count"; 5 vs 50 can turn one cluster into four — try several before believing any). **Run-to-run variation is real** — different seeds give different pictures, so no single run is "the" answer. And the hard rule: **never fit a model, cluster, or compute a distance on t-SNE coordinates.** They are a rendering, not features; the axes have no units and no meaning, and there is no honest way to map new data into the same picture.`,
-    },
-    {
-      type: 'intuition',
-      title: 'Anomaly detection: a different shape of problem',
-      md: `Not "is this transaction class A or class B". It is: **this one does not look like anything I usually see.**
+- It is not ordinary classification, because usually nobody has labelled the anomalies. You cannot train on labels you do not have.
+- It is not a category either. Next month\'s fraud will not look like last month\'s. You are detecting *difference from usual*, not membership of a known group.
+- Anomalies are rare, often under 1% of rows, so counting how often you are right is useless: answering "normal" to everything scores over 99%.
+- The output you actually want is a **ranking**: score every row by how odd it looks, hand the oddest few to a human, and let the number you hand over be set by how many the human can check.
 
-- **Rare.** Anomalies are 0.1% of the data, or 0.001%. Accuracy is meaningless — always-normal scores 99.9%.
-- **Unlabeled.** Usually nobody has labeled the fraud, the failing bearing, the intrusion. You cannot train a classifier on labels you do not have.
-- **Not a class.** Next month's fraud pattern will not resemble last month's. You are detecting *difference*, not membership. A classifier trained on known fraud misses the new kind by construction.
-- Two honest framings: **novelty detection** (train on clean normal data, flag anything unlike it) and **outlier detection** (the training data itself is contaminated; find the odd rows inside it).
-- Real uses: card fraud, machine failure from vibration sensors, server metric spikes, data-quality gates in an ML pipeline.`,
-    },
-    {
-      type: 'intuition',
-      title: 'Isolation Forest: the elegant inversion',
-      md: `Every other method says "build a model of normal, then measure distance from it". Isolation Forest refuses. It goes straight at the anomalies.
-
-- Pick a random feature, pick a random split value, cut. Repeat, building a tree, until every point sits alone in its own leaf.
-- Count how many cuts it took to isolate each point — its **path length**.
-- A normal point sits inside a dense crowd: you must slice again and again to separate it from its neighbours. **Long path.**
-- An anomaly sits out on its own: one or two random cuts and it is already alone. **Short path.**
-- Build ~100 such random trees, average each point's path length. **Short average path = anomaly.** That is the whole algorithm.
-- Why it is beautiful: no distance metric, no density estimate, no assumption about the shape of "normal", and it is O(n log n) — it even *subsamples* (256 rows per tree by default), because anomalies are easier to spot in small samples.`,
-    },
-    {
-      type: 'math',
-      intro:
-        'Path length is normalized against the average depth of a random binary search tree, c(n), so scores are comparable across dataset sizes. h(x) is the path length of point x.',
-      latex: [
-        's(x, n) = 2^{-\\frac{E[h(x)]}{c(n)}}, \\qquad c(n) = 2H(n-1) - \\frac{2(n-1)}{n}',
-        's \\to 1 \\ (\\text{short path, anomaly}), \\qquad s \\to 0.5 \\ (\\text{average path, normal})',
-      ],
+The simplest method comes first, and it needs no library at all.`,
     },
     {
       type: 'code',
       lang: 'python',
-      title: 'Isolation Forest on payment amounts — no labels used',
+      title: 'The simplest detector: how many spreads from average is this row',
+      code: `amounts = [48, 52, 47, 55, 50, 49, 53, 51, 45, 300]
+mean = sum(amounts) / len(amounts)
+spread = 0.0
+for a in amounts:
+    spread = spread + (a - mean) ** 2 / len(amounts)
+sd = spread ** 0.5
+print('mean:', round(mean, 2), 'typical distance:', round(sd, 2))
+for a in amounts:
+    z = (a - mean) / sd
+    if abs(z) > 2:
+        print('flagged', a, 'with z =', round(z, 2))
+clean = amounts[:9]
+clean_mean = sum(clean) / 9
+clean_sd = (sum((a - clean_mean) ** 2 for a in clean) / 9) ** 0.5
+print('without the 300:', clean_mean, round(clean_sd, 2), 'so z of 300 is', round((300 - clean_mean) / clean_sd, 1))
+
+# ---- real output ----
+# mean: 75.0 typical distance: 75.05
+# flagged 300 with z = 3.0
+# without the 300: 50.0 2.94 so z of 300 is 84.9`,
+      annotations: {
+        1: 'Ten payment amounts in rupees. Nine ordinary ones near 50, and one of 300 that we would like the code to notice.',
+        2: 'The average: sum divided by count. len gives the number of items, here 10.',
+        3: 'A running total for the variance.',
+        4: 'Walk the ten amounts.',
+        5: 'Add one tenth of the squared distance from the mean. This is the same variance calculation as in the PCA snippets.',
+        6: 'The square root of the variance is called the standard deviation. It is the variance brought back to the original units, so it reads as "a typical distance from the mean, in rupees".',
+        7: 'Printed: mean 75.0, typical distance 75.05. Both numbers are already damaged, because the 300 is inside the calculation that is supposed to describe normal.',
+        8: 'Walk the amounts again, now to score them.',
+        9: 'The **z-score**: how many typical distances this value sits from the mean. Positive means above, negative below.',
+        10: 'abs() drops the minus sign, so this flags both unusually large and unusually small values. Two is the usual cut-off.',
+        11: 'Only the 300 is flagged, at z = 3.0, which sounds like a mild oddity rather than a six-fold payment.',
+        12: 'amounts[:9] is slicing: take items 0 up to but not including 9, so the nine ordinary amounts without the 300.',
+        13: 'Their average is exactly 50.0.',
+        14: 'Their standard deviation, computed in one line. The bracketed expression inside sum() is a generator expression: it produces (a - clean_mean) ** 2 for each a, and sum adds them as they arrive.',
+        15: 'Against the clean nine, the typical distance is 2.94 rupees and the 300 sits 84.9 of them away. The single outlier inflated the mean from 50 to 75 and the spread from 2.94 to 75.05, and so hid its own size. That effect is called masking, and it is the main weakness of this method.',
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'Isolation Forest: how few random cuts does it take to fence this row off',
+      md: `The z-score looks at one column and assumes the normal values pile up around an average. Isolation Forest assumes neither.
+
+- Picture the rows as dots on paper. Pick one column at random, pick a random value in that column\'s range, and cut the paper there. Cut again, and again, always at random, always inside the piece the dot you are following sits in. Stop when that dot is alone in its own piece.
+- Count the cuts that took. A dot in the middle of a crowd needs many cuts, because every cut still leaves neighbours with it. A dot out on its own gets fenced off in one or two.
+- Now do the whole thing about a hundred times, with different random cuts, and average the count for each row. **Few cuts on average means anomalous.** That is the entire algorithm.
+- Notice what it never does: it never measures a distance, never estimates a density, never assumes a shape for normal, and never sees a label. The oddness of a row is measured by how easy it was to separate.
+- The library reports this as a score rather than as a count of cuts. Lower score means fewer cuts means more anomalous, and the useful thing is the *order* of the scores, not any particular value.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Isolation Forest on payments, with no labels at all',
       code: `import numpy as np
 from sklearn.ensemble import IsolationForest
 
 rng = np.random.default_rng(0)
-normal = rng.normal(loc=[50, 3.0], scale=[8, 0.4], size=(300, 2))   # 300 ordinary payments
-planted = np.array([[250, 3.1], [48, 9.0], [230, 8.5]])             # 3 odd ones we injected
-X = np.vstack([normal, planted])
-
-iso = IsolationForest(contamination=0.02, random_state=0).fit(X)    # never sees a label
-pred = iso.predict(X)                       # -1 = anomaly, +1 = normal
-print('flagged        :', (pred == -1).sum(), 'of', len(X))
-print('planted rows   :', pred[-3:])
-print('planted scores :', iso.score_samples(X[-3:]).round(3))
-print('normal median  :', np.median(iso.score_samples(normal)).round(3))
+normal = rng.normal(loc=[50, 13], scale=[8, 2], size=(300, 2))
+odd = np.array([[300.0, 13.0], [50.0, 3.0], [290.0, 3.5]])
+X = np.vstack([normal, odd])
+iso = IsolationForest(random_state=0).fit(X)
+scores = iso.score_samples(X)
+print('median score of the 300 ordinary rows:', round(float(np.median(scores[:300])), 3))
+print('scores of the three odd rows         :', scores[-3:].round(3))
+order = np.argsort(scores)
+print('the three lowest scores are rows     :', order[:3])
 
 # ---- real output ----
-# flagged        : 7 of 303
-# planted rows   : [-1 -1 -1]
-# planted scores : [-0.796 -0.795 -0.868]
-# normal median  : -0.39`,
+# median score of the 300 ordinary rows: -0.411
+# scores of the three odd rows         : [-0.804 -0.714 -0.844]
+# the three lowest scores are rows     : [302 300 301]`,
       annotations: {
-        6: 'Three different kinds of weird: huge amount, weird hour, and both. Only the third is an outlier in each column separately — the middle two need the model to notice one axis at a time.',
-        9: 'contamination = your prior on "what fraction is anomalous". It does not change the ranking of scores at all; it only decides where the -1/+1 cutoff falls. 0.02 x 303 = 6.1, and the score threshold lands so that 7 rows fall below it — roughly your quota, whether or not 7 rows are actually weird.',
-        11: '7 flagged: our 3 planted ones plus 4 ordinary rows that happened to sit at the edge of the cloud. That is contamination doing exactly what you told it to. Set it too high and you drown analysts in false alarms.',
-        13: 'The scores are the real output. All three planted rows sit near -0.8 while the normal median is -0.39 — a clean gap. In production you rank by score and send the top N to a human, rather than trusting a hard cutoff.',
+        1: 'numpy, for the arrays.',
+        2: 'IsolationForest comes from scikit-learn, the standard Python machine learning library.',
+        4: 'The same fixed-seed random generator as before, so these numbers are reproducible.',
+        5: 'rng.normal draws random numbers that pile up around a centre. loc is the centre of each column, scale is its typical distance from that centre, and size asks for 300 rows of 2 columns. So: 300 ordinary payments of about 50 rupees made at about 1 pm.',
+        6: 'Three payments we planted by hand: a huge one at a normal hour, a normal one at 3 am, and a huge one at 3 am. np.array turns the list of lists into a numpy grid.',
+        7: 'np.vstack stacks the two grids on top of each other, giving 303 rows. The planted three are the last three rows.',
+        8: 'Build the forest and fit it to X. random_state=0 fixes its random cuts so the output is reproducible. Note what is not passed: no labels. Nothing here knows which rows are odd.',
+        9: 'score_samples gives one score per row. More negative means fewer cuts were needed, which means more anomalous.',
+        10: 'np.median is the middle value when sorted. The middle ordinary row scores -0.411. scores[:300] is the first 300 scores, the ordinary ones. float() converts the numpy value to a plain Python number so round() prints it cleanly.',
+        11: 'scores[-3:] is the last three scores, our planted rows. They come out at -0.804, -0.714 and -0.844, clearly below the ordinary middle of -0.411. .round(3) rounds every value in the array.',
+        12: 'np.argsort returns the row numbers that would sort the scores from lowest to highest, rather than the sorted scores themselves.',
+        13: 'The three most anomalous rows are 302, 300 and 301: exactly the three we planted, in the top three of 303. The forest found them without ever being told they existed, and it caught the 3 am payment of a perfectly normal amount, which a single-column z-score on amount alone would have missed.',
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'Worked case: five sensor readings, reduced by hand',
+      md: `A machine reports two numbers each hour. Five readings: **(0, 0), (2, 1), (4, 2), (6, 3), (8, 5)**. Do the whole of PCA on paper.
+
+1. **Centre.** First column adds to 20, so its average is 4. Second adds to 11, so its average is 2.2. Subtract: **(-4, -2.2), (-2, -1.2), (0, -0.2), (2, 0.8), (4, 2.8)**.
+2. **Total spread.** First column: squares are 16, 4, 0, 4, 16, adding to 40, divided by 5 gives **8.0**. Second column: 4.84, 1.44, 0.04, 0.64, 7.84 add to 14.8, divided by 5 gives **2.96**. Total = **10.96**.
+3. **Try a ruler.** The readings roughly double, so try the direction (2, 1) made length 1, which is **(0.894, 0.447)**. Project each centred point with the dot product: -4(0.894) - 2.2(0.447) = **-4.559**, then **-2.324**, **-0.089**, **+2.146**, **+4.828**.
+4. **Score it.** Square those and average: (20.78 + 5.40 + 0.01 + 4.61 + 23.31) / 5 = **10.82**. Explained variance ratio = 10.82 / 10.96 = **0.9874**. Our guessed ruler keeps 98.74%.
+5. **The real PC1.** Searching all angles gives **(0.856, 0.517)** with ratio **0.9946** — better than the guess, as it must be, since PC1 is the winner of that search.
+6. **Reconstruct reading five.** It sits at t = 4.828 along our guessed ruler. Walking that far gives (4.32, 2.16), plus the centre (4, 2.2) gives **(8.32, 4.36)**. The truth was (8, 5): out by 0.32 and 0.64.
+
+Read step 6 with step 4 in mind. Keeping 98.74% of the spread still left the last reading wrong by 0.64 in its second number. A high explained variance ratio is a statement about the cloud as a whole, never a promise about any single row.`,
+    },
+    {
+      type: 'intuition',
+      title: 'The classic mistake: PCA on unscaled columns',
+      md: `The wine dataset ships with scikit-learn: 178 wines, 13 chemical measurements each. Someone loads it and runs PCA straight away, without scaling.
+
+- The result looks wonderful. PC1 explains **99.81%** of the variance. One number replaces thirteen. It goes in the report.
+- Run the next snippet before reading on. It prints the spread of each of the 13 columns first, and then what PC1 turned out to be.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'The mistake, run',
+      code: `import numpy as np
+from sklearn.datasets import load_wine
+from sklearn.decomposition import PCA
+
+data = load_wine()
+X = data.data
+print('column spreads:', X.std(axis=0).round(1))
+raw = PCA().fit(X)
+print('PC1 keeps     :', round(float(raw.explained_variance_ratio_[0]), 4))
+print('PC1 weights on:', data.feature_names[int(np.argmax(abs(raw.components_[0])))])
+
+# ---- real output ----
+# column spreads: [8.00e-01 1.10e+00 3.00e-01 3.30e+00 1.42e+01 6.00e-01 1.00e+00
+#                  1.00e-01 6.00e-01 2.30e+00 2.00e-01 7.00e-01 3.14e+02]
+# PC1 keeps     : 0.9981
+# PC1 weights on: proline`,
+      annotations: {
+        1: 'numpy, for argmax below.',
+        2: 'load_wine fetches the built-in dataset. No download, it ships with the library.',
+        3: 'PCA, the library version of everything we did by hand.',
+        5: 'Load it. data holds the numbers and the column names together.',
+        6: 'data.data is the grid: 178 rows, 13 columns.',
+        7: 'X.std(axis=0) is the standard deviation of each column, computed down the rows. Printed in scientific notation: 8.00e-01 means 0.8, and 3.14e+02 means 314. Twelve columns sit between 0.1 and 14. The thirteenth is 314.',
+        8: 'Fit PCA to the raw, unscaled grid. PCA() with no arguments keeps all 13 components.',
+        9: 'explained_variance_ratio_[0] is PC1\'s share of the total spread, exactly the fraction we computed by hand. It reports 0.9981.',
+        10: 'Read this inside out. raw.components_[0] is PC1, a list of 13 weights, one per column. abs() drops the minus signs. np.argmax gives the position of the largest, and feature_names turns that position into a column name. The answer is proline: the column whose spread was 314.',
       },
     },
     {
       type: 'note',
-      md: `Two alternatives, one line each. **One-Class SVM**: fits a boundary that wraps the normal data (an SVM with only one class) and calls everything outside it an anomaly — good on small, clean, novelty-style data, but it is roughly O(n²)–O(n³), very sensitive to the kernel and nu parameters, and needs scaled features. **LOF (Local Outlier Factor)**: compares a point's local density to the density of its k neighbours, so it catches an outlier that is *locally* odd even while sitting inside the global cloud — the one thing Isolation Forest can miss — at the cost of neighbour searches and a k you must choose. Default reflex: Isolation Forest first (fast, few knobs, robust in higher dimensions); LOF when anomalies are local; One-Class SVM when you have genuinely clean training data and few rows.`,
+      md: `The diagnosis. Proline is measured in the hundreds and everything else in single digits, so proline\'s variance is thousands of times larger than any other column\'s before a single calculation has been done. PCA picks the direction of largest variance, so PC1 came out as very nearly a copy of the proline column, and the impressive 99.81% is really the sentence "proline has the biggest numbers". Nothing was discovered. The fix is scaling, as promised earlier: divide each column by its own spread first, so the 13 columns arrive at the contest the same size. Run it that way and the honest picture appears.`,
     },
     {
-      type: 'note',
-      md: `**Evaluating without labels is the hard part, and interviewers know it.** With no ground truth you cannot compute precision or recall — so do these instead: (1) inject synthetic anomalies you designed and check they rank top; (2) have analysts label a sample of the top-N alerts and report **precision@K**, which is what the business actually feels; (3) measure stability — rerun with different seeds/subsamples and check the same rows keep surfacing; (4) track alert volume drift over time as a canary. And whenever a few hundred labels do exist, evaluate with **PR-AUC**, never ROC-AUC or accuracy: at 0.1% positives, ROC-AUC flatters garbage.`,
+      type: 'code',
+      lang: 'python',
+      title: 'The same data, scaled first',
+      code: `import numpy as np
+from sklearn.datasets import load_wine
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
+
+X = load_wine().data
+Xs = StandardScaler().fit_transform(X)
+fit = PCA().fit(Xs)
+print('top five shares:', fit.explained_variance_ratio_[:5].round(3))
+print('running total  :', np.cumsum(fit.explained_variance_ratio_)[:5].round(3))
+print('needed for 95% :', PCA(n_components=0.95).fit(Xs).n_components_)
+
+# ---- real output ----
+# top five shares: [0.362 0.192 0.111 0.071 0.066]
+# running total  : [0.362 0.554 0.665 0.736 0.802]
+# needed for 95% : 10`,
+      annotations: {
+        1: 'numpy, for the running total below.',
+        2: 'The same dataset.',
+        3: 'The same PCA.',
+        4: 'StandardScaler is the library tool that centres each column and divides it by its spread.',
+        6: 'The same 13 columns, unscaled for now.',
+        7: 'fit_transform learns each column\'s average and spread, then returns the standardised grid. Every column of Xs now has average 0 and variance 1.',
+        8: 'Run PCA on the standardised grid.',
+        9: 'The first five shares: 36.2%, 19.2%, 11.1%, 7.1%, 6.6%. No single direction dominates, which is the truth this dataset was hiding behind proline.',
+        10: 'np.cumsum is the running total: each entry is that share plus all the ones before it. After five components we have 80.2% of the spread.',
+        11: 'Passing a number between 0 and 1 as n_components asks scikit-learn for however many components reach that share. The answer is 10 of 13, so this data barely compresses at all. Reporting that honestly is the right outcome; the flattering 99.81% was the wrong one.',
+      },
     },
     {
       type: 'intuition',
-      title: 'Association rules: what gets bought together',
-      md: `Different problem entirely: no model, no loss function. Just counting baskets to find rules of the form "customers who bought A also bought B".
+      title: 'Practice problems',
+      md: `Pen and paper. The arithmetic is small on purpose.
 
-- An **itemset** is any group of items appearing in one basket: {nappies}, {nappies, beer}.
-- **Support(A)** = fraction of all baskets containing A. "How common is this at all?" It is the popularity filter.
-- **Confidence(A ⇒ B)** = of baskets with A, what fraction also have B. "If A, how likely is B?"
-- **Lift(A ⇒ B)** = confidence divided by support(B). "How much MORE likely than baseline?"
-- **Apriori** is the algorithm that makes this tractable: if {beer} is rare, then {beer, nappies} must be at least as rare — so prune it before ever counting it. That downward-closure trick is the entire idea.`,
-    },
-    {
-      type: 'math',
-      intro: 'The three quantities, with N = total number of baskets.',
-      latex: [
-        '\\text{support}(A) = \\frac{\\#\\{\\text{baskets containing } A\\}}{N}',
-        '\\text{confidence}(A \\Rightarrow B) = \\frac{\\text{support}(A \\cup B)}{\\text{support}(A)}',
-        '\\text{lift}(A \\Rightarrow B) = \\frac{\\text{confidence}(A \\Rightarrow B)}{\\text{support}(B)} = \\frac{\\text{support}(A \\cup B)}{\\text{support}(A)\\,\\text{support}(B)}',
-      ],
+1. Project the point (3, 4) onto the direction (0.8, 0.6). How far along does it land, where is its shadow, and how long is the leftover walk?
+2. Four points: (1, 1), (3, 3), (5, 5), (7, 7). Centre them, then compute the spread along (0.707, 0.707) and along (-0.707, 0.707). What is the explained variance ratio of the first direction, and why is the answer exactly what it is?
+3. A table has two columns: height in centimetres, spread about 10, and shoe size, spread about 1.5. PCA is run without scaling. Predict what PC1 will be, and give the one line of code that fixes it.
+4. Six delivery times in minutes: 30, 32, 31, 29, 33, 95. Compute the mean, the standard deviation, and the z-score of 95 with all six included. Then recompute mean and standard deviation from the first five only, and give the z-score of 95 against those. Which is the more useful number, and what is the effect called?
+5. A colleague clusters customers using the two coordinates a t-SNE plot produced, and reports that segment A is far from segment B so they are very different. Give the two things wrong with that sentence.`,
     },
     {
       type: 'intuition',
-      title: 'The beer-and-nappies arithmetic',
-      md: `The famous (and probably apocryphal) retail story: young fathers sent out for nappies come back with beer. Run the numbers on 1,000 baskets — nappies in 200, beer in 300, both in 100.
+      title: 'Worked solutions',
+      md: `Check each step, not only the final number.
 
-- support(nappies) = 200/1000 = **0.20**. support(beer) = 300/1000 = **0.30**. support(both) = 100/1000 = **0.10**.
-- confidence(nappies ⇒ beer) = 0.10 / 0.20 = **0.50**. Half of nappy buyers also buy beer.
-- lift = 0.50 / 0.30 = **1.67**. Buying nappies makes beer 1.67x more likely than for a random shopper.
-- **Lift > 1 is the only one of the three that means anything.** It says the two are associated beyond chance. Lift = 1 means independent, lift < 1 means they repel.
-- The trap high confidence hides: bread is in 800 baskets, and 160 of the 200 nappy baskets have bread. confidence(nappies ⇒ bread) = 160/200 = **0.80** — sounds fantastic. But lift = 0.80/0.80 = **1.00**. Bread is just always bought. Zero information, and a rule engine ranked by confidence would put it at the top.`,
+1. Dot product: 3(0.8) + 4(0.6) = 2.4 + 2.4 = **5.0** along. Shadow: 5.0 times (0.8, 0.6) = **(4.0, 3.0)**. Leftover: (3 - 4, 4 - 3) = (-1, 1), whose length is the square root of 2 = **1.414**.
+2. The average is (4, 4), so centred the points are (-3, -3), (-1, -1), (1, 1), (3, 3). Projections onto (0.707, 0.707): -4.243, -1.414, 1.414, 4.243. Squares average to (18 + 2 + 2 + 18)/4 = **10.0**. Onto the perpendicular direction every projection is 0, so its spread is **0**. Ratio = 10 / (10 + 0) = **1.0**. It is exactly 1 because the four points sit perfectly on one straight line, so one number describes each point with no loss at all.
+3. Height\'s variance is about 100 and shoe size\'s about 2.25, so height wins by a factor of 44 before anything is computed: **PC1 will be almost exactly the height column**, and its explained variance ratio will look impressive and mean nothing. Fix: **Xs = StandardScaler().fit_transform(X)** before fitting PCA.
+4. All six: sum is 250, mean **41.67**. Squared distances: 136.1, 93.4, 113.4, 160.4, 75.1, 2844.4, adding to 3422.8; divided by 6 gives 570.5, whose square root is **23.88**. z of 95 = (95 - 41.67) / 23.88 = **2.23**. First five only: mean **31.0**, squared distances 1, 1, 0, 4, 4 add to 10, divided by 5 gives 2.0, square root **1.41**. z of 95 = (95 - 31) / 1.41 = **45.3**. The second is far more useful: 45 standard deviations is an unmistakable alarm while 2.23 is borderline. The outlier inflated both the mean and the spread that were supposed to describe normal, which is **masking**.
+5. First, you must not cluster on t-SNE coordinates at all: those two numbers were produced to make a readable picture, and any method that measures distance between them is measuring an artefact. Cluster in the original columns, then use the picture only to colour what you found. Second, distance between blobs in a t-SNE picture carries no meaning, so "far apart, therefore very different" is not supported by anything — and rerunning with a different random start or a different neighbourhood setting can rearrange the blobs entirely.`,
     },
     {
-      type: 'note',
-      md: `**The honest status of Apriori.** It was a 1990s breakthrough and it still gets asked, so know support/confidence/lift cold. But almost nobody ships it now: it explodes combinatorially on real catalogues, handles only binary "in the basket / not" data, ignores quantity, price, time, and sequence, and produces thousands of rules that a human must sift. Modern replacements do the same job better — item **embeddings** (item2vec) and collaborative filtering learn "bought together" as geometry rather than as enumerated rules, generalize to items with few co-occurrences, and rank by predicted value rather than raw counts. Correct interview posture: explain lift precisely, then say you would reach for a recommender.`,
+      type: 'intuition',
+      title: 'Beyond the basics - skip this on your first read',
+      md: `Everything above stands on its own. This names what is under the hood, so the words are familiar later.
+
+- **How libraries really find PC1.** Not by searching angles. Build the covariance matrix: entry (i, j) is the average of centred column i times centred column j, so the diagonal holds each column\'s variance and the off-diagonal holds how columns move together. The principal components are its **eigenvectors** — the directions this matrix does not rotate, from the Math module *Matrices as Transformations* — and each one\'s **eigenvalue** is the variance along it. Explained variance ratio is one eigenvalue divided by their sum. In practice even that is skipped in favour of the **singular value decomposition** of the centred data, which produces the same directions with better numerical behaviour.
+- **LDA.** When you do have labels, Linear Discriminant Analysis finds directions that separate the labelled groups rather than directions with the most spread. It is the supervised answer to the complaint that PCA can drop a quiet but decisive direction.
+- **Kernel PCA.** PCA can only use straight rulers. If the structure of your data is a curve or a spiral, no straight ruler recovers it. Kernel PCA reaches the curved case by measuring similarity between points instead of coordinates.
+- **Two other anomaly detectors.** Local Outlier Factor compares a row\'s local crowding against that of its neighbours, so it catches a row that is odd only relative to its own neighbourhood, which Isolation Forest can miss. One-Class SVM draws a boundary around the normal region and flags whatever falls outside; it wants clean training data, scaled columns, and not too many rows.
+- **Evaluating with no labels.** Plant anomalies you designed and check they rank near the top. Have a human label a sample of the highest-ranked alerts and report what fraction were real, which is the number the team actually feels. Rerun with different random seeds and check the same rows keep surfacing. When a few hundred real labels do exist, judge with precision and recall rather than accuracy, because at 1% anomalies accuracy is meaningless.`,
     },
   ],
   quiz: [
     {
-      question: 'You run PCA on raw (unscaled) features where salary is in rupees and age is in years. What does PC1 most likely become?',
+      question: 'Projecting a point onto a direction of length 1 means doing what arithmetic?',
       options: [
         {
-          text: 'Essentially a copy of the salary column, because its raw variance dwarfs everything else',
-          explanation:
-            'Correct. Variance is measured in the units of the column. In the wine demo above, unscaled PC1 captured 99.81% of variance and was just the proline column. Standardize first.',
+          text: 'Multiply matching parts of the point and the direction and add them up, which is the dot product',
+          explanation: 'Correct. For (4.0, 3.0) onto (0.6, 0.8): 4.0(0.6) + 3.0(0.8) = 4.8. That single number is how far along the direction the point landed.',
         },
-        { text: 'A balanced blend of both features', explanation: 'Only if their variances were comparable — which unscaled rupees and years are not, by six orders of magnitude.' },
-        { text: 'Unaffected — PCA normalizes internally', explanation: 'It does not. PCA centres the data but never scales it; StandardScaler is your job.' },
+        { text: 'Divide the point by the direction, one part at a time', explanation: 'There is no division here, and dividing by a zero part of the direction would not even be defined.' },
+        { text: 'Take the distance from the point to the origin', explanation: 'That ignores the direction entirely, so every direction would give the same answer.' },
       ],
       correct: 0,
     },
     {
-      question: 'PCA on your data reports that PC1 explains 99% of the variance, yet a classifier trained on PC1 alone performs at chance. What happened?',
+      question: 'Why must the data be centred before PCA chooses a direction?',
       options: [
-        { text: 'A bug — 99% variance guarantees the information is preserved', explanation: 'It guarantees nothing about your labels. Variance and class-relevance are different quantities.' },
+        { text: 'To make the numbers smaller so the arithmetic is faster', explanation: 'Speed is not the reason, and centring does not reliably shrink anything.' },
         {
-          text: 'The class signal lived in a low-variance direction that PCA discarded, because PCA never sees y',
-          explanation:
-            'Correct — exactly the demo above: 0.955 accuracy fell to 0.532 while PCA "kept" 99.66% of variance. LDA or supervised selection is the fix when labels exist.',
+          text: 'Because spread is measured around a centre, and without centring the arithmetic measures spread around (0, 0), so the first direction points at where the cloud sits rather than describing its shape',
+          explanation: 'Correct. Centring slides the cloud without rotating or stretching it, so the shape being measured is the real one.',
         },
-        { text: 'Too few components — you should keep more variance', explanation: 'You already kept 99%. Adding a threshold does not solve a problem caused by the ranking criterion itself.' },
+        { text: 'Because PCA cannot handle negative numbers', explanation: 'Centring creates negative numbers rather than removing them: half the centred values are below zero.' },
       ],
       correct: 1,
     },
     {
-      question: 'In a t-SNE plot, two clusters sit far apart on opposite sides of the page. What can you conclude?',
+      question: 'PCA on the raw wine data reports PC1 explaining 99.81% of the variance. What actually happened?',
       options: [
-        { text: 'They are very dissimilar groups', explanation: 'No. Inter-cluster distances in t-SNE are not meaningful — the objective only preserves local neighbourhoods.' },
-        { text: 'One is a subset of the other', explanation: 'Nothing in the layout supports a containment claim.' },
+        { text: 'The dataset genuinely compresses to one number', explanation: 'Scaled first, the same data needs 10 of its 13 components to reach 95%. It barely compresses at all.' },
         {
-          text: 'Almost nothing — inter-cluster distances in t-SNE are not meaningful',
-          explanation:
-            'Correct. Cluster sizes and between-cluster distances are both artifacts. What you may read is which points are neighbours of which, and even that changes with perplexity and seed.',
+          text: 'One column, proline, is measured in the hundreds while the rest are single digits, so it had the largest variance before any calculation and PC1 came out as a copy of it',
+          explanation: 'Correct. Variance carries the units of the column, so unscaled PCA rewards whichever column was measured with the biggest ruler.',
         },
-      ],
-      correct: 2,
-    },
-    {
-      question: 'Why does Isolation Forest isolate anomalies in FEWER random splits?',
-      options: [
-        { text: 'Because it splits on the most informative feature first, like a decision tree', explanation: 'It does the opposite: features and split values are chosen at random. That randomness is the point — no criterion, no labels.' },
-        {
-          text: 'Because anomalies sit alone in sparse regions, so a random cut separates them from everything else almost immediately',
-          explanation:
-            'Correct. Points in a dense crowd need cut after cut to be separated from neighbours; a lone point falls out fast. Short average path length = anomaly.',
-        },
-        { text: 'Because it removes them from the data before building trees', explanation: 'Nothing is removed beforehand — that would require knowing the answer already.' },
+        { text: 'PCA overfitted to the 178 rows', explanation: 'PCA never looks at a target and there is no fitting to labels here. The result is a units problem, not an overfitting one.' },
       ],
       correct: 1,
     },
     {
-      question: 'What does the contamination parameter in IsolationForest actually control?',
+      question: 'Your data has 30 columns and you keep 3 components. Can you now stop collecting some of the original 30?',
       options: [
+        { text: 'Yes, the 27 dropped components correspond to 27 dropped columns', explanation: 'Components are not columns. Every component mixes all 30 columns together.' },
         {
-          text: 'Only the threshold on the anomaly score that decides the -1/+1 label — the score ranking is unchanged',
-          explanation:
-            'Correct. In the demo, contamination=0.02 on 303 rows flagged 7 (3 real, 4 false alarms). Set it wrong and you change alert volume, not detection quality. Rank by score_samples instead when you can.',
+          text: 'No. Each kept component is a weighted mix of all 30 columns, so all 30 are still needed to compute it',
+          explanation: 'Correct. PCA is not feature selection. If the goal is to stop paying for a data feed, you need a method that keeps actual columns.',
         },
-        { text: 'How many trees are built', explanation: 'That is n_estimators.' },
-        { text: 'The fraction of features sampled per split', explanation: 'That is max_features. Contamination is about the label cutoff.' },
-      ],
-      correct: 0,
-    },
-    {
-      question: 'A rule "nappies ⇒ bread" has confidence 0.80 and lift 1.00. Ship it?',
-      options: [
-        { text: 'Yes — 80% confidence is very strong', explanation: 'Confidence alone is a trap: bread appears in 80% of ALL baskets, so 80% among nappy buyers is exactly baseline.' },
-        {
-          text: 'No — lift 1.00 means independence: bread is just always bought, so the rule carries zero information',
-          explanation: 'Correct. Lift is confidence divided by support(B); lift = 1 means knowing about nappies changes nothing about bread.',
-        },
-        { text: 'Yes, if support is also high', explanation: 'High support on an independent pair just means both items are popular. It adds nothing.' },
+        { text: 'Yes, provided the dropped components explain less than 5% of the variance', explanation: 'The variance share says how much of the cloud shape you kept. It says nothing about which columns you still have to collect.' },
       ],
       correct: 1,
     },
     {
-      question: 'For which model does applying PCA first typically HURT the most?',
+      question: 'Two clusters sit on opposite sides of a t-SNE picture. What follows?',
       options: [
+        { text: 'They are the two most different groups in the data', explanation: 'Distance between blobs in these pictures is not meaningful. Two touching blobs can be less similar than two far-apart ones.' },
         {
-          text: 'A gradient-boosted tree ensemble',
-          explanation:
-            'Correct. Trees are already scale-invariant and cope with irrelevant columns; PCA replaces clean axis-aligned features with oblique mixtures that axis-aligned splits approximate badly — and destroys feature importances.',
+          text: 'Almost nothing. Distances between blobs carry no meaning, and a different random start or neighbourhood setting can rearrange the layout',
+          explanation: 'Correct. The one thing the picture supports is that points inside a blob were neighbours in the original data, and even that is worth checking across several runs.',
         },
-        { text: 'k-NN on 2,000 correlated features', explanation: 'This is a classic PCA win: fewer dimensions makes distances meaningful again and the search far cheaper.' },
-        { text: 'A kernel SVM on wide, correlated data', explanation: 'Also usually a win — kernel methods scale badly in n and d, and decorrelated inputs help.' },
+        { text: 'One cluster is a subset of the other', explanation: 'Nothing about a layout supports a containment claim.' },
       ],
-      correct: 0,
+      correct: 1,
     },
     {
-      question: 'You have an anomaly model in production and no labels at all. Which evaluation is defensible?',
+      question: 'Why does Isolation Forest need fewer random cuts to fence off an anomaly?',
       options: [
-        { text: 'Accuracy on the flagged rows', explanation: 'With no labels there is nothing to be accurate against — and at 0.1% anomalies, accuracy is meaningless even with labels.' },
-        { text: 'ROC-AUC against the contamination parameter', explanation: 'Contamination is your assumption, not ground truth. Scoring against your own prior measures nothing.' },
+        { text: 'Because it cuts on the most informative column first', explanation: 'It does the opposite: both the column and the cut value are chosen at random, with no criterion and no labels.' },
         {
-          text: 'Have analysts label a sample of the top-N alerts and report precision@K, plus check stability across seeds',
-          explanation:
-            'Correct. Precision@K is what the business feels, a small labeled sample is affordable, and stability across reruns catches a model that is merely surfacing noise.',
+          text: 'Because an anomalous row sits away from the crowd, so an early random cut is likely to separate it from everything else',
+          explanation: 'Correct. A row inside a crowd keeps company after every cut and needs many of them; a lone row falls out in one or two. Few cuts on average means anomalous.',
         },
+        { text: 'Because anomalies are removed from the data before the trees are built', explanation: 'That would require already knowing the answer, which is exactly what is missing here.' },
       ],
-      correct: 2,
+      correct: 1,
     },
   ],
   interviewQuestions: [
     {
-      question: 'What assumptions does PCA make, and where does each one break?',
+      question: 'Explain PCA to someone who has not seen it, without using the word eigenvector.',
       answer:
-        'Four. (1) **Structure is linear** — PCA only rotates and projects, so data on a spiral or manifold keeps its real structure hidden; kernel PCA or UMAP is the escape. (2) **High variance = high information** — false whenever a loud, useless feature exists; a noisy sensor outranks a clean predictive flag. (3) **Scale is meaningful** — false by default, so standardization is mandatory: unscaled, PC1 becomes whichever column was measured with the biggest ruler. (4) **Interpretability is expendable** — every PC is a mix of all original features, which kills any "we declined the loan because of X" explanation and any regulatory story. On top of those: PCA is unsupervised, so it optimizes a criterion (variance) that has no formal connection to your label. Also worth naming: PCA assumes the mean and covariance describe the data usefully, which is a Gaussian-flavoured assumption, and it is sensitive to outliers because they inflate variance in their own direction.',
+        'Plot the rows as a cloud of points. The cloud is usually stretched in some direction rather than being a round ball. PCA slides the cloud so its middle sits at the origin, then finds the direction along which the points are most spread out, and describes each point by how far along that direction it sits. That is one number instead of however many columns you had. The direction with the most spread is the first principal component; the next one is the best direction perpendicular to it, and so on. You keep as many as you need and drop the rest. The share of the total spread a component captures is its explained variance ratio, and it is how you report what the compression cost. Concretely, on six two-column rows I can show one direction keeping 98% of the spread, so one number per row loses almost nothing.',
       isCaseBased: false,
     },
     {
-      question: 'Explain how PCA works mechanically, in the order you would draw it on a whiteboard.',
+      question: 'Why must you standardise before PCA, and when should you not?',
       answer:
-        'Centre the data (subtract the column means). Compute the covariance matrix C = XᵀX/(n−1) — entry (i,j) is how features i and j vary together. Take the eigenvectors of C: each is a direction, each has an eigenvalue equal to the variance along it. Sort by eigenvalue descending — that ordering IS PC1, PC2, PC3. Keep the top k eigenvectors as a d×k matrix W, and project: X_reduced = X_centred · W. Explained variance ratio of component k is λ_k / Σλ. In practice libraries skip forming C and run SVD on the centred X directly — the right singular vectors are the same eigenvectors, and it is numerically safer since forming XᵀX squares the condition number. The one-sentence version: PCA is the eigen-decomposition of the covariance matrix, and the eigenvectors are the axes of the data cloud.',
+        'PCA picks the direction of largest variance, and variance carries the units of the column. A salary in rupees has a variance in the hundreds of millions; an age in years has a variance near a hundred. That comparison is a contest between measuring units, not between informativeness, so the first component degenerates into a copy of the largest-unit column. On the raw wine dataset this is measurable: PC1 reports 99.81% of the variance and its largest weight is proline, the one column measured in the hundreds. Standardising, meaning centre each column and divide by its spread, brings all columns to the contest at the same size. The exception is when all columns are already the same physical unit and their relative sizes are real, such as pixel brightnesses or spectra, where scaling would inflate near-dead channels into equals. And fit the scaler on the training split only.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Is PCA a form of feature selection? If not, what would you use instead?',
+      answer:
+        'No, and the difference has practical consequences. Feature selection keeps a subset of your original columns and discards the others, so you can stop collecting them and you can still explain a decision in terms of a real quantity. PCA keeps all columns and replaces them with weighted mixtures, so every original column is still required at prediction time and no component has a name a person can use. It is a compressor that also removes correlation between columns, not a selector. If the goal is fewer data sources or an explainable model, use methods that keep real columns: L1 regularisation drives coefficients to exactly zero, univariate ranking by mutual information gives a cheap ordering, and permutation importance on a tree model ranks columns while accounting for interactions. If the goal is supervised dimensionality reduction with labels available, LDA finds directions that separate the classes rather than directions with the most spread.',
       isCaseBased: false,
     },
     {
       question: 'Case: a colleague reports that adding PCA lifted cross-validated accuracy from 0.81 to 0.94, but the deployed model scores 0.79. Debug it.',
       answer:
-        'First hypothesis, and usually correct: **leakage through the preprocessing fit**. If StandardScaler and PCA were fit on the whole dataset before splitting, every fold\'s "validation" rows contributed to the means, variances, and component directions — the CV score is contaminated while production genuinely sees unseen data. The fix is a Pipeline(StandardScaler, PCA, model) passed to cross_val_score, so both are refit inside each fold. Second hypothesis: n_components was tuned on the same CV that reported the score, so the 0.94 is an optimistic selection artifact — needs a nested CV or a held-out set. Third: distribution shift, where the component directions learned in training no longer describe production data (check by scoring production rows\' reconstruction error against training). The tell that separates them: leakage gives a gap immediately at deploy; drift gives a gap that grows over time.',
+        'The first hypothesis, and usually the right one, is leakage through the preprocessing step. If the scaler and PCA were fitted on the whole dataset before splitting, then every validation fold contributed to the column averages, the column spreads, and the component directions, so the validation rows were never unseen and the 0.94 is contaminated. Production genuinely sees new rows, hence 0.79. The fix is to put the scaler, PCA and the model into a single pipeline and pass that to cross-validation, so all three are refitted inside each fold. Second hypothesis: the number of components was chosen by looking at the same cross-validation that reported the score, which makes 0.94 an optimistic pick rather than an estimate; that needs a held-out set or nested cross-validation. Third: the input distribution shifted, so the directions learned in training no longer describe production data. The tell that separates them is timing. Leakage shows a gap immediately at deployment; drift shows a gap that grows over weeks.',
       isCaseBased: true,
     },
     {
-      question: 'How do you decide the number of components, and what would you tell a stakeholder?',
+      question: 'How do you decide how many components to keep, and what do you tell a stakeholder?',
       answer:
-        'Three tools, used together. (1) **Cumulative explained variance** — pick the smallest k reaching a stated threshold, commonly 95%; scikit-learn accepts n_components=0.95 directly. (2) **Scree plot** — plot the ratios and find the elbow where the curve flattens into rubble. (3) **The honest one: treat k as a hyperparameter** and tune it inside cross-validation against the metric you actually care about, since 95% variance is a rule of thumb with no connection to downstream accuracy. To a stakeholder I would say what it cost: "13 features became 10 for 95% of the variance" is a legitimate finding that PCA is *not* buying much here — the wine dataset does exactly that. Reporting a poor compression ratio honestly is better than forcing 2 components because they plot nicely.',
+        'Three tools. First, the running total of explained variance ratio: pick the smallest number of components reaching a stated share, commonly 95%, and scikit-learn accepts that share directly as n_components. Second, plot the shares in order and look for the point where the curve flattens out, and keep the components before it. Third, and most honest, treat the count as an ordinary hyperparameter and tune it inside cross-validation against the metric you actually care about, because 95% of variance has no guaranteed relationship with downstream performance. What I tell a stakeholder is the cost, not the flattery: on the wine dataset, 13 columns become 10 for 95% of the variance, which is a legitimate finding that PCA is not buying much here. Reporting a poor compression ratio is better than forcing two components because they plot nicely.',
       isCaseBased: false,
     },
     {
-      question: 'Why must you standardize before PCA, and is there ever a case where you should not?',
+      question: 'Case: a colleague ran t-SNE on customer data, saw six blobs, clustered on the t-SNE coordinates, and is presenting six customer segments tomorrow. What do you say?',
       answer:
-        'PCA maximizes variance, and variance carries the units of the column — so a feature in rupees (variance ~10⁸) beats one in years (variance ~10²) purely by measurement choice, and PC1 degenerates into a copy of the largest-unit column. Standardizing to mean 0, variance 1 makes components reflect shared structure rather than unit choice. The exception: when all features are already in the same physical unit and their *relative* magnitudes are genuinely meaningful — grayscale pixel intensities, spectra, or repeated readings of the same sensor. There, scaling each column to unit variance would amplify near-dead pixels into equal citizens and inject noise. Rule: same units and meaningful magnitudes, consider skipping; mixed units, always scale. And fit the scaler on the training split only.',
-      isCaseBased: false,
-    },
-    {
-      question: 'Can PCA be used as feature selection? What would you use instead?',
-      answer:
-        'No, and the distinction matters. Feature selection *keeps a subset of your original columns*; PCA *replaces all of them* with linear combinations, so you cannot drop a data source or explain a decision afterward. It is a decorrelating compressor, not a selector. Alternatives depending on the goal: for supervised dimensionality reduction, **LDA** projects to maximize class separation (at most C−1 dimensions for C classes); for keeping real columns, **L1/Lasso** drives coefficients to exactly zero, mutual information or ANOVA F-tests rank univariate relevance, and permutation importance on a tree ensemble ranks them accounting for interactions. If the requirement is "stop paying for this data feed", only true selection answers it.',
-      isCaseBased: false,
-    },
-    {
-      question: 'Case: a colleague ran t-SNE on customer data, saw six blobs, clustered on the t-SNE coordinates, and is presenting "six customer segments" tomorrow. What do you say?',
-      answer:
-        'Three problems, in order of severity. (1) **Never cluster on t-SNE coordinates.** The axes have no units and the algorithm distorts distances by design, so any distance-based method (k-means, DBSCAN) is optimizing against an artifact. Cluster in the original or PCA space, then use t-SNE only to *colour and display* those clusters. (2) **The blob count is not stable.** t-SNE is non-convex and randomly initialized, and perplexity strongly controls apparent granularity — perplexity 5 versus 50 can split one group into four. Rerun across seeds and perplexities; only structure that survives is worth presenting. (3) **Cluster sizes and gaps mean nothing**, so any claim like "segment 3 is our biggest and most distinct" is unsupported. What I would ship instead: cluster in the real feature space, validate with silhouette and business sense, check the segments differ on interpretable features, and use the t-SNE plot purely as the picture on the slide.',
+        'Three problems, worst first. One: do not cluster on t-SNE coordinates. Those two numbers were produced to make a readable picture, the method distorts distances deliberately, and any clustering method that measures distance is therefore optimising against an artefact. Cluster in the original columns, or in a PCA-reduced space, then use the picture only to colour and display what you found. Two: the number of blobs is not stable. The method starts from a random layout and its neighbourhood setting strongly controls apparent granularity, so a different seed or setting can turn one blob into four. Rerun across several and present only structure that survives. Three: blob sizes and the gaps between them carry no meaning, so a claim such as "segment three is our biggest and most distinct" is unsupported by the plot. What I would ship instead: cluster in the real feature space, check the resulting groups differ on columns a human can name, and keep the t-SNE picture purely as the illustration on the slide.',
       isCaseBased: true,
     },
     {
-      question: 'Compare PCA, t-SNE and UMAP — when do you reach for each?',
+      question: 'Explain Isolation Forest, and say why the idea is unusual.',
       answer:
-        'PCA: linear, deterministic, fast, invertible, and it has a transform() so new data maps into the same space — the only one of the three you may use as a preprocessing step feeding a model. Choose it for compression, decorrelation, and speed. t-SNE: non-linear, preserves local neighbourhoods, slow (roughly O(n log n) with Barnes-Hut but heavy in practice), stochastic, no meaningful transform for new points — visualization only. UMAP: same neighbourhood-preserving family, substantially faster, retains a bit more global structure, and does offer a transform() — but it is still a stochastic embedding with distorted distances, so treat it as visualization plus, at best, cautious downstream use. Common professional pipeline: PCA down to ~50 dimensions to kill noise and cost, then t-SNE or UMAP on that for the picture.',
+        'Picture the rows as dots. Pick a column at random, pick a random value in its range, and cut. Keep cutting inside whichever piece your dot is in, until that dot is alone. A dot in the middle of a crowd needs many cuts to be separated from its neighbours; a dot out on its own is fenced off after one or two. Repeat with about a hundred different random cutting sequences and average the count per row. Few cuts means anomalous. What is unusual is the inversion: almost every other method first builds a description of normal, a density or a boundary or a set of cluster centres, and then measures distance from it, which is expensive and requires assuming a shape. Isolation Forest goes at the anomalies directly and needs no distance measure, no density estimate, and no assumption about what normal looks like. It also runs in roughly n log n time and works on a small random subsample per tree, because a lone point is even easier to isolate in a small sample.',
       isCaseBased: false,
     },
     {
-      question: 'Explain Isolation Forest to a non-ML engineer, and say why the idea is unusual.',
+      question: 'Case: your fraud detector sends 500 alerts a day, analysts say nine in ten are useless, but it did catch last month\'s big incident. What do you change?',
       answer:
-        'Imagine cutting a scatter of points with random straight lines until each point sits alone in its own region. A point in the middle of a crowd needs many cuts before it is separated from its neighbours. A point sitting off by itself gets isolated after one or two. Count the cuts, average over a hundred random attempts: few cuts means anomaly. What is unusual is the inversion — every other approach first builds a model of "normal" (a density, a boundary, a cluster centre) and measures distance from it, which is expensive and requires assuming a shape. Isolation Forest targets the anomalies directly and needs no distance metric, no density estimate, and no assumption about normal. It runs in O(n log n), subsamples 256 rows per tree by default (anomalies are easier to isolate in small samples), and handles moderately high dimensions better than density methods.',
-      isCaseBased: false,
-    },
-    {
-      question: 'Isolation Forest, LOF, One-Class SVM — how do you choose?',
-      answer:
-        'Isolation Forest is the default: fast, O(n log n), few hyperparameters, no scaling requirement, degrades gracefully in higher dimensions. LOF wins when anomalies are **local** — a point sitting inside the global cloud but in a locally sparse pocket, which Isolation Forest can miss because global random cuts do not notice local density; the cost is neighbour searches (roughly O(n²) naively) and a k you must pick. One-Class SVM fits a boundary around the normal region and suits genuine **novelty detection** where training data is known-clean and small; it needs scaled features, is very sensitive to nu and gamma, and scales badly beyond a few thousand rows. Also name the boring baselines you would try first: robust z-scores or IQR per feature, and for time series a residual from a forecast. The tradeoff to state out loud: Isolation Forest gives you global outliers cheaply, LOF gives you local outliers expensively.',
-      isCaseBased: false,
-    },
-    {
-      question: 'Case: your fraud anomaly model sends 500 alerts a day; analysts say 9 in 10 are useless, but the model "found" the big incident last month. What do you change?',
-      answer:
-        'Diagnosis first: 10% precision is the contamination parameter set far above the true anomaly rate — the model is obliged to label a fixed fraction as anomalies whether or not that many are weird. Actions, in order. (1) Stop thresholding, start **ranking**: use score_samples and send the top N the team can actually review, so alert volume becomes a capacity decision rather than a modelling accident. (2) Measure **precision@K** on the reviewed alerts — that is the number the analysts feel — and track it weekly. (3) Harvest the analyst verdicts as labels; within a few weeks you have enough to evaluate with PR-AUC and possibly train a supervised model for the known fraud types, keeping the unsupervised detector to catch new ones. (4) Check for a feature that trivially explains the false alarms (a new product line, a batch job at 3am) and either add it as context or exclude the segment. Tradeoff to name explicitly: lowering alert volume raises precision and lowers recall — the business has to state what a missed fraud costs versus an analyst hour.',
+        'The diagnosis is that the model is thresholding rather than ranking, and the threshold assumes a much higher anomaly rate than is real, so it is obliged to label a fixed fraction of rows as anomalies whether or not that many are odd. Actions in order. First, stop thresholding and start ranking: take the raw scores, sort them, and send the top N where N is what the team can actually review in a day. Alert volume becomes a capacity decision rather than a modelling accident. Second, measure the fraction of those top N that turn out real, and track it weekly, because that is the number the analysts feel. Third, keep the analyst verdicts as labels; after a few weeks you have enough to evaluate properly and possibly to train a supervised model for the fraud types you now know, while the unsupervised detector stays on to catch new ones. Fourth, look for a mundane explanation of the false alarms, such as a new product line or a nightly batch job, and either add it as context or exclude that segment. The trade-off to say out loud: cutting alert volume raises precision and lowers recall, so somebody has to state what a missed fraud costs against an hour of analyst time.',
       isCaseBased: true,
-    },
-    {
-      question: 'Define support, confidence and lift, and explain why a high-confidence rule can be worthless.',
-      answer:
-        'Support(A) = fraction of baskets containing A (how common at all). Confidence(A⇒B) = support(A∪B)/support(A) (given A, how often B). Lift(A⇒B) = confidence/support(B) (how much more often than baseline). Confidence alone is misleading because it ignores how popular B already is: if bread appears in 80% of all baskets, then "nappies ⇒ bread" with 80% confidence has lift 1.00 — exactly independence, zero information — yet it would top any list ranked by confidence. Lift > 1 means genuine association, = 1 means independent, < 1 means the items repel. Worked example: 1,000 baskets, nappies 200, beer 300, both 100 → confidence 0.50, lift 0.50/0.30 = 1.67, a real association. Closing note that shows judgment: Apriori is largely legacy — it explodes on big catalogues, ignores quantity, price and time, and modern systems use item embeddings and collaborative filtering instead.',
-      isCaseBased: false,
     },
   ],
   flashcards: [
-    { front: 'PCA in one sentence', back: 'Rotate the axes to the directions of maximum variance (eigenvectors of the covariance matrix, ranked by eigenvalue), then keep the top k and project.' },
-    { front: 'PC1 vs PC2', back: 'PC1 = direction of maximum variance. PC2 = next most variance, forced orthogonal to PC1. And so on, always orthogonal, always decreasing.' },
-    { front: 'Explained variance ratio', back: 'λ_k / Σλ — component k\'s share of total variance. Sums to 1, always decreasing. Scree plot = these in order; common rule is keep 95% cumulative.' },
-    { front: 'Why standardize before PCA', back: 'Variance carries the column\'s units, so the biggest-unit feature wins by default. Unscaled wine data: PC1 = 99.81% of variance and it was just the proline column.' },
-    { front: 'PCA\'s four assumptions', back: 'Structure is linear; high variance = high information; scale is meaningful; interpretability is expendable. Plus: it is unsupervised — it never sees y.' },
-    { front: 'The PCA counterexample', back: 'Loud noise feature + quiet perfectly-separating feature. PCA(1) keeps 99.66% of variance, accuracy falls 0.955 → 0.532. Variance ≠ class signal. Use LDA when labels exist.' },
-    { front: 't-SNE: what is NOT meaningful', back: 'Cluster sizes, distances between clusters, and any single run. Perplexity and seed change the picture. Never fit a model or cluster on t-SNE coordinates.' },
-    { front: 'UMAP vs t-SNE', back: 'UMAP: faster, keeps a bit more global structure, has transform() for new points. Both are still neighbourhood-preserving visualizations with distorted distances.' },
-    { front: 'Isolation Forest', back: 'Random feature, random split, repeat until each point is alone. Anomalies isolate in FEW cuts because they sit alone. Short average path length = anomaly. O(n log n), no density model.' },
-    { front: 'Support / confidence / lift', back: 'support(A)=baskets with A ÷ N. confidence(A⇒B)=support(A∪B)/support(A). lift=confidence/support(B). Only lift>1 means real association; lift=1 is independence.' },
+    { front: 'PCA in one sentence', back: 'Centre the cloud, find the direction the points are most spread along, and describe each row by how far along that direction it sits. Repeat perpendicular to it for the next component.' },
+    { front: 'Projection = which arithmetic', back: 'The dot product with a length-1 direction: multiply matching parts, add. (4.0, 3.0) onto (0.6, 0.8) gives 4.8. The leftover walk to the ruler, here length 1.4, is what you throw away.' },
+    { front: 'Why centre before PCA', back: 'Spread must be measured around the middle of the data. Without centring you measure spread around (0, 0), so the first direction points at where the cloud sits instead of describing its shape.' },
+    { front: 'Why scale before PCA', back: 'Variance carries the column\'s units, so the biggest-unit column wins by default. Raw wine data: PC1 keeps 99.81% of the variance and is essentially the proline column, measured in the hundreds. Scaled, the same data needs 10 of 13 components for 95%.' },
+    { front: 'Explained variance ratio', back: 'Spread along a component divided by the total spread of the cloud. Between 0 and 1, always decreasing across components, and it describes the cloud as a whole, never any single row.' },
+    { front: 'What PCA is NOT', back: 'Not feature selection: every component mixes all original columns, so you still have to collect them all. Not interpretable: with many columns a component is a nameless mixture. And it never sees your target.' },
+    { front: 't-SNE and UMAP, honestly', back: 'For looking at data, not for feeding a model. Distances between blobs mean nothing, blob sizes mean nothing, and a different seed or setting redraws the picture.' },
+    { front: 'Isolation Forest', back: 'Cut at random columns and random values until a row is alone; count the cuts; average over about 100 tries. Few cuts means anomalous. No distance, no density, no labels. Measured: three planted odd rows ranked as the three most anomalous of 303.' },
   ],
   mindmapMarkdown: `- PCA, t-SNE & Anomaly Detection
-  - Why reduce dimensions
-    - Storage & speed
-    - Curse of dimensionality (distances collapse)
-    - Visualization (humans see 2-D)
-    - Noise removal
-    - Decorrelation
-  - PCA: the idea
-    - PC1 = max variance direction
-    - PC2 orthogonal, next most
-    - Project onto top k
-    - Eigenvectors of covariance (SVD in practice)
-  - Choosing k
-    - Explained variance ratio
-    - Scree plot & elbow
-    - Keep 95% cumulative
-    - Or tune k inside CV
-  - PCA gotchas
-    - Assumes LINEAR structure
-    - High variance ≠ high information
-    - Scale-sensitive → standardize first
-    - Interpretability lost
-    - Unsupervised → can discard the class signal
-    - Fix with labels: LDA
-  - When NOT to use PCA
-    - Need explainable features
-    - Tree ensembles
-    - Non-linear structure
-  - t-SNE / UMAP
-    - Visualization ONLY
-    - Preserve local neighbours
-    - Sizes & gaps meaningless
-    - Perplexity & seed change picture
-    - UMAP: faster, has transform()
+  - The six-student cloud
+    - two numbers per row = two dimensions
+    - points lean along one direction
+    - goal: one number per row, small loss
+  - The one move: projection
+    - direction = arrow of length 1
+    - projection = dot product with it
+    - (4.0, 3.0) onto (0.6, 0.8) = 4.8
+    - leftover walk of length 1.4 is what is lost
+  - Two things PCA needs
+    - centring: spread must be measured around the middle
+    - scaling: variance carries the column's units
+  - Scoring a direction
+    - variance = average of squared centred values
+    - total spread is fixed: 4.84 + 7.077 = 11.917
+    - explained variance ratio = share of that total
+  - PC1 = winner of the search
+    - angle search finds (0.629, 0.777)
+    - keeps 98.08% of the spread
+    - PC2 is the best perpendicular direction
+    - reconstruction misses each point by 0.2 to 0.5
+  - What PCA is not
+    - not feature selection: all columns still needed
+    - components are not interpretable
+    - never looks at the target
+  - The classic mistake
+    - unscaled wine: PC1 = 99.81% = proline
+    - scaled: 10 of 13 components for 95%
+  - t-SNE and UMAP
+    - for looking, not for feeding a model
+    - distances between blobs mean nothing
+    - blob sizes mean nothing
+    - seed and settings change the picture
   - Anomaly detection
-    - Rare, unlabeled, "different" not a class
-    - Isolation Forest: few random cuts = outlier
-    - contamination = threshold, not quality
-    - LOF (local density), One-Class SVM (clean data)
-    - Evaluate: precision@K, injected anomalies, stability
-  - Association rules
-    - Itemsets, Apriori pruning
-    - support / confidence / lift
-    - Beer & nappies: lift 1.67
-    - Lift = 1 → worthless rule
-    - Legacy: embeddings & recommenders won`,
+    - anomaly = row unlike the rest, rare and unlabelled
+    - z-score: simple, one column, and outliers mask themselves
+    - measured: z of 3.0 with the outlier in, 84.9 with it out
+    - Isolation Forest: few random cuts = anomalous
+    - rank and send the top N a human can review
+  - Beyond the basics
+    - eigenvectors of the covariance matrix, SVD in practice
+    - LDA when labels exist, kernel PCA when structure curves
+    - LOF for locally odd rows, One-Class SVM for clean data
+    - evaluate by planted anomalies, precision on top N, stability`,
 }
 
 export default m

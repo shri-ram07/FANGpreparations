@@ -13,7 +13,7 @@ const m: Module = {
     'You have seen a Python list, a for loop, an if statement, and list slicing like myList[0:4]',
     'Everything else used here, including every sklearn function call, is explained on the line where it appears',
   ],
-  estMinutes: 55,
+  estMinutes: 60,
   sections: [
     {
       type: 'intuition',
@@ -392,6 +392,7 @@ print('best on validation:', best)
         11: 'Walk through every entry.',
         12: 'r[0] is the score, position 0 of the tuple. If this entry scored higher than the current champion...',
         13: '...it becomes the new champion. A plain loop, deliberately, instead of a sort with a key function.',
+        14: 'Confirm how many settings were actually tried: 8 depths times 5 leaf sizes is 40.',
         15: 'Print the winner. It scored 0.900 on validation, using max_depth=4 and min_samples_leaf=3.',
       },
     },

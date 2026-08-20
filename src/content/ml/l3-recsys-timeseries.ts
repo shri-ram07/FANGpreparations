@@ -6,122 +6,500 @@ const m: Module = {
   level: 3,
   title: 'Recommendation Systems & Time-Series Basics',
   whyItMatters:
-    'Two topics that pay the bills at every FAANG: what to show next, and what happens next. You will not be asked to derive them — you will be asked to design one on a whiteboard in 20 minutes. This module gives you the map: the vocabulary, the two-stage architecture real systems use, the metrics that are not RMSE, and the two time-series rules that separate a working forecast from a beautiful backtest that dies in production.',
-  estMinutes: 50,
+    'Two questions show up in almost every product: what should we show this person next, and what will this number be next week. This module builds both from nothing. You will fill in a missing rating in a five-by-five table with a calculator, and you will watch a forecast score 0.75 error one way and 2.5 the other way on the exact same data, because of one choice about how the test set was picked.',
+  assumes: [
+    'You have seen a Python list, a for loop, an if statement and a function',
+    'You know what an average is, and what a square root is',
+    'Read the Math module *Vectors & the Dot Product (= Similarity)* first — cosine similarity is built there, and used here',
+    'No recommender or forecasting background is needed. Every term used here is defined here.',
+  ],
+  estMinutes: 48,
   sections: [
     {
       type: 'intuition',
-      title: 'Two shop assistants',
-      md: `You walk into a bookshop holding a crime novel. Two assistants offer help.
+      title: 'Five people, five films, some blanks',
+      md: `Here is the whole starting point of recommendation, written out. Five people gave star ratings, 1 to 5, to five films. A dash means that person never rated that film.
 
-- **Assistant A reads the book.** Genre, author, blurb, page count. "You like Nordic crime? Here are four more Nordic crime novels." That is **content-based** filtering — it works from ITEM features.
-- **Assistant B remembers everyone.** "People who bought that one also walked out with this cookbook. No idea why. They just do." That is **collaborative filtering** — it works from BEHAVIOUR, and it never opens the book.
-- Both are real systems. Both fail in different, predictable ways.
-- Almost every production recommender is a blend of the two plus a ranker on top. Knowing which half is talking is most of the interview.`,
+- **Ana**: Heat 5, Speed 4, Amelie 1, Chungking –, Ronin 4
+- **Bo**: Heat 4, Speed 5, Amelie –, Chungking 1, Ronin 4
+- **Cal**: Heat 1, Speed –, Amelie 5, Chungking 4, Ronin 1
+- **Dee**: Heat –, Speed 1, Amelie 4, Chungking 5, Ronin 2
+- **Eve**: Heat 5, Speed –, Amelie 1, Chungking 1, Ronin 4
+
+That grid has a name: the **user-item matrix**. Rows are people, columns are things, each cell is what that person did with that thing. Twenty of the twenty-five cells are filled here. Real ones are nowhere near that full — a shop with a million products and a million customers has maybe one cell in ten thousand filled. That emptiness has a name too: **sparsity**, the fraction of cells that are blank.
+
+One concrete job for the rest of this half: **Eve has not rated Speed. Guess what she would give it.** We will finish that guess by hand.`,
     },
     {
       type: 'intuition',
-      title: 'Content-based: recommend things that look alike',
-      md: `Turn every item into a feature vector — genre flags, author, price bucket, TF-IDF of the description, an image embedding. Build a profile for the user by averaging the items they liked. Recommend the nearest items to that profile.
+      title: 'Two ways to fill a blank',
+      md: `There are two completely different ways to guess Eve's missing number, and every real system is a mix of them.
 
-- **Cold-start friendly for new items.** A film uploaded 5 minutes ago has genre and cast, so it is recommendable immediately. No CF method can say that.
-- **Cold-start friendly for a new user who states a preference** — one onboarding tap ("I like sci-fi") gives you a profile.
-- **Explainable for free**: "because you watched a heist movie."
-- **Failure 1 — the filter bubble.** It only ever recommends more of the same. It cannot discover that crime readers love a certain cookbook, because nothing in the features connects them.
-- **Failure 2 — you need good item features.** Garbage metadata, garbage recommendations. On a marketplace with seller-written titles, this is the actual bottleneck.`,
+- **Content-based filtering** looks at what the item *is*. Speed is an action film from 1994 starring Keanu Reeves. Eve rated another 1990s action film, Heat, a 5. So predict high. It uses only item descriptions, never other people.
+- **Collaborative filtering** looks at what people *did*. It never opens the film, never reads a genre tag. It only sees the grid of numbers above and asks: which columns move together, or which rows look alike?
+- Content-based can recommend a film uploaded five minutes ago, because a film has a genre the moment it exists. Collaborative filtering cannot — a brand-new film has an empty column.
+- Collaborative filtering can find links no description would ever reveal, like crime readers reliably buying one particular cookbook. Content-based cannot, because nothing in the text connects them.
+- The rest of this half does collaborative filtering, because it is the part with actual arithmetic in it.`,
     },
     {
       type: 'intuition',
-      title: 'Collaborative filtering: recommend what similar people did',
-      md: `Forget the item entirely. You have a giant table: rows = users, columns = items, cells = interactions. That is all CF ever sees.
+      title: 'Two directions: user-user and item-item',
+      md: `Collaborative filtering comes in two flavours, and they are the same idea pointed at rows or at columns.
 
-- **User-based:** find users whose interaction pattern looks like yours, recommend what they liked and you have not seen.
-- **Item-based:** find items that get consumed by the same people, recommend items similar to what you just consumed.
-- **Superpower:** it finds *surprising* cross-genre hits. Behaviour encodes taste that no metadata field ever will.
-- **Second superpower:** zero item features needed. It works on products with nothing but an ID.
-- **Failure 1 — cold start, both ends.** New user: no row, no neighbours. New item: no column, invisible forever.
-- **Failure 2 — popularity bias.** The blockbuster co-occurs with everything, so it gets recommended to everyone, which makes it co-occur with even more. Long-tail items starve.`,
+- **User-user**: find people whose row of ratings looks like Eve's row, then recommend what those people liked and Eve has not seen. Ana and Eve rated Heat 5 and 4, Amelie 1 and 1, Ronin 4 and 4 — very similar rows. Ana gave Speed a 4, so predict Eve will like Speed.
+- **Item-item**: find columns that move together. The Speed column and the Ronin column go up and down on the same people. Eve rated Ronin a 4, so predict she rates Speed near 4 too.
+- Both reach the same answer here. Industry mostly ships item-item, for one plain reason: **item relationships hold still**. "People who buy a printer buy toner" is true this year and next year, so you can compute all the item-item numbers overnight and just look them up when a request arrives. A person's taste changes month to month, so user-user numbers go stale and have to be recomputed constantly.
+- There are also usually far more users than items, so the item-item table is the smaller one to store.
+
+We will do item-item, on columns.`,
     },
     {
-      type: 'note',
-      md: `**Why Amazon shipped item-based, not user-based.** Two reasons, and they are the answer to a very common interview question. (1) **Stability**: your taste drifts week to week, but "people who buy a printer buy toner" is true for years — so item-item similarities can be computed offline overnight and just looked up at request time. (2) **Shape**: the number of users usually dwarfs the number of items, and the user-user similarity matrix has to be rebuilt as users act. Item-item is smaller and stiller. Precompute what does not move.`,
+      type: 'intuition',
+      title: 'How alike are two columns? Cosine, by hand',
+      md: `To compare two columns we need one number for "these move together". That number is **cosine similarity**, and you already built it in the Math module *Vectors & the Dot Product (= Similarity)*: multiply the two lists position by position, add up the products, then divide by the length of each list. It comes out near 1 when the two point the same way and near 0 when they have nothing in common.
+
+Take the Speed column and the Ronin column, reading top to bottom (Ana, Bo, Cal, Dee, Eve). A blank becomes 0 — we will come back to why that choice is not innocent.
+
+- Speed = 4, 5, 0, 1, 0. Ronin = 4, 4, 1, 2, 4.
+- Multiply position by position and add: (4×4) + (5×4) + (0×1) + (1×2) + (0×4) = 16 + 20 + 0 + 2 + 0 = **38**.
+- Length of Speed: square each number, add, take the square root. 16 + 25 + 0 + 1 + 0 = 42, and √42 = **6.481**.
+- Length of Ronin: 16 + 16 + 1 + 4 + 16 = 53, and √53 = **7.280**.
+- Divide: 38 ÷ (6.481 × 7.280) = 38 ÷ 47.18 = **0.805**.
+
+0.805 out of a maximum of 1. Speed and Ronin are strongly linked, and no genre tag was involved — only the fact that the same people rated both highly.`,
     },
     {
       type: 'code',
       lang: 'python',
-      title: 'Item-item collaborative filtering in one matrix product',
-      code: `import numpy as np
+      title: 'Part 1: the table, and pulling out one column',
+      code: `users = ['Ana', 'Bo', 'Cal', 'Dee', 'Eve']
+items = ['Heat', 'Speed', 'Amelie', 'Chungking', 'Ronin']
+R = [[5, 4, 1, 0, 4],
+     [4, 5, 0, 1, 4],
+     [1, 0, 5, 4, 1],
+     [0, 1, 4, 5, 2],
+     [5, 0, 1, 1, 4]]
 
-# rows = users, cols = movies, 1 = watched. Implicit feedback: no ratings, no dislikes.
-R = np.array([[1, 1, 0, 0, 1],      # Ana
-              [1, 1, 0, 0, 0],      # Bo
-              [0, 0, 1, 1, 0],      # Cal
-              [0, 1, 1, 1, 0]], dtype=float)   # Dee
-movies = ['Heat', 'Speed', 'Amelie', 'Chungking', 'Ronin']
+def column(j):
+    out = []
+    for row in R:
+        out.append(row[j])
+    return out
 
-norm = np.linalg.norm(R, axis=0)                  # length of each ITEM column
-S = (R.T @ R) / np.outer(norm, norm)              # cosine similarity, item x item
-np.fill_diagonal(S, 0)                            # an item never recommends itself
+print(column(1))
+print(column(4))
 
-seed = 0                                          # user just watched Heat
-for j in np.argsort(-S[seed])[:3]:
-    print(f'watched {movies[seed]:<6} -> {movies[j]:<10} sim={S[seed, j]:.2f}')
-
-# watched Heat   -> Speed      sim=0.82
-# watched Heat   -> Ronin      sim=0.71
-# watched Heat   -> Amelie     sim=0.00`,
+# ---- real output ----
+# [4, 5, 0, 1, 0]
+# [4, 4, 1, 2, 4]`,
       annotations: {
-        3: 'A 1 means watched. A 0 means EITHER disliked OR never seen — implicit feedback cannot tell those two apart. That ambiguity is the central difficulty of the whole field.',
-        11: 'R.T @ R counts how many users consumed both items; dividing by the column lengths turns raw counts into cosine similarity. The entire item-item model is one matrix product.',
-        12: 'Skip this and every item is its own best recommendation at similarity 1.0, and every list is useless.',
-        19: 'Ronin is linked to Heat only through Ana, who happened to watch both. No genre tag, no description, no features at all — pure behaviour. That is the CF magic trick, and its whole cost is that Ana had to exist first.',
+        1: 'The five people, in row order. This list is only for printing names later; the numbers do the work.',
+        2: 'The five films, in column order. items[1] is Speed, items[4] is Ronin. Remember Python counts from 0.',
+        3: 'R is a list of lists: one inner list per person, five numbers each. This line is Ana\'s row: Heat 5, Speed 4, Amelie 1, Chungking blank, Ronin 4.',
+        4: 'Bo\'s row. The 0 in position 2 is Bo\'s blank for Amelie, not a rating of zero.',
+        5: 'Cal\'s row. Cal is the opposite kind of viewer: low on the action films, high on Amelie and Chungking.',
+        6: 'Dee\'s row, also an arthouse viewer.',
+        7: 'Eve\'s row. Position 1 (Speed) is the 0 we are going to replace with a prediction.',
+        9: 'A function that pulls out column number j — that is, what all five people gave to one film.',
+        10: 'Start with an empty list to collect into.',
+        11: 'Walk the rows one at a time. Each row is one person\'s five numbers.',
+        12: 'Take position j out of that person\'s row and add it to the collection. After five rows, out holds the whole column.',
+        13: 'Hand the finished column back to whoever called the function.',
+        15: 'column(1) is the Speed column. The printed [4, 5, 0, 1, 0] is exactly the list we used by hand above.',
+        16: 'column(4) is the Ronin column, [4, 4, 1, 2, 4]. Same numbers as the hand calculation.',
+      },
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Part 2: cosine similarity, and every item compared to Speed',
+      code: `def cosine(a, b):
+    dot = 0.0
+    la = 0.0
+    lb = 0.0
+    for i in range(len(a)):
+        dot = dot + a[i] * b[i]
+        la = la + a[i] * a[i]
+        lb = lb + b[i] * b[i]
+    return dot / ((la ** 0.5) * (lb ** 0.5))
+
+speed = column(1)
+for j in [0, 2, 3, 4]:
+    print(items[j], round(cosine(speed, column(j)), 3))
+
+# ---- real output ----
+# Heat 0.754
+# Amelie 0.188
+# Chungking 0.235
+# Ronin 0.805`,
+      annotations: {
+        1: 'Takes two equal-length lists of numbers and returns one similarity number between 0 and 1.',
+        2: 'dot will collect the sum of the position-by-position products. Start at zero. Written 0.0 so the result stays a decimal.',
+        3: 'la will collect the squares of the first list, on the way to its length.',
+        4: 'lb does the same for the second list.',
+        5: 'range(len(a)) gives 0, 1, 2, 3, 4 — one step per person in the column.',
+        6: 'Add this person\'s contribution to the product sum. After five passes this is the 38 we computed by hand.',
+        7: 'Add this person\'s squared value for list a. After five passes this is 42.',
+        8: 'Same for list b. After five passes this is 53.',
+        9: '** 0.5 is a square root: 42 ** 0.5 is 6.481. Divide the product sum by the two lengths multiplied together, and that is cosine similarity.',
+        11: 'Grab the Speed column once, so we do not rebuild it inside the loop.',
+        12: 'Loop over the other four columns: 0 Heat, 2 Amelie, 3 Chungking, 4 Ronin. We skip 1 because comparing Speed with itself always gives 1 and tells us nothing.',
+        13: 'round(x, 3) keeps three decimals so the output is readable. Ronin 0.805 matches the hand calculation exactly, and the two arthouse films score near zero.',
       },
     },
     {
       type: 'intuition',
-      title: 'Matrix factorization: squeeze the giant empty table',
-      md: `Netflix had ~500,000 users and ~17,000 films. That table has 8.5 billion cells and roughly **99% of them are empty**. You cannot store it, and neighbour search over it is slow and noisy.
+      title: 'Worked case: filling in Eve\'s blank by hand',
+      md: `Now use those four similarity numbers. The rule is a **weighted average**: take each film Eve *did* rate, weight her rating by how similar that film is to Speed, and divide by the total weight. Films close to Speed get a loud vote, films unlike Speed get a quiet one.
 
-- Trick: assume the table is *low rank* — that a handful of hidden factors explain most of it.
-- Factor it into two skinny matrices: a **user matrix** (one short vector per user) and an **item matrix** (one short vector per item), say 50 numbers each.
-- A predicted rating is then just the **dot product** of the user vector and the item vector. High dot product = they point the same way = match.
-- The factors are learned, not designed. One may end up meaning "gritty vs cosy", another "old vs new" — nobody labelled them.
-- You already know this machine. The math subject module *Vectors & the Dot Product (= Similarity)* is exactly this operation, and an item vector here IS an embedding in the GenAI sense: a learned dense vector where geometric closeness means semantic closeness.`,
+Eve's ratings, paired with each film's similarity to Speed:
+
+- Heat: rating 5, similarity 0.754 → 5 × 0.754 = 3.770
+- Amelie: rating 1, similarity 0.188 → 1 × 0.188 = 0.188
+- Chungking: rating 1, similarity 0.235 → 1 × 0.235 = 0.235
+- Ronin: rating 4, similarity 0.805 → 4 × 0.805 = 3.220
+
+Add the products: 3.770 + 0.188 + 0.235 + 3.220 = **7.415**. Add the weights: 0.754 + 0.188 + 0.235 + 0.805 = **1.983**. Divide: 7.415 ÷ 1.983 = **3.74**.
+
+So the system predicts Eve would give Speed about 3.7 stars, and Speed goes on her list. Sanity check the number: Eve's two loud votes were Heat at 5 and Ronin at 4, so an answer between 4 and 5 pulled down a little by two quiet 1s is exactly where it should land. If the weighted average had come out at 4.9 or 1.2, something would be wrong with the arithmetic.`,
     },
     {
-      type: 'math',
-      intro: 'Matrix factorization in two lines. R is the user-item matrix, k is the number of hidden factors (typically 20–200).',
-      latex: [
-        'R_{(m \\times n)} \\approx P_{(m \\times k)} \\, Q^{T}_{(k \\times n)} \\qquad \\hat{r}_{ui} = p_u \\cdot q_i = \\sum_{f=1}^{k} p_{uf} \\, q_{if}',
-        '\\min_{P,Q} \\sum_{(u,i) \\in \\mathcal{O}} \\left( r_{ui} - p_u \\cdot q_i \\right)^2 + \\lambda \\left( \\lVert p_u \\rVert^2 + \\lVert q_i \\rVert^2 \\right)',
-        '\\mathcal{O} = \\text{ONLY the observed cells. The missing 99\\% is not a zero — it is a question mark.}',
-      ],
+      type: 'code',
+      lang: 'python',
+      title: 'Part 3: the same weighted average in code',
+      code: `eve = 4
+num = 0.0
+den = 0.0
+for j in [0, 2, 3, 4]:
+    s = cosine(speed, column(j))
+    num = num + s * R[eve][j]
+    den = den + s
+print(round(num, 3), round(den, 3))
+print('predicted rating for Eve on Speed:', round(num / den, 2))
+
+# ---- real output ----
+# 7.415 1.983
+# predicted rating for Eve on Speed: 3.74`,
+      annotations: {
+        1: 'Eve is row 4 of R (rows go 0 Ana, 1 Bo, 2 Cal, 3 Dee, 4 Eve).',
+        2: 'num will collect the top of the fraction: each rating multiplied by its similarity.',
+        3: 'den will collect the bottom: the similarities on their own.',
+        4: 'The four films Eve actually rated. Speed, column 1, is the blank we are filling.',
+        5: 'How similar this film is to Speed — the same function and the same numbers as part 2.',
+        6: 'R[eve][j] is Eve\'s rating of film j. Multiply it by the similarity and add it to the top of the fraction.',
+        7: 'Add the bare similarity to the bottom of the fraction. Dividing by this total is what keeps the answer on the 1-to-5 scale.',
+        8: 'The printed 7.415 and 1.983 are the two hand-computed totals, matching to three decimals.',
+        9: '7.415 divided by 1.983 is 3.74 — the prediction. That is the complete item-item recommender: one similarity function and one weighted average.',
+      },
     },
     {
       type: 'note',
-      md: `Two details that sound small and are not. **(1)** The sum runs over observed cells only — treating unseen items as rating 0 would teach the model that everything unwatched is hated. **(2)** The regularizer λ is doing heavy lifting: with 99% of the table missing, an unregularized factorization memorizes the few cells it has. Same L2 penalty as Ridge, same reason. Fitting is done with SGD (one observed cell at a time) or ALS (freeze P, solve Q, freeze Q, solve P — trivially parallel, which is why Spark shipped it).`,
+      md: `**The 0 we quietly told a lie with.** We put 0 in every blank cell, so a film nobody rated looks like a film everybody hated. That is the difference between two kinds of data. **Explicit feedback** is a rating the person deliberately gave: stars, thumbs up. It is clean but rare — most people never rate anything. **Implicit feedback** is what the system watched them do: clicks, watch time, add-to-cart. It is everywhere and free, but it has no negatives. A film you did not click might be one you hated or one you never scrolled past, and no amount of data will separate those two. Real systems subtract each user\'s average rating before comparing columns, or weight unrated cells as weak, low-confidence negatives. Both are patches on the same hole.`,
     },
     {
       type: 'intuition',
-      title: 'Explicit vs implicit feedback — and why stars lost',
-      md: `**Explicit** = the user deliberately grades the item: 5 stars, thumbs up. **Implicit** = the system watches: clicks, watch-time, add-to-cart, replays, skips.
+      title: 'Cold start: the case with no numbers at all',
+      md: `**Cold start** is the situation where collaborative filtering has nothing to work with, because a row or a column is empty.
 
-- Explicit data is clean and rare. Fewer than 1 in 100 users rate anything, and the ones who do are the extremes — furious or delighted. Biased sample, tiny volume.
-- Implicit data is noisy and everywhere. Every session produces hundreds of signals for free. Real systems run on it.
-- **The no-negative-signal problem:** a click is a positive. But a non-click is ambiguous — did they dislike it, or never scroll far enough to see it? You cannot tell.
-- Standard fixes: treat unobserved items as **weak negatives** with a low confidence weight, or **sample** negatives randomly per training step. Both are approximations you should be able to name.
-- Watch-time-style signals also need care: a 10-second view of a 10-second clip is a triumph; of a 2-hour film, a rejection. Normalize by item length, or you will build a machine that recommends short things.`,
+- **New user.** Someone signs up this second. Their row is blank, so no similar row exists and no weighted average can be computed.
+- **New item.** A film is added today. Its column is blank, so it is similar to nothing and can never be recommended — which means it never gets rated, which means its column stays blank. It is stuck.
+- The standard answers, in the order you would ship them: show popular items to a new user, ask them to tap three interests during signup, use content features (genre, description, image) so a new item is reachable on day one, and deliberately show unproven items to a small slice of traffic so they can earn some data.
+- That last one matters more than it looks. If you only ever show what already has ratings, cold start is permanent by construction.`,
     },
     {
       type: 'intuition',
-      title: 'How a real recommender actually runs: two stages',
-      md: `The honest architecture, the one YouTube and Netflix describe in their papers. It exists for one reason: **arithmetic**.
+      title: 'Matrix factorisation, in plain words',
+      md: `The weighted average above compared columns directly. That gets slow and noisy when the table is a million by a million and almost entirely blank. **Matrix factorisation** is the standard fix, and the whole idea fits in three lines.
 
-- You have millions of items and about 100 milliseconds. A good ranking model costs roughly a millisecond per item. Scoring the whole catalogue takes hours. Dead on arrival.
-- So split the job by cost. **Stage 1, candidate generation (retrieval):** something cheap — a dot product against a precomputed embedding index, plus dumb-but-strong sources like your subscriptions and what is trending — cuts millions to a few hundred.
-- **Stage 2, ranking:** now that only hundreds survive, you can afford an expensive model with hundreds of features per (user, item) pair, predicting several things at once (click, finish, like).
-- Stage 1 optimizes **recall** — do not lose the good stuff. Stage 2 optimizes **precision of the order** — put the best on top.
-- Step through the budget below.`,
+- Give every user a short list of numbers — say 20 of them — and every item its own short list of 20 numbers.
+- To predict a rating, multiply the user's 20 numbers by the item's 20 numbers position by position and add them up. That is the dot product again, the same operation as in the cosine above without the dividing step.
+- Choose all those numbers so that, on the cells you *do* know, the dot product comes out close to the real rating. That fitting is ordinary gradient descent, the same procedure as any other model you have trained.
+
+Nobody decides what the 20 numbers mean. After training, one of them often turns out to track something like "gritty versus gentle" and another "old versus new", but that is discovered, not designed. One rule you should say out loud: the fitting only ever looks at the filled cells. Feed it the blanks as zeros and you teach it that everything unwatched is hated.`,
+    },
+    {
+      type: 'intuition',
+      title: 'How you score a recommender',
+      md: `The obvious score is: how far off were the predicted ratings? Eve's predicted 3.74 versus whatever she really gives Speed. That is a bad score, for one concrete reason.
+
+- Eve is shown a **list of ten films**. She never sees a predicted rating. Being right about 3.74 versus 3.9 on a film that never appears on her screen earns nothing.
+- What matters is which items reached the top of the list. So the scores to use are the ranking ones: how many of the ten shown were actually good, and whether the good ones landed near the top rather than at position ten.
+- Those are built properly in the Metrics module *Ranking Metrics: Precision@K, MAP & NDCG*. Go there for the definitions and the arithmetic; the only sentence to carry back here is that rating accuracy and ranking quality are different things, and the product only feels the second one.
+- Two more numbers worth tracking that no accuracy score contains: how much of the catalogue ever gets shown to anybody, and how varied one list is. A system that recommends the same fifty blockbusters forever can look excellent on every offline number.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Switching topics: what a time series is',
+      md: `Second half, fresh start. A **time series** is a list of numbers where each one is stamped with a time, and the order is part of the data. Here are twelve days of sales from a small shop:
+
+**10, 12, 14, 16, 18, 21, 23, 25, 28, 30, 32, 35** — day 1 through day 12.
+
+- The **trend** is the slow direction the numbers are drifting. Here it is upward, roughly +2.3 per day on average: from 10 to 35 across eleven steps is 25 ÷ 11.
+- **Seasonality** is a pattern that repeats on a fixed clock: higher every Saturday, higher every December, higher every day at lunchtime. It is not "sometimes it goes up" — it is a repeat with a known period. This twelve-day series is too short to show one, but real daily sales almost always have a weekly one.
+- Whatever is left after removing the trend and the repeating pattern is the leftover wobble: one-off promotions, an outage, plain noise.
+- The one thing that makes this data different from every other table you have modelled: the rows are **not interchangeable**. Shuffle the rows of a table of house prices and nothing is lost. Shuffle these twelve numbers and the trend is gone, because the trend was entirely in the order.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Turning time into ordinary columns: lags and rolling averages',
+      md: `Normal models want a row of features and an answer. Time series gives you one long line of numbers. The bridge between them is two ideas.
+
+- A **lag feature** is just yesterday's value written into today's row. lag1 for day 5 is the value from day 4. lag7 would be the value from the same weekday last week — that is how you hand a weekly pattern to a model that has no idea what a week is.
+- A **rolling average** (also called a moving average) is the average of the last few values. A 3-day rolling average for day 5 is the mean of days 2, 3 and 4. It smooths out the wobble so the model sees the level rather than the noise.
+- The rule that makes or breaks both: **the window must end yesterday**. A 3-day average for day 5 that includes day 5 itself has put part of the answer into the question. Most library functions include the current row by default, so this is a mistake that is one forgotten argument away.
+- Cost: the first rows have no history. Day 1 has no yesterday, so lag1 is blank there, and a 3-day average is blank until day 4. Every lag you add eats a bit more of the start of your data.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Building a lag and a rolling average, with the blanks visible',
+      code: `sales = [10, 12, 14, 16, 18, 21, 23]
+
+for t in range(len(sales)):
+    if t == 0:
+        lag1 = None
+    else:
+        lag1 = sales[t - 1]
+    if t < 3:
+        roll3 = None
+    else:
+        roll3 = round((sales[t - 3] + sales[t - 2] + sales[t - 1]) / 3, 2)
+    print('day', t + 1, 'y', sales[t], 'lag1', lag1, 'roll3', roll3)
+
+# ---- real output ----
+# day 1 y 10 lag1 None roll3 None
+# day 2 y 12 lag1 10 roll3 None
+# day 3 y 14 lag1 12 roll3 None
+# day 4 y 16 lag1 14 roll3 12.0
+# day 5 y 18 lag1 16 roll3 14.0
+# day 6 y 21 lag1 18 roll3 16.0
+# day 7 y 23 lag1 21 roll3 18.33`,
+      annotations: {
+        1: 'The first seven days of the shop\'s sales. Position 0 is day 1.',
+        3: 'Walk through the days in order. t is the position in the list, so day number is t + 1.',
+        4: 'Day 1 is the special case: there is no day before it.',
+        5: 'None is Python for "no value here". It marks the blank honestly instead of inventing a number.',
+        6: 'Every other day takes the else branch.',
+        7: 'sales[t - 1] is yesterday. That single subtraction is the entire lag-1 feature.',
+        8: 'The 3-day average needs three earlier days, so days 1, 2 and 3 cannot have one.',
+        9: 'Blank again, for the same reason.',
+        10: 'From day 4 onwards there is enough history, so this branch runs.',
+        11: 'Days t-3, t-2 and t-1: the three days BEFORE today. Today, sales[t], is deliberately not in there — it is the number we are trying to predict. round(x, 2) trims the decimals for printing.',
+        12: 'Print one row per day. Day 4 shows roll3 12.0, which is the mean of 10, 12 and 14 — days 1 to 3 only, exactly as intended.',
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'Before any model: what does "same as yesterday" score?',
+      md: `Forecasting has a baseline so strong it embarrasses people, and it costs one line of code: **predict that today equals yesterday**. For a series with a weekly pattern the sibling baseline is "predict last week's same weekday".
+
+To compare anything we need a way to say how wrong a forecast is. Use **MAE**, mean absolute error: for each day, take the gap between prediction and truth, drop the minus sign, and average. MAE 2.5 means "wrong by about 2.5 units per day".
+
+Do one day by hand on the full twelve-day series. Day 2 truly sold 12; "same as yesterday" predicts day 1's 10; the gap is 2. Day 3 sold 14, prediction 12, gap 2. Day 6 sold 21, prediction 18, gap 3. Average all eleven such gaps and you get the number the next snippet prints. Remember it, because every fancier model has to beat it.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'The naive baseline: today equals yesterday',
+      code: `sales = [10, 12, 14, 16, 18, 21, 23, 25, 28, 30, 32, 35]
+
+err = 0.0
+for i in range(1, 12):
+    err = err + abs(sales[i] - sales[i - 1])
+print('naive MAE, all 11 days:', round(err / 11, 2))
+
+err = 0.0
+for i in [8, 9, 10, 11]:
+    err = err + abs(sales[i] - sales[i - 1])
+print('naive MAE, last 4 days:', round(err / 4, 2))
+
+# ---- real output ----
+# naive MAE, all 11 days: 2.27
+# naive MAE, last 4 days: 2.5`,
+      annotations: {
+        1: 'All twelve days. Position 0 is day 1, position 11 is day 12.',
+        3: 'A running total of the errors, starting at zero.',
+        4: 'Start at 1, not 0: day 1 has no yesterday to predict from. range(1, 12) gives 1 through 11.',
+        5: 'sales[i - 1] is the prediction and sales[i] is the truth. abs() drops the minus sign so an over-forecast and an under-forecast count the same.',
+        6: 'Eleven predictions were made, so divide by 11. The answer is 2.27.',
+        8: 'Reset the total to score a smaller stretch.',
+        9: 'Positions 8 to 11 are days 9 to 12 — the last four days, which the split experiment below will use as its test set.',
+        10: 'Same calculation, restricted to those four days.',
+        11: 'Divide by 4. The baseline is wrong by 2.5 units per day on that stretch. This is the number to beat.',
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'Now the one rule that outranks the model',
+      md: `Here is the rule: **never let a model see the future while you are testing it, and never shuffle a time series to make a test set.** People nod at this and then do it anyway, because the shuffled version gives a better score and better scores feel like progress.
+
+We are going to walk into it deliberately with a real number attached.
+
+The "model" for this experiment is deliberately simple, so nothing is hidden: to predict a day, look at the training days around it, take the nearest one before and the nearest one after, and average them. If there is no training day after, use the nearest one before. That is a straight-line guess between known points.
+
+Then score it twice on the same twelve days, changing only which four days are the test set:
+
+- **Shuffled split** — pick four days at random. Say days 5, 8, 10 and 11. The other eight are training data.
+- **Time-ordered split** — the test set is the last four days, 9 to 12, and training is everything strictly before each one.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'The predictor: nearest training day before and after',
+      code: `def predict(i, train):
+    before = []
+    after = []
+    for t in train:
+        if t < i:
+            before.append(t)
+        if t > i:
+            after.append(t)
+    if before and after:
+        return (sales[before[-1]] + sales[after[0]]) / 2
+    return sales[before[-1]]
+
+print(predict(8, [0, 1, 2, 3, 4, 5, 6, 7]))
+print(predict(8, [0, 1, 2, 3, 4, 5, 6, 7, 9, 10, 11]))
+
+# ---- real output ----
+# 25
+# 27.5`,
+      annotations: {
+        1: 'i is the position we want a prediction for. train is the list of positions the model is allowed to look at.',
+        2: 'Collects training days that come before day i.',
+        3: 'Collects training days that come after day i.',
+        4: 'Check every allowed training day one at a time.',
+        5: 'Earlier than the day we are predicting?',
+        6: 'Then it goes in the before pile.',
+        7: 'Later than the day we are predicting?',
+        8: 'Then it goes in the after pile. Whether this pile ever fills up is the entire experiment.',
+        9: 'If we have neighbours on both sides, we can interpolate — guess a point between two known points.',
+        10: 'before[-1] is the last item of the before list, so the closest earlier day. after[0] is the closest later day. Average the two sales figures.',
+        11: 'No later neighbour available, so the best we can do is carry the most recent known value forward. This is the honest situation in forecasting: the future has no right-hand neighbour.',
+        13: 'Predicting day 9 (position 8) with only past days allowed: it carries forward day 8\'s 25.',
+        14: 'The same day 9, but now days 10, 11 and 12 are in the training set. It averages day 8\'s 25 and day 10\'s 30 to get 27.5 — using two days that had not happened yet.',
+      },
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Score 1: the shuffled split',
+      code: `test = [4, 7, 9, 10]
+train = [0, 1, 2, 3, 5, 6, 8, 11]
+total = 0.0
+for i in test:
+    p = predict(i, train)
+    total = total + abs(p - sales[i])
+    print('day', i + 1, 'true', sales[i], 'pred', p)
+print('shuffled-split MAE:', round(total / 4, 2))
+
+# ---- real output ----
+# day 5 true 18 pred 18.5
+# day 8 true 25 pred 25.5
+# day 10 true 30 pred 31.5
+# day 11 true 32 pred 31.5
+# shuffled-split MAE: 0.75`,
+      annotations: {
+        1: 'The four test positions, 4, 7, 9 and 10, which are days 5, 8, 10 and 11 — as a random draw might well produce.',
+        2: 'Everything else is training data, including day 12 at position 11, which happens after three of the four test days.',
+        3: 'Running total of absolute errors.',
+        4: 'Score one test day at a time.',
+        5: 'Ask the predictor for this day, with the shuffled training set.',
+        6: 'Add the size of the miss to the total.',
+        7: 'Print the day, the truth and the prediction so the misses are visible individually.',
+        8: 'Divide by 4 test days. MAE 0.75 — three times better than the naive baseline\'s 2.5. Look at the per-day lines to see how: day 10 is predicted as the average of days 9 and 11, both of which the model was handed.',
+      },
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Score 2: the time-ordered split, same model, same data',
+      code: `total = 0.0
+for i in [8, 9, 10, 11]:
+    train = list(range(i))
+    p = predict(i, train)
+    total = total + abs(p - sales[i])
+    print('day', i + 1, 'true', sales[i], 'pred', p)
+print('time-ordered MAE:', round(total / 4, 2))
+
+# ---- real output ----
+# day 9 true 28 pred 25
+# day 10 true 30 pred 28
+# day 11 true 32 pred 30
+# day 12 true 35 pred 32
+# time-ordered MAE: 2.5`,
+      annotations: {
+        1: 'Fresh error total.',
+        2: 'Test on days 9, 10, 11 and 12 — positions 8 to 11, the end of the series.',
+        3: 'list(range(i)) is every position strictly before i. Predicting day 10 means training on days 1 to 9 and nothing later. This one line is the whole difference from the previous snippet.',
+        4: 'Same predictor function, unchanged.',
+        5: 'Same error accumulation, unchanged.',
+        6: 'Same printing, unchanged.',
+        7: 'MAE 2.5. The identical model on the identical data scored 0.75 a moment ago. And 2.5 is exactly the naive baseline\'s score on these four days, because with no future neighbour available the predictor can only carry yesterday forward.',
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'The classic mistake, diagnosed',
+      md: `Two scores, one model, one dataset: **0.75 and 2.5**. Only the choice of test set changed. The first number is not a better result. It is not a result at all.
+
+- Look at the shuffled run\'s day 10: true 30, predicted 31.5. That 31.5 is the average of day 9\'s 28 and day 11\'s 32. To make that prediction the model read day 11 — a day that, in production, has not happened yet.
+- Every shuffled test day sat in a hole surrounded by known days on both sides. The model was never forecasting. It was **interpolating**: filling a gap between two facts. That is an easy job, and it is not the job.
+- In the time-ordered run, day 12 has nothing after it, ever. The model must **extrapolate**: continue past the end of what it knows. That is the hard job, and it is the only one production ever asks for.
+- The damage is not that the score is a bit optimistic. The damage is that you would have shipped this thing believing it was three times better than "same as yesterday", when it is exactly as good as "same as yesterday" and not one unit better.
+- The general form of the same mistake: any feature computed with numbers you will not have on the morning you make the prediction. A rolling average that includes today. A monthly total on a row from the middle of that month. Tomorrow's actual price used to forecast tomorrow's demand.
+- The test that catches all of them is one question per column: *on the morning I make this prediction, do I physically have this number yet?* If the answer is no, lag it or drop it.
+
+The fix for the split itself is the **expanding window**: train on days 1 to 8, test day 9; train on 1 to 9, test day 10; and so on. That is exactly what the second snippet did, one line of it. If your rolling features look back seven days, leave a seven-day gap between the end of training and the start of the test, or the last training rows and the first test rows share days.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Two more words you will hear: stationary and autocorrelation',
+      md: `Both are simpler than they sound, and both are about the same thing — whether the past still describes the present.
+
+- A series is **stationary** when its behaviour does not depend on *when* you look: the average stays put, the size of the wobble stays put. Our sales series is not stationary, because it drifts from 10 up to 35, so the average of the first half is nothing like the average of the second half.
+- Why anyone cares: a model learns from the past and applies it to the future. If the past had an average of 12 and the future has an average of 33, whatever it learned is about the wrong world. Tree-based models are especially blunt about this — they can only ever output values they saw in training, so a genuinely rising series will be permanently under-forecast.
+- The usual fix is **differencing**: instead of modelling the sales, model the *change* in sales. Our series in changes is 2, 2, 2, 2, 3, 2, 2, 3, 2, 2, 3 — a series that stays put around 2.3 with no drift. Model that, then add the last known level back at the end.
+- **Autocorrelation** is how much a series resembles a shifted copy of itself. Slide the series one day and compare: on our data yesterday predicts today very well, so autocorrelation at lag 1 is high. Slide it seven days on real daily sales and if that also comes out high, there is a weekly cycle — which tells you to build a lag-7 feature. That is all the diagnosis is for: it tells you which lags are worth turning into columns.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Practice problems',
+      md: `Work each one on paper before reading the solution underneath it. All the numbers come from the two datasets in this module.
+
+**1.** Using the five-by-five ratings table, compute the cosine similarity between the Heat column (5, 4, 1, 0, 5) and the Amelie column (1, 0, 5, 4, 1). Say in one sentence what the answer means.
+
+**2.** Eve rates a sixth film, Ronin 2 instead of 4 (everything else unchanged), but the similarities stay as printed. Redo the weighted average for Speed. Which direction does the prediction move, and why?
+
+**3.** You have three years of daily website visits and you split it with random 5-fold cross-validation. Name what goes wrong, then give the split you would use instead.
+
+**4.** A colleague builds a 7-day rolling average feature using a window centred on day t — that is, days t-3 through t+3 — and reports the best backtest score the team has ever seen. What is wrong, and what one change fixes it?
+
+**5.** On the twelve-day sales series, a new model scores MAE 2.4 on the last four days. Should you ship it?`,
+    },
+    {
+      type: 'note',
+      md: `**Solution 1.** Products: (5×1) + (4×0) + (1×5) + (0×4) + (5×1) = 5 + 0 + 5 + 0 + 5 = 15. Length of Heat: 25 + 16 + 1 + 0 + 25 = 67, √67 = 8.185. Length of Amelie: 1 + 0 + 25 + 16 + 1 = 43, √43 = 6.557. 15 ÷ (8.185 × 6.557) = 15 ÷ 53.67 = **0.280**. Low. The people who rate Heat highly are not the people who rate Amelie highly, so knowing someone liked Heat says almost nothing about Amelie.
+
+**Solution 2.** Only the Ronin term changes: 2 × 0.805 = 1.610 instead of 3.220. New top: 3.770 + 0.188 + 0.235 + 1.610 = 5.803. The bottom is unchanged at 1.983. 5.803 ÷ 1.983 = **2.93**. The prediction drops by about 0.8, because Ronin is Speed\'s closest neighbour at 0.805 and it now carries a low rating — the loudest vote changed its mind.
+
+**Solution 3.** Random folds put later days into training and earlier days into the test set, so the model interpolates inside known time instead of extrapolating past the end of it. The score will look far better than production ever will — the 0.75-versus-2.5 gap in this module is exactly that effect. Use an expanding window instead: train on months 1 to 12 and test month 13, then train on 1 to 13 and test 14, and average the errors.
+
+**Solution 4.** A window centred on day t contains days t+1, t+2 and t+3, which do not exist when the prediction for day t is made. The feature is built out of the answer, so the backtest is fiction. Fix: end the window at t-1 — a trailing 7-day average over days t-7 through t-1. In most libraries the default window includes the current row, so shift it back by one.
+
+**Solution 5.** No. The naive "same as yesterday" baseline scores 2.5 on those four days, so the new model buys 0.1 units per day of accuracy for however much complexity it added. Also, four test days is far too small a sample to distinguish 2.4 from 2.5 — a single day going the other way flips the ranking. Run it across many more test windows before believing the difference exists.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Beyond the basics - skip this on your first read',
+      md: `Everything above stands on its own. This part is context for later.
+
+- **Why real systems have two stages.** A catalogue of ten million items and a 100 millisecond budget cannot afford a good model per item. So stage one, *retrieval*, cuts millions down to a few hundred with something very cheap (dot products against precomputed item vectors, plus lists like "trending" and "your subscriptions"). Stage two, *ranking*, spends real money scoring those few hundred. The frames below step through the arithmetic.
+- **Retrieval sets the ceiling.** An item stage one never fetches can never be shown, so it never earns the interactions that would have made it fetchable. That loop is why systems reserve a slot for something unproven.
+- **Popularity bias.** The blockbuster co-occurs with everything, so it is similar to everything, so it is recommended to everyone, which makes it co-occur with even more. Left alone, item-item recommends the same fifty things to the whole planet.
+- **ARIMA** is the classical forecasting model: it predicts today from a few past values, a few past errors, and however many rounds of differencing it took to make the series stationary. Worth reaching for when you have one series, a decent length of history and someone who needs honest uncertainty bands.
+- **Prophet** (from Meta) fits a trend plus repeating seasonal patterns plus a holiday calendar, with defaults that work without tuning. Useful for business series driven by the human calendar.
+- **What usually wins on business data** is neither: build lag, rolling and calendar columns as in this module and hand them to gradient boosting. It handles thousands of series at once plus extra columns like price and promotions. Its weakness is the one named above — a tree cannot predict outside the range it saw, so difference the target when growth is real.`,
     },
     {
       type: 'visual',
@@ -129,12 +507,12 @@ for j in np.argsort(-S[seed])[:3]:
       props: {
         title: 'One recommendation request, stage by stage',
         notice:
-          'Left column = the work being done and its latency budget. Right column = how many items are still alive at that point. Red dashed = the item that never made it.',
+          'Left column = the work being done and its time budget. Right column = how many items are still in the running at that point.',
         leftLabel: 'stage / budget',
         rightLabel: 'items still in play',
         frames: [
           {
-            note: 'The request arrives. Ten million items in the catalogue, about 100 ms before the page feels slow. The heavy ranker costs roughly 1 ms per item — scoring everything would take about three hours. That single number is why two stages exist.',
+            note: 'The request arrives. Ten million items in the catalogue, and about 100 milliseconds before the page feels slow. The good ranking model costs roughly 1 millisecond per item, so scoring everything would take about three hours. That single number is why two stages exist.',
             stack: [
               { name: 'user request', value: 'budget: ~100 ms', to: 'cat' },
               { name: 'ranker cost', value: '~1 ms / item' },
@@ -142,10 +520,10 @@ for j in np.argsort(-S[seed])[:3]:
             heap: [{ id: 'cat', value: '10,000,000 items', label: 'full catalogue' }],
           },
           {
-            note: 'Stage 1 — candidate generation. Cheap and parallel: a dot product of the user vector against a precomputed item-embedding index (approximate nearest neighbour), plus a few hand-built sources. Nothing here is smart. It only has to be fast and high-recall.',
+            note: 'Stage 1, retrieval. Cheap operations only: dot products of the user vector against precomputed item vectors, plus a few hand-built lists. Nothing here is clever. It only has to be fast and to avoid throwing away the good items.',
             stack: [
-              { name: 'user vector', value: '128 floats', to: 'cand' },
-              { name: 'ANN index lookup', value: 'top ~300' },
+              { name: 'user vector', value: '128 numbers', to: 'cand' },
+              { name: 'nearest-vector lookup', value: 'top ~300' },
               { name: 'subscriptions', value: '~100' },
               { name: 'trending / fresh', value: '~100' },
             ],
@@ -155,322 +533,123 @@ for j in np.argsort(-S[seed])[:3]:
             ],
           },
           {
-            note: 'Stage 2 — ranking. Now expense is affordable. Hundreds of features per (user, item) pair, a gradient-boosted or deep model, several heads: probability of click, of finishing, of a like. 500 x heavy is fine. Ten million x heavy was not.',
+            note: 'Stage 2, ranking, then the policy rules. A heavy model scores 500 pairs with hundreds of features each, predicting several things at once. Then sort, drop duplicates, cap how many come from one creator, keep one slot for something unproven, and render ten.',
             stack: [
-              { name: 'pairs to score', value: '~500', to: 'scored' },
-              { name: 'features per pair', value: '~400' },
-              { name: 'model', value: 'GBM / deep, ~50 ms' },
-            ],
-            heap: [{ id: 'scored', value: '500 scored items', label: 'p(click), p(finish), p(like)' }],
-          },
-          {
-            note: 'Stage 3 — policy. Sort by score, then apply the rules a loss function cannot express: no duplicates, no more than two from one creator, some freshness, some exploration. Ten slots render. All of it inside the page load.',
-            stack: [
-              { name: 'top by score', value: '20', to: 'shown' },
-              { name: 'diversity rule', value: 'max 2 per channel' },
-              { name: 'exploration', value: '1 random slot' },
+              { name: 'pairs to score', value: '~500', to: 'shown' },
+              { name: 'model', value: '~50 ms' },
+              { name: 'diversity + exploration', value: 'rules on top' },
             ],
             heap: [{ id: 'shown', value: '10 items on screen', label: '~100 ms end to end' }],
-          },
-          {
-            note: 'The failure mode to name out loud in an interview: retrieval sets the CEILING. An item stage 1 never fetched cannot be ranked, cannot be shown, and therefore never earns the interactions that would have made it retrievable. Feedback loops are how good items stay invisible — and why that exploration slot in the previous frame is not decoration.',
-            stack: [{ name: 'great item #8,441,203', value: 'never retrieved', to: 'lost', danger: true }],
-            heap: [{ id: 'lost', value: 'never scored, never shown', label: 'no data -> stays unretrievable', freed: true }],
           },
         ],
       },
     },
-    {
-      type: 'intuition',
-      title: 'Evaluation: RMSE is the wrong target',
-      md: `The Netflix Prize paid a million dollars for the lowest RMSE on predicted star ratings. Netflix then largely did not ship the winner. Understand why and you understand recsys evaluation.
-
-- The product shows a **short ranked list**. Nobody sees a predicted rating.
-- RMSE spends its budget being accurate about every rating, including the 4.1-vs-4.3 distinction on items that will never appear on screen. It rewards work the user never experiences.
-- What matters is **which items are on top**. So measure ranking: **Precision@K** (of the K shown, how many were relevant) and **NDCG** (same, but a hit at position 1 counts more than a hit at position 10, discounted by log of the rank).
-- Also track what the product actually wants: coverage (how much of the catalogue ever appears), diversity, and freshness. A recommender that shows the same 50 blockbusters forever will have wonderful offline numbers.
-- Full definitions and the MAP/NDCG mechanics live in the **Metrics & Losses** subject. Here just carry the sentence: *rating accuracy is not ranking quality.*`,
-    },
-    {
-      type: 'intuition',
-      title: 'The cold-start playbook',
-      md: `Every recsys interview reaches "what about a brand new user / item?" Have a staged answer ready — it is a sequence, not one trick.
-
-- **New user, second 1:** popularity fallback, ideally segmented by whatever you do know (country, device, referrer). Boring, and it is what everyone ships.
-- **New user, minute 1:** onboarding — pick 3 topics, pick 5 artists. One tap buys you a content-based profile immediately.
-- **New user, session 1:** session-based recommendations from the items they touch right now, no history needed.
-- **New item, day 0:** content features (text, image, category embeddings) let it be retrieved before any interaction exists. This is the hybrid part of every hybrid system.
-- **New item, week 1:** deliberate exploration — force a small traffic slice onto unproven items to buy the data. Pure exploitation makes cold start permanent.`,
-    },
-    {
-      type: 'intuition',
-      title: 'Time series: the assumption everything else rests on, broken',
-      md: `Switch topics. You have daily sales for three years and need next month. Reach for your usual toolkit and you will quietly break its foundation.
-
-- Ordinary supervised learning assumes rows are **i.i.d.** — independent and identically distributed. Shuffle them, split them, nothing changes.
-- Time series rows are **neither**. Today's sales depend on yesterday's (not independent), and the mean and variance drift over the years (not identically distributed).
-- Consequence 1: **order is information**. Destroy it and you destroyed most of the signal.
-- Consequence 2: **your test set is the future**, always. Any accidental peek at the future inflates the score in a way you will only discover in production.
-- Everything odd about time-series practice — the strange CV, the paranoid feature rules, the differencing — descends from those two sentences.`,
-    },
-    {
-      type: 'intuition',
-      title: 'Decomposition: trend, seasonality, residual',
-      md: `Look at any business series and you are seeing three things stacked. Pull them apart before you model.
-
-- **Trend** — the slow direction. Are we growing over years?
-- **Seasonality** — the fixed-period cycle. Weekly (weekend spikes), yearly (December), daily (lunch rush). Note it is *periodic*, with a known period.
-- **Residual** — what is left. The noise, plus the one-off events (a promo, an outage) that neither of the above explains.
-- Additive when the seasonal swing is a constant size (+200 units every Saturday). Multiplicative when it scales with the level (+15% every Saturday) — which is most revenue data. Taking a log turns multiplicative into additive.
-- Why bother: each piece has a different fix. Trend gets differenced away, seasonality becomes a feature or a seasonal difference, and the residual is the only part you should expect a model to struggle with.`,
-    },
-    {
-      type: 'math',
-      intro: 'Decomposition and the two differences. Δ is "subtract the previous value".',
-      latex: [
-        'y_t = T_t + S_t + R_t \\quad \\text{(additive)} \\qquad\\qquad y_t = T_t \\times S_t \\times R_t \\quad \\text{(multiplicative)}',
-        '\\Delta y_t = y_t - y_{t-1} \\quad \\text{first difference: removes a linear trend}',
-        '\\Delta_{7} y_t = y_t - y_{t-7} \\quad \\text{seasonal difference: removes a weekly cycle}',
-      ],
-    },
-    {
-      type: 'intuition',
-      title: 'Stationarity, and why models beg for it',
-      md: `A series is **stationary** when its statistical behaviour does not depend on WHEN you look: constant mean, constant variance, and a correlation structure that depends only on the gap between two points, not on the date.
-
-- Analogy: a stationary series is a fair coin. The rules today are the rules next year, so what you learned in the past still applies.
-- A trending series is a coin whose bias creeps upward. A model fitted on the old rules predicts the old world.
-- Classical models (ARMA and friends) *require* it — their whole theory is built on it. ML models do not formally require it, but they still cannot extrapolate a trend they never saw: a tree can only predict values inside its training range.
-- **The fix is differencing.** Model the CHANGE instead of the level. Δy is usually stationary even when y is not. Difference again if one pass is not enough (rare; twice is almost always plenty).
-- Check with your eyes first (plot it, plot a rolling mean and rolling std), then the ADF test if someone demands a p-value.`,
-    },
-    {
-      type: 'intuition',
-      title: 'Autocorrelation and the lag feature',
-      md: `**Autocorrelation** = the correlation of a series with a shifted copy of itself. At lag 1, how well does yesterday predict today? At lag 7, last Tuesday?
-
-- The plot of autocorrelation against lag (the ACF) is the cheapest diagnostic in forecasting. A tall spike at lag 7 in daily data means a weekly cycle exists — go build a lag-7 feature.
-- Slow decay across many lags means a trend is present, i.e. difference it.
-- The bridge to normal ML is simply this: **turn each useful lag into a column**. lag_1, lag_7, lag_28, a rolling mean of the last 7, a rolling std, plus date parts (day-of-week, month, is_holiday).
-- Now every row is a plain feature vector and you can hand it to any regressor. That is the whole trick — the "time" part becomes ordinary tabular data.
-- Cost you must state: lag features create NaN rows at the start (there is no yesterday for day 1), and every lag you add shortens the usable history.`,
-    },
-    {
-      type: 'code',
-      lang: 'python',
-      title: 'Building the feature frame: lags, a rolling mean, a difference',
-      code: `import numpy as np
-
-day = np.arange(1, 11)
-sales = np.array([12, 15, 14, 18, 21, 19, 24, 27, 25, 30], dtype=float)
-
-def shift(a, k):                          # the value from k steps ago
-    out = np.full(len(a), np.nan)
-    out[k:] = a[:-k]
-    return out
-
-lag1, lag2 = shift(sales, 1), shift(sales, 2)
-roll3 = np.array([sales[i - 3:i].mean() if i >= 3 else np.nan
-                  for i in range(len(sales))])   # window ENDS at t-1
-diff1 = sales - lag1
-
-print(f"{'day':>4}{'y':>8}{'lag1':>8}{'lag2':>8}{'roll3':>8}{'diff1':>8}")
-for i in range(len(sales)):
-    cells = ''.join('     NaN' if np.isnan(v) else f'{v:8.2f}'
-                    for v in (lag1[i], lag2[i], roll3[i], diff1[i]))
-    print(f"{day[i]:>4}{sales[i]:8.1f}{cells}")
-
-#  day       y    lag1    lag2   roll3   diff1
-#    1    12.0     NaN     NaN     NaN     NaN
-#    2    15.0   12.00     NaN     NaN    3.00
-#    3    14.0   15.00   12.00     NaN   -1.00
-#    4    18.0   14.00   15.00   13.67    4.00
-#    5    21.0   18.00   14.00   15.67    3.00
-#    6    19.0   21.00   18.00   17.67   -2.00
-#    7    24.0   19.00   21.00   19.33    5.00
-#    8    27.0   24.00   19.00   21.33    3.00
-#    9    25.0   27.00   24.00   23.33   -2.00
-#   10    30.0   25.00   27.00   25.33    5.00`,
-      annotations: {
-        8: 'Shift DOWN, never up. out[k:] = a[:-k] puts old values on new rows. Getting this backwards is the single most common leakage bug in forecasting code — and it produces a suspiciously excellent backtest.',
-        12: 'sales[i-3:i] stops at i-1. It does NOT include today. A centered or inclusive window uses values that do not exist yet at prediction time; pandas rolling(3).mean() is inclusive of the current row, so you must .shift(1) it.',
-        14: 'This column is differencing as a feature: model the change, not the level. Often the single most useful column on a trending series.',
-        23: 'The warm-up rows are NaN by construction — there is no day 0. Drop them, or impute them and accept that you fabricated training data.',
-        26: 'roll3 at day 4 is mean(12, 15, 14) = 13.67 — days 1 to 3 only. Day 4 itself is the answer we are trying to predict, so it cannot be in its own feature.',
-      },
-    },
-    {
-      type: 'intuition',
-      title: 'The classical models, named honestly',
-      md: `You should recognize these and know what each parameter means. You will rarely be the person tuning them.
-
-- **Moving average** — predict the mean of the last k points. A baseline, not a model. Beat it before claiming anything.
-- **Exponential smoothing** — a weighted average where weights decay geometrically into the past, controlled by α. **Holt** adds a trend term, **Holt-Winters** adds a seasonal one. Cheap, surprisingly hard to beat on short, clean series.
-- **ARIMA(p, d, q)** — three integers: **p** = how many past *values* feed the prediction (AR, autoregression), **d** = how many times you differenced to reach stationarity, **q** = how many past *errors* feed it (MA, moving-average of residuals). SARIMA bolts a second (P, D, Q) on for the seasonal period.
-- ARIMA assumes one series, roughly linear structure, and stationarity after differencing. It gives you honest prediction intervals, which tree models do not.
-- Reach for it when you have one series, decent length, strong autocorrelation, and someone needs confidence bands.`,
-    },
-    {
-      type: 'note',
-      md: `**What actually wins on business data today:** build lag / rolling / date-part features and throw gradient boosting (LightGBM, XGBoost) at it. Reason it wins: real forecasting problems are multi-series (10,000 SKUs, not one) and full of exogenous columns — price, promo flag, holiday, weather — which ARIMA handles awkwardly and a GBM eats for breakfast. One model learns across all series and shares strength with the short ones. The tradeoff to state: you lose the clean prediction intervals and, critically, **a tree cannot extrapolate** — if sales trend past anything seen in training, the tree predicts the highest value it knows. Difference the target, or model the trend separately, when growth is real.`,
-    },
-    {
-      type: 'intuition',
-      title: 'The two rules that matter more than the model',
-      md: `If you remember nothing else from this half of the module, remember these. Every senior forecasting failure is one of the two.
-
-- **Rule 1 — never shuffle a time split.** Random k-fold puts December in the training set and October in test. The model interpolates inside known time, which it will never do in production, and the score is fiction. Use an **expanding window**: train on months 1–12, test 13; train 1–13, test 14; and so on. Cross-ref the cross-validation module for the split mechanics.
-- Add a **gap** between train and test if your features use rolling windows, or the last training rows and first test rows overlap in time.
-- **Rule 2 — never use a feature that will not exist at prediction time.** Forecasting tomorrow's demand with tomorrow's actual price, or with a "total monthly sales" column computed over the whole month, is target leakage wearing a lab coat.
-- The test that catches both: for every column ask *"on the morning I make this prediction, do I physically have this number yet?"* If it needs a lag to be true, lag it. Cross-ref the data-leakage module.
-- **Horizon:** a 1-step forecast is a different, easier problem than a 30-step one. If you predict step by step and feed predictions back in as lags, errors compound — each step inherits the last one's mistake. Either train a separate model per horizon, or accept widening intervals and say so.`,
-    },
-    {
-      type: 'note',
-      md: `**Where to read next, in one line each.** **Prophet** (Meta) — a decomposable trend + seasonality + holidays model with sane defaults and analyst-friendly knobs; excellent for business series with strong human calendars, no magic beyond that. **DeepAR / N-BEATS / Temporal Fusion Transformer** — deep models that train one network across thousands of related series and learn shared seasonality; they pay off when you have many series and a lot of them, not when you have one. Start every project with the naive baseline (predict last value, or last week's same weekday) — you would be startled how often it wins.`,
-    },
   ],
   quiz: [
     {
-      question: 'A film is uploaded today. Zero views, zero ratings. Which approach can recommend it at all right now?',
+      question: 'The Speed column is (4, 5, 0, 1, 0) and the Ronin column is (4, 4, 1, 2, 4). Their cosine similarity is 0.805. What does that number mean?',
       options: [
         {
-          text: 'Item-based collaborative filtering',
-          explanation: 'It needs co-occurrence — users who consumed this item AND something else. With zero views there is no column to compare, so the item is invisible.',
+          text: 'The same people rated both films highly, so knowing someone liked one is good evidence they will like the other',
+          explanation: 'Correct. Cosine near 1 means the two columns rise and fall on the same people. No genre tag or description was involved — only behaviour.',
         },
         {
-          text: 'Content-based, using genre, cast and the description embedding',
-          explanation: 'Correct. Item features exist the moment the item does, so a content-based retrieval source can surface it before any interaction is recorded. This is exactly why production systems are hybrids.',
+          text: '80.5% of the people who watched Speed also watched Ronin',
+          explanation: 'Cosine is not a percentage of shared viewers. It compares the whole pattern of ratings, including how high they were, not just whether an overlap exists.',
         },
         {
-          text: 'Matrix factorization on the interaction matrix',
-          explanation: 'MF learns an item vector FROM interactions. No interactions, no vector — same cold-start wall as neighbourhood CF.',
+          text: 'The two films share 80.5% of their genre tags',
+          explanation: 'No item features are used anywhere in this calculation. The inputs are two columns of ratings.',
+        },
+      ],
+      correct: 0,
+    },
+    {
+      question: 'A film is uploaded today, with zero ratings. Which approach can recommend it right now?',
+      options: [
+        {
+          text: 'Item-item collaborative filtering',
+          explanation: 'Its column is entirely blank, so its cosine similarity with every other column is zero. It cannot appear in anyone\'s weighted average.',
+        },
+        {
+          text: 'Content-based, using its genre, cast and description',
+          explanation: 'Correct. Those features exist the moment the film does, so the film is reachable before anyone has rated it. This is exactly why real systems keep both methods.',
+        },
+        {
+          text: 'Matrix factorisation on the ratings table',
+          explanation: 'The item\'s short list of numbers is learned from its ratings. No ratings, nothing to learn from — the same wall as item-item.',
         },
       ],
       correct: 1,
     },
     {
-      question: 'Why did Amazon ship item-item collaborative filtering rather than user-user?',
+      question: 'Why do large systems compute item-item similarities rather than user-user?',
       options: [
         {
-          text: 'Item-item similarities are far more stable than user tastes, so they can be precomputed offline and merely looked up at request time',
-          explanation: 'Correct. "Printer buyers buy toner" holds for years; your taste drifts weekly. Also the user-user matrix is usually much bigger and keeps changing as users act. Precompute what does not move.',
+          text: 'Item-item needs less data',
+          explanation: 'Both read the same table of interactions. Data volume is not the difference.',
         },
         {
-          text: 'Item-item needs less training data than user-user',
-          explanation: 'It consumes the same interaction matrix. The advantage is stability and serving cost, not data volume.',
+          text: 'Item relationships barely change, so they can be computed overnight and looked up instantly, while a person\'s taste drifts and would need constant recomputation',
+          explanation: 'Correct. "Printer buyers buy toner" holds for years. There are usually far more users than items too, so the item-item table is the smaller one to keep.',
         },
         {
           text: 'User-user cannot work with implicit feedback',
-          explanation: 'It can — both variants work on implicit data. That is not the distinguishing issue.',
-        },
-      ],
-      correct: 0,
-    },
-    {
-      question: 'In matrix factorization, what is the predicted rating of user u for item i?',
-      options: [
-        {
-          text: 'The cosine similarity between the two users’ rows in the original matrix',
-          explanation: 'That is user-based neighbourhood CF, which works on the raw sparse matrix — not factorization.',
-        },
-        {
-          text: 'The average of that user’s other ratings',
-          explanation: 'That is a baseline predictor. Useful as a bias term, but it ignores the item entirely.',
-        },
-        {
-          text: 'The dot product of the learned user vector and the learned item vector',
-          explanation: 'Correct: r̂ = p_u · q_i. Both vectors live in the same k-dimensional latent space, and the dot product measures how much they point the same way — the same operation as an embedding similarity in GenAI.',
-        },
-      ],
-      correct: 2,
-    },
-    {
-      question: 'A team reports RMSE 0.81 on held-out star ratings and calls the recommender a success. What is the flaw?',
-      options: [
-        {
-          text: 'RMSE 0.81 is too high for a rating scale of 1–5',
-          explanation: 'The number is actually respectable. The problem is the choice of metric, not its value.',
-        },
-        {
-          text: 'Users see a short ranked list, so what matters is which items reach the top — measure Precision@K and NDCG instead',
-          explanation: 'Correct. RMSE spends effort on rating accuracy for items that will never be displayed. The Netflix Prize is the famous cautionary tale: the winning RMSE model was largely not shipped.',
-        },
-        {
-          text: 'Nothing — RMSE is the standard recommender metric',
-          explanation: 'It was the Netflix Prize target, and the industry moved away from it precisely because better RMSE did not produce better lists.',
+          explanation: 'Both directions work on implicit data. That is not the distinguishing issue.',
         },
       ],
       correct: 1,
     },
     {
-      question: 'What exactly is the "no negative signal" problem in implicit feedback?',
+      question: 'In the weighted average that predicted 3.74 for Eve, what job is the denominator (the sum of similarities, 1.983) doing?',
       options: [
         {
-          text: 'A zero can mean "disliked" or "never saw it" — the model cannot distinguish rejection from absence',
-          explanation: 'Correct. This is why implicit systems either weight unobserved items as low-confidence weak negatives or sample negatives during training. Both are approximations, and naming them is the interview point.',
+          text: 'It keeps the answer on the 1-to-5 rating scale',
+          explanation: 'Correct. The numerator is ratings multiplied by weights, so it is inflated by the weights. Dividing by the total weight turns it back into an average, which lands in the same range as the ratings themselves.',
         },
         {
-          text: 'Users refuse to leave negative ratings out of politeness',
-          explanation: 'That is a real bias in EXPLICIT feedback, but it is a different problem. Implicit feedback has no ratings at all.',
+          text: 'It counts how many films Eve rated',
+          explanation: 'That count is 4. The denominator is 1.983, the sum of the four similarity values, not a count.',
         },
         {
-          text: 'Implicit datasets are smaller than explicit ones',
-          explanation: 'The opposite: implicit data is vastly larger — every session generates it for free. Volume is its advantage; ambiguity is its cost.',
+          text: 'It converts the prediction into a probability',
+          explanation: 'Nothing here is a probability. The output is a predicted star rating.',
         },
       ],
       correct: 0,
     },
     {
-      question: 'You have three years of daily sales and evaluate with shuffled 5-fold cross-validation. What breaks?',
+      question: 'The interpolating predictor scored MAE 0.75 on a shuffled split and 2.5 on a time-ordered split of the same twelve days. What is the correct reading?',
       options: [
         {
-          text: 'Nothing, as long as each fold has enough rows',
-          explanation: 'Row count is not the issue. The i.i.d. assumption that justifies random folds does not hold for time series.',
+          text: 'The model is genuinely better on the shuffled days; those days are just easier',
+          explanation: 'The days are not intrinsically easier. Day 10 appears in both runs. What changed is that the shuffled run handed the model day 11, which had not happened yet.',
         },
         {
-          text: 'The folds are too small to capture yearly seasonality',
-          explanation: 'A secondary concern at best. The fatal problem is temporal, not about size.',
+          text: '2.5 is the honest score, and 0.75 came from letting the model average two days that surround the test day — including one from the future',
+          explanation: 'Correct. The shuffled split turned forecasting into filling a gap between two known points. Production always asks for the harder job: continuing past the end of what is known.',
         },
         {
-          text: 'Random folds place future days in training and past days in test, so the model interpolates inside known time and the score is inflated',
-          explanation: 'Correct. Production always asks you to extrapolate forward. Use an expanding-window split — train 1–12, test 13; train 1–13, test 14 — and add a gap if rolling features straddle the boundary.',
-        },
-      ],
-      correct: 2,
-    },
-    {
-      question: 'In ARIMA(p, d, q), what does d mean?',
-      options: [
-        {
-          text: 'The number of input features supplied to the model',
-          explanation: 'ARIMA in its base form uses only the series itself — there is no feature-count parameter.',
-        },
-        {
-          text: 'How many times the series is differenced to make it stationary',
-          explanation: 'Correct. p = past values used (AR), d = differencing order, q = past errors used (MA). d is almost always 0, 1 or 2 in practice.',
-        },
-        {
-          text: 'The length of the seasonal period, such as 7 for weekly data',
-          explanation: 'The seasonal period lives in SARIMA’s separate (P, D, Q, s) block, where s is the period — not in d.',
+          text: 'The 2.5 run is under-trained because it used fewer training days',
+          explanation: 'Training size is not the cause. Even with all eleven earlier days available, no later neighbour exists for the final day — and the later neighbours are what produced the 0.75.',
         },
       ],
       correct: 1,
     },
     {
-      question: 'You add a 7-day rolling-mean feature computed with a window centered on day t. What is wrong with it?',
+      question: 'A 3-day rolling average feature for day t is computed over days t-1, t and t+1. What is wrong?',
       options: [
         {
-          text: 'Nothing — a centered window is smoother, therefore a better feature',
-          explanation: 'Smoother is not better if the smoothing used the future. Smoothness is a cosmetic property; availability is a correctness one.',
+          text: 'Nothing — a centred window is smoother and therefore a better feature',
+          explanation: 'Smoothness is cosmetic. Whether the numbers exist at prediction time is a matter of correctness.',
         },
         {
-          text: 'The window should be longer to capture the full weekly cycle',
-          explanation: 'Seven days already covers a weekly cycle. Window length is not the defect here.',
+          text: 'The window is too short to be useful',
+          explanation: 'Window length is a tuning choice, not the defect here. The defect would remain at any length.',
         },
         {
-          text: 'A centered window includes days t+1 to t+3, values that do not exist when the prediction is made — that is leakage',
-          explanation: 'Correct, and it produces a beautiful backtest that collapses in production. Every window must end at t-1. In pandas, rolling() includes the current row, so shift(1) it.',
+          text: 'It uses day t itself and day t+1, neither of which is known when the prediction for day t is made',
+          explanation: 'Correct. Day t is the answer and day t+1 has not happened. The window must end at t-1. Library rolling functions include the current row by default, so shift the result back by one.',
         },
       ],
       correct: 2,
@@ -478,167 +657,131 @@ for i in range(len(sales)):
   ],
   interviewQuestions: [
     {
-      question: 'Content-based versus collaborative filtering — explain both and say when you pick which.',
+      question: 'Explain content-based and collaborative filtering, and say when you would pick each.',
       answer:
-        'Content-based uses ITEM features: build a user profile by averaging the features of items they liked, recommend nearest items. Collaborative filtering uses BEHAVIOUR only: the user-item interaction matrix, no item features required. Pick content-based when item metadata is rich and cold start is your dominant problem (new catalogue, new users, news). Pick CF when you have interaction volume and want serendipity — it finds cross-category associations no feature set encodes. Tradeoffs to name out loud: content-based creates a filter bubble and is capped by metadata quality; CF cold-starts badly at BOTH ends (new user, new item) and has popularity bias that starves the long tail. Real answer: hybrid — content features as one retrieval source, CF as another, one ranker over the union.',
+        'Content-based works from what the item is: describe every item with features such as genre, text or category, build a profile of a user by averaging the items they liked, and recommend nearby items. Collaborative filtering works only from behaviour: a table of users by items, no item features at all, and it recommends by finding rows or columns that move together. Pick content-based when item descriptions are rich and new items or new users dominate the problem, such as news or a fresh catalogue. Pick collaborative filtering when you have interaction volume and want links no description encodes. The failure modes are the reason real systems use both: content-based only ever recommends more of the same and is capped by metadata quality, while collaborative filtering is blind to any item or user with an empty row or column.',
       isCaseBased: false,
     },
     {
-      question: 'Case: you are launching recommendations for a brand-new product line. Zero interaction data, 50,000 SKUs with titles, images and categories. Design the system for day 0, week 1, and month 3.',
+      question: 'Walk me through predicting one missing rating with item-item collaborative filtering.',
       answer:
-        'Day 0: there is no CF signal, so do not pretend. Ship (a) a popularity/best-seller fallback segmented by whatever context exists — category page, country, referrer, device — and (b) content-based similarity from title text plus image embeddings plus category, which gives you "similar items" and "because you viewed" without any history. Add a 3-tap onboarding if the product allows it. Week 1: session-based recommendations from the current basket and view sequence — co-view counts accumulate far faster than co-purchase, so use views as the first collaborative signal. Reserve a small exploration slice of traffic for unproven items, otherwise cold start becomes permanent for the tail. Month 3: item-item CF on accumulated co-purchase, then matrix factorization or a two-tower retrieval model once the matrix is dense enough; keep the content features as a retrieval source forever so new SKUs stay reachable. Measurement: you cannot A/B a system against nothing on day 0, so define the north-star metric (add-to-cart rate from the module, or downstream revenue per session) before launch and instrument it. Assumption worth stating: 50k SKUs is small enough that one retrieval stage may suffice — do not build two stages until latency demands it.',
+        'Take the item you want a prediction for and pull out its column of ratings. For every other item, pull out its column and compute the cosine similarity between the two: multiply position by position, sum, divide by the two lengths. That gives one number per item saying how much it moves with the target item. Then take the items this particular user has actually rated, and compute a weighted average of their ratings using those similarities as the weights: sum of rating times similarity, divided by sum of similarity. Concretely, with similarities 0.754, 0.188, 0.235 and 0.805 against ratings 5, 1, 1 and 4, that is 7.415 divided by 1.983, which is 3.74. Two details worth stating: you normally subtract each user\'s average rating before comparing, so a generous rater and a harsh one are comparable, and you usually keep only the top few neighbours rather than all of them, since low-similarity items add noise.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Case: you are launching recommendations for a new product line. Zero interactions, 50,000 items with titles, images and categories. Design day 0, week 1, and month 3.',
+      answer:
+        'Day 0 there is no behavioural signal, so do not pretend there is. Ship two things: a best-seller or popularity fallback segmented by whatever context exists (category page, country, referrer), and content-based similarity built from the title text, image and category, which gives "similar items" and "because you viewed this" without any history. Add a short onboarding that asks for a few interests if the product allows it. Week 1: use the session itself — what the person has viewed or put in the basket right now — and start accumulating co-view counts, which build up far faster than co-purchase counts. Reserve a slice of traffic for unproven items, or the cold ones stay cold permanently. Month 3: item-item collaborative filtering on real co-purchase data, then matrix factorisation once the table is dense enough, while keeping content features as a permanent source so every new item is still reachable on its first day. On measurement: you cannot A/B against nothing on day 0, so agree the target metric, such as add-to-cart rate from the recommendation module, and instrument it before launch. Worth stating as an assumption: 50,000 items is small enough that a single retrieval stage is fine — do not build a two-stage system until latency forces it.',
       isCaseBased: true,
     },
     {
-      question: 'Explain matrix factorization to an engineer who has never done ML, then say what it shares with word embeddings.',
+      question: 'Explicit versus implicit feedback: which do you build on, and what does it cost you?',
       answer:
-        'You have a giant table, users by items, and 99% of it is blank. Assume it is secretly simple — that a few dozen hidden traits explain most of it. Compress it into two skinny tables: 50 numbers per user, 50 numbers per item. To guess a missing cell, multiply the two vectors elementwise and add up — the dot product. If they point the same direction, it is a match. Nobody defines the 50 traits; training discovers them, and they often turn out interpretable (gritty vs cosy, old vs new). The connection: an item vector here IS an embedding — a learned dense vector where geometric proximity encodes semantic similarity, trained by a prediction task, and compared with a dot product. Word2vec factorizes a word co-occurrence matrix by nearly the same logic. Once you see this, ANN-based retrieval in recsys and vector search in a RAG system are the same infrastructure.',
+        'Build on implicit feedback — clicks, watch time, add-to-cart — because explicit ratings are rare, slow, and biased toward people with strong opinions, while implicit signals are produced by every session for free. The costs are real and you should name them. First, there is no negative signal: an item a user did not click may have been rejected or may never have been shown, and no amount of data separates those, so you either weight unobserved items as weak low-confidence negatives or sample negatives during training. Second, position bias: the item shown at the top gets clicked partly because it was at the top, so training naively on logs teaches the model to reproduce whatever the previous system showed. Third, calibration: ten seconds of a ten-second clip is a success and ten seconds of a two-hour film is a rejection, so normalise by item length or you build a machine that recommends short things.',
       isCaseBased: false,
     },
     {
-      question: 'Why does virtually every large system compute item-item similarity rather than user-user?',
+      question: 'Why is average rating error the wrong score for a recommender, and what would you use?',
       answer:
-        'Three reasons. (1) Stability: item relationships persist for years while user taste drifts weekly, so item-item can be batch-computed nightly and served as a lookup — user-user would need constant recomputation. (2) Shape: users usually outnumber items by orders of magnitude, so the item-item matrix is smaller and cheaper to store. (3) Explainability: "because you bought X" is a sentence you can put on the page; "because users like you did" is not. The cost you should acknowledge: item-item recommends within the neighbourhood of what someone already consumed, so it is naturally conservative — it needs a diversity or exploration policy on top or the user ends up in a narrow loop.',
+        'Because the product shows a short ranked list and nobody ever sees a predicted rating. Rating error spends its budget being precise about items that will never appear on screen, and it treats an error at position one exactly like an error at position 500. What matters is which items reached the top, so use ranking measures: how many of the shown items were relevant, and a position-weighted version that rewards putting the good ones first. Add measures the accuracy number cannot contain: how much of the catalogue ever gets shown, and how varied a single list is — a system that shows the same fifty popular items forever scores well on accuracy and slowly kills the catalogue. Finally, treat offline numbers as a gate rather than the decision, because they are computed on logs generated by the previous system and cannot tell you what would have happened with items it never showed.',
       isCaseBased: false,
     },
     {
-      question: 'Explicit versus implicit feedback — which do you build on, and what does that choice cost you?',
+      question: 'Case: your new ranker improves the offline ranking score by 8%, but the A/B test shows watch time down 3%. Debug it.',
       answer:
-        'Build on implicit: clicks, watch-time, dwell, add-to-cart. Explicit ratings are rare (single-digit percent of users), selection-biased toward extremes, and slow. Implicit is generated by every session for free. The costs: (1) no negative signal — an unobserved item might be disliked or simply never surfaced, so you must either weight unobserved cells as low-confidence negatives or sample negatives per step; (2) position and exposure bias — the item at slot 1 gets clicked because it was at slot 1, so naive training teaches the model to reproduce whatever the previous model showed, and you need position features or debiasing to break the loop; (3) signal calibration — a 10-second view means opposite things for a clip and a feature film, so normalize by item length. Best practice is to combine several implicit signals as multiple prediction heads rather than collapsing them into one label.',
-      isCaseBased: false,
-    },
-    {
-      question: 'Walk me through the architecture of a production recommender and justify each stage with numbers.',
-      answer:
-        'Two stages plus policy. Retrieval (candidate generation): millions of items down to a few hundred in roughly 10 ms, using cheap operations — approximate nearest neighbour over precomputed item embeddings, plus rule-based sources like subscriptions, recent items and trending. Ranking: a heavy model scoring those few hundred pairs with hundreds of features and several output heads (click, completion, like) in roughly 50 ms. Policy/re-rank: dedupe, diversity caps, freshness, exploration, business rules. The arithmetic is the justification — if a ranking pass costs ~1 ms per item, scoring 10 million items takes hours against a ~100 ms budget, so the catalogue must be cut before the expensive model ever sees it. Stage 1 optimizes recall, stage 2 optimizes ordering. Key failure mode: retrieval sets the ceiling — an item never retrieved can never be ranked, never shown, and never earns the data that would make it retrievable, which is exactly why an exploration slot exists.',
-      isCaseBased: false,
-    },
-    {
-      question: 'Why is RMSE the wrong metric for a recommender, and what would you use?',
-      answer:
-        'RMSE measures rating-prediction accuracy averaged over all items, but the product shows a short ranked list. Being right about a 4.1-vs-4.3 rating on an item that never appears earns nothing, while getting position 1 wrong costs everything. Use ranking metrics: Precision@K and Recall@K for "did the right items make the shown set", NDCG when position matters (gains discounted by log rank), MAP for multiple relevant items. Add product-level metrics that no single accuracy number captures: catalogue coverage, intra-list diversity, freshness, and long-tail share. Then accept that offline is only a filter — the decision metric is the online A/B on engagement or revenue, because offline evaluation is trained on logs produced by the previous model and cannot see counterfactuals.',
-      isCaseBased: false,
-    },
-    {
-      question: 'Case: your new ranker improves offline NDCG@10 by 8%, but the A/B test shows watch time DOWN 3%. Debug it.',
-      answer:
-        'Offline-online divergence is the classic recsys bug. Hypotheses in order. (1) Metric mismatch: NDCG was computed against clicks, but the business metric is watch time — the model likely learned clickbait, high click probability with short sessions. Test by breaking down click-through-rate versus completion rate; if CTR is up and completion down, that is it. (2) Feedback-loop bias: the offline set contains only items the OLD system showed, so the new ranker is scored on the old ranker’s candidate distribution and its genuinely novel picks are unevaluable. Test with an interleaving experiment. (3) Diversity collapse: a stronger ranker often concentrates on a narrow topic; measure intra-list diversity and unique-creator counts before and after. (4) Position/exposure bias baked into training labels. (5) Plumbing: latency. If the heavier model added 80 ms, engagement drops for reasons unrelated to quality — check p95 latency per arm before blaming the model. Fix path: train against a longer-horizon objective (completion or session-level satisfaction, not raw clicks), keep a diversity constraint in re-rank, and treat offline metrics as a shipping gate rather than a decision.',
+        'Start by listing hypotheses with a test for each. One, objective mismatch: the offline score was computed against clicks while the business cares about watch time, so the model may have learned clickbait. Test by splitting click-through rate against completion rate — clicks up and completions down confirms it. Two, the offline set only contains items the old system chose to show, so the new ranker is being judged on the old one\'s candidates and its genuinely novel picks are unmeasurable. Test with an interleaving experiment that mixes both rankers in one list. Three, diversity collapse: a sharper ranker often piles onto one topic, so measure how many distinct creators or categories appear per list before and after. Four, latency: if the heavier model added tens of milliseconds, engagement falls for reasons unrelated to quality, so compare response times per arm before blaming the model. The fix usually involves training against a longer-horizon target such as completion rather than raw clicks, and keeping an explicit diversity rule in the final sort.',
       isCaseBased: true,
     },
     {
-      question: 'What makes time-series modelling different from ordinary supervised learning? Name the assumption that breaks.',
+      question: 'What makes time-series modelling different from ordinary supervised learning?',
       answer:
-        'The i.i.d. assumption — independent and identically distributed rows — breaks on both halves. Not independent: today depends on yesterday, which is precisely the signal (autocorrelation) you exploit. Not identically distributed: mean and variance drift with trend and regime changes, so old rows come from a different world than new ones. Consequences: you cannot shuffle (order is information and shuffling leaks the future), your test set must be strictly later than train, cross-validation becomes an expanding or sliding window, and features must respect what was actually knowable at prediction time. Also note that classical models additionally demand stationarity, which is why differencing exists; ML models do not formally require it but still cannot extrapolate beyond the target range they saw in training.',
+        'Ordinary supervised learning assumes rows are interchangeable: shuffle them, split them at random, nothing is lost. Time-series rows are not interchangeable on either count. They are not independent, because today depends on yesterday — and that dependence is precisely the signal you exploit through lag features. They are not drawn from a fixed distribution either, because the average and the spread drift with trend and with regime changes, so old rows describe a different world than recent ones. The practical consequences: you never shuffle, the test set must be strictly later in time than the training set, cross-validation becomes an expanding window rather than random folds, and every feature must be checkable against the question "do I have this number on the morning I make the prediction?". Classical models add one more demand, stationarity, which is what differencing exists to produce.',
       isCaseBased: false,
     },
     {
-      question: 'Case: a demand forecast scores MAPE 4% in backtest and 22% in production. Give four hypotheses and a test for each.',
+      question: 'Case: a demand forecast scores 4% error in backtest and 22% in production. Give four hypotheses and a test for each.',
       answer:
-        '(1) Leakage through a feature unavailable at prediction time — a rolling window that included the current row, or a monthly aggregate computed over the whole month. Test: for every column, ask whether the value physically exists on the morning of the prediction; rebuild the backtest with a strict as-of join. (2) Shuffled or otherwise non-temporal splitting, so the backtest interpolated inside known time. Test: rerun with an expanding-window split and a gap; if the score collapses, the split was the bug. (3) Horizon mismatch — backtested at 1 step ahead but serving 30 steps, where recursive predictions compound their own errors. Test: report error by horizon; a rising curve confirms it. (4) Distribution shift — a promo calendar, a price change, a new regime not present in training. Test: compare feature distributions train versus live, and check whether errors cluster around specific dates or SKUs. Bonus hypothesis worth stating: MAPE itself is treacherous — it explodes on near-zero actuals and punishes over-forecasting asymmetrically, so a shift toward low-volume SKUs inflates it without the model getting worse. Compare with MAE or a scaled error such as MASE.',
+        'One, leakage through a feature that is not available at prediction time — a rolling window that included the current row, or a monthly total computed across the whole month and attached to rows inside it. Test: go column by column asking whether the value physically exists on the morning of the prediction, then rebuild the backtest so every feature is joined as of that morning. Two, a non-temporal split, so the backtest was interpolating between known days rather than forecasting. Test: rerun with an expanding-window split; if the score collapses, that was the bug, which is exactly the 0.75-versus-2.5 gap from this module. Three, horizon mismatch: backtested one step ahead but serving thirty steps, where each prediction is fed back in as an input and errors compound. Test: report error separately for each horizon; a rising curve confirms it. Four, distribution shift: a promotion calendar, a price change, or a product mix that did not exist in training. Test: compare feature distributions between training and live traffic, and check whether the errors cluster on particular dates or particular products. One extra worth raising: percentage error is treacherous on its own, because it explodes when actuals are near zero, so a shift toward low-volume products inflates it even if the model is unchanged.',
       isCaseBased: true,
-    },
-    {
-      question: 'ARIMA versus gradient boosting on lag features — when would you actually reach for ARIMA?',
-      answer:
-        'ARIMA(p, d, q) fits one series with p past values, d differences for stationarity and q past error terms; SARIMA adds a seasonal block. Reach for it when you have a single series or a handful, a decent length of history, strong autocorrelation, few or no external drivers, and a stakeholder who needs statistically grounded prediction intervals — ARIMA gives calibrated uncertainty that a GBM does not, without extra work. Reach for gradient boosting on lag/rolling/date features when you have many series (thousands of SKUs), rich exogenous variables (price, promo, holiday, weather), and non-linear interactions — one model learns across all series and lends strength to short ones. The tradeoff to state: the GBM cannot extrapolate outside the target range it saw, so on a genuinely trending series you must difference the target or model trend separately. And whichever you choose, benchmark against the naive baseline (last value, or last week’s same weekday) first — it wins more often than anyone expects.',
-      isCaseBased: false,
-    },
-    {
-      question: 'How do you cross-validate a time series, and how does forecast horizon change your setup?',
-      answer:
-        'Expanding-window (walk-forward) validation: train on periods 1..t, test on t+1..t+h, then roll forward and repeat, averaging the errors. Use a sliding window instead if old regimes are actively misleading and you want to weight recency. Add a gap between train and test equal to your longest rolling window so features do not straddle the boundary. Never shuffle, never use a random k-fold. Horizon: train and validate at the horizon you will actually serve — a 1-step model validated at 1 step tells you nothing about 30-step performance. Two strategies: direct, meaning a separate model per horizon (accurate, h models to maintain), or recursive, feeding predictions back as lags (one model, but errors compound step by step so intervals must widen). Always report error broken down by horizon rather than as one averaged number, because a flat average hides the fact that step 30 is guesswork.',
-      isCaseBased: false,
     },
   ],
   flashcards: [
     {
+      front: 'User-item matrix, and sparsity',
+      back: 'A grid: rows are users, columns are items, each cell is a rating or an interaction. Sparsity is the fraction of cells that are blank — in real systems well over 99%. Filling in a blank is the whole task.',
+    },
+    {
       front: 'Content-based vs collaborative filtering',
-      back: 'Content-based: similar ITEMS by feature — handles new items, but filter bubble and metadata-limited. CF: behaviour of similar USERS, no item features — finds surprising cross-category hits, but cold start at BOTH ends plus popularity bias.',
+      back: 'Content-based uses what the item IS (genre, text, image) and can recommend a brand-new item. Collaborative filtering uses only what people DID and finds links no description encodes, but is blind to any empty row or column.',
     },
     {
-      front: 'User-based vs item-based CF',
-      back: 'User-based: find similar people. Item-based: find items consumed together. Item-based won in industry — item similarities are stable and precomputable, user taste drifts.',
+      front: 'Item-item cosine similarity, by hand',
+      back: 'Two columns, e.g. Speed (4,5,0,1,0) and Ronin (4,4,1,2,4). Products summed: 38. Lengths: sqrt(42)=6.481 and sqrt(53)=7.280. 38 / 47.18 = 0.805. Near 1 means the same people rated both highly.',
     },
     {
-      front: 'Matrix factorization',
-      back: 'Factor the huge, ~99% empty user-item matrix into user and item vectors of size k. Predicted rating = DOT PRODUCT of the two. The item vector is an embedding — same idea as in GenAI.',
+      front: 'Predicting a missing rating',
+      back: 'Weighted average over the items the user did rate: sum of (rating x similarity) divided by sum of similarity. With ratings 5, 1, 1, 4 and similarities 0.754, 0.188, 0.235, 0.805: 7.415 / 1.983 = 3.74.',
+    },
+    {
+      front: 'Cold start',
+      back: 'A new user has a blank row and a new item has a blank column, so collaborative filtering has nothing to compare. Answers, in order: popularity fallback, onboarding taps, content features for new items, and forced exploration so unproven items can earn data.',
     },
     {
       front: 'Explicit vs implicit feedback',
-      back: 'Explicit = stars (clean, rare, biased to extremes). Implicit = clicks/watch-time (noisy, abundant, what real systems use). Implicit has no negative signal: a 0 means disliked OR never seen.',
+      back: 'Explicit = ratings the user deliberately gave: clean but rare. Implicit = clicks and watch time: abundant but with no negatives, since a non-click means disliked OR never shown, and nothing separates the two.',
     },
     {
-      front: 'Two-stage recommender',
-      back: 'Retrieval: millions to ~hundreds in ~10 ms with cheap dot products over an embedding index. Ranking: heavy model scores those hundreds in ~50 ms. Retrieval sets the ceiling on everything downstream.',
+      front: 'Lag feature and rolling average',
+      back: 'lag1 for day t is the value from day t-1; lag7 is the same weekday last week. A 3-day rolling average for day t is the mean of days t-3, t-2, t-1. The window must END at t-1 — including day t puts the answer into the question.',
     },
     {
-      front: 'Recsys evaluation',
-      back: 'RMSE on ratings is the wrong target — users see a short ranked list. Use Precision@K and NDCG (position-discounted), plus coverage and diversity. Decide on the online A/B.',
-    },
-    {
-      front: 'Cold-start playbook',
-      back: 'Popularity fallback (segmented) → onboarding preferences → session-based → content features for new items → forced exploration to buy data for the tail.',
-    },
-    {
-      front: 'Why time series is different',
-      back: 'Rows are not i.i.d. Order carries the signal (autocorrelation) and the distribution drifts. So: no shuffling, test set is always the future, features must be knowable at prediction time.',
-    },
-    {
-      front: 'Stationarity, differencing, ARIMA(p, d, q)',
-      back: 'Stationary = mean, variance and correlation structure do not depend on when you look; classical models require it. Fix by differencing: model Δy = y_t − y_{t-1}. In ARIMA: p = past VALUES (AR), d = number of differences, q = past ERRORS (MA). SARIMA adds a seasonal (P, D, Q, s) block.',
-    },
-    {
-      front: 'The two time-series rules',
-      back: '1) Never shuffle a time split — use an expanding window with a gap. 2) Never use a feature that will not exist at prediction time (rolling windows must end at t-1). Both produce gorgeous backtests and dead models.',
+      front: 'Never shuffle a time split',
+      back: 'The same predictor on the same twelve days scored MAE 0.75 shuffled and 2.5 time-ordered. Shuffling let it average the days on both sides of a test day, so it interpolated instead of forecasting. Use an expanding window: train 1..t, test t+1.',
     },
   ],
   mindmapMarkdown: `- Recommendation Systems & Time-Series Basics
-  - Content-based
-    - Item features to similar items
-    - Good for new items and stated preferences
-    - Filter bubble, metadata-limited
-  - Collaborative filtering
-    - Behaviour only, no item features
-    - User-based vs item-based
-    - Item-based won: stable, precomputable
-    - Cold start both ends, popularity bias
-  - Matrix factorization
-    - Huge ~99% empty matrix
-    - rating = user vector . item vector
-    - Latent factors = embeddings
-    - Fit on OBSERVED cells only, plus L2
-  - Feedback type
-    - Explicit: stars, rare, biased
-    - Implicit: clicks, watch-time, abundant
-    - No negative signal, position bias
-  - Two-stage serving
-    - Retrieval: millions to hundreds, ~10 ms
-    - Ranking: hundreds scored heavy, ~50 ms
-    - Policy: diversity, freshness, exploration
+  - The user-item matrix
+    - Rows users, columns items, cells ratings
+    - Blanks everywhere = sparsity
+    - The task is filling one blank
+  - Two ways to fill it
+    - Content-based: what the item IS
+    - Collaborative: what people DID
+    - Real systems use both
+  - Item-item collaborative filtering
+    - Compare two columns with cosine
+    - Speed vs Ronin = 0.805 by hand
+    - Predict by weighted average
+    - Eve on Speed = 7.415 / 1.983 = 3.74
+  - Problems it has
+    - Cold start: blank row, blank column
+    - Implicit feedback has no negatives
+    - Popularity bias
+  - Matrix factorisation
+    - Short list of numbers per user and per item
+    - Dot product reproduces known ratings
+    - Fit on observed cells only
+  - Scoring a recommender
+    - Rating error is the wrong target
+    - Ranking Metrics module: Precision@K, MAP, NDCG
+    - Also coverage and diversity
+  - Time series
+    - Order is part of the data
+    - Trend, seasonality, leftover wobble
+    - Lag features and rolling averages
+    - Window must end at t-1
+  - Baseline first
+    - Same as yesterday: MAE 2.27
+    - Beat it before claiming anything
+  - The one rule
+    - Shuffled split MAE 0.75 = fiction
+    - Time-ordered MAE 2.5 = honest
+    - Interpolating is not forecasting
+    - Expanding window, plus a gap
+  - Beyond the basics
+    - Two-stage serving: retrieval then ranking
     - Retrieval sets the ceiling
-  - Evaluation
-    - RMSE is the wrong target
-    - Precision@K, NDCG (Metrics subject)
-    - Coverage and diversity too
-  - Cold-start playbook
-    - Popularity fallback
-    - Onboarding preferences
-    - Content features, forced exploration
-  - Time series basics
-    - Not i.i.d., order matters
-    - Trend + seasonality + residual
-    - Stationarity, differencing
-    - Autocorrelation to lag features
-  - Models
-    - Moving average baseline
-    - Exponential smoothing, Holt-Winters
-    - ARIMA(p, d, q), SARIMA
-    - Lag features + gradient boosting wins
-    - Prophet, DeepAR / N-BEATS / TFT next
-  - The two rules
-    - Never shuffle: expanding-window CV
-    - No feature unavailable at prediction time
-    - Longer horizon, compounding error`,
+    - ARIMA, Prophet, gradient boosting on lags`,
 }
 
 export default m
