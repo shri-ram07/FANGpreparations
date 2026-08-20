@@ -5,7 +5,7 @@ import type { Module } from '@/content/types'
 import { useApp } from '@/stores/app'
 import { SectionRenderer } from '@/components/sections/SectionRenderer'
 import { QuizBlock } from '@/components/QuizBlock'
-import { InterviewBlock } from '@/components/InterviewBlock'
+import { InterviewBlock, WorkedCases } from '@/components/InterviewBlock'
 
 const MindMap = lazy(() => import('@/components/MindMap'))
 
@@ -89,6 +89,7 @@ export function Component() {
             ))}
           </div>
 
+          <WorkedCases moduleId={module.id} questions={module.interviewQuestions} />
           <QuizBlock quiz={module.quiz} />
           <InterviewBlock moduleId={module.id} questions={module.interviewQuestions} />
 
