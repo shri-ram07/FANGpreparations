@@ -6,284 +6,456 @@ const m: Module = {
   level: 0,
   title: 'Tokenization: How Text Becomes Numbers',
   whyItMatters:
-    'Every LLM bug that makes people say "the model is dumb" — it cannot count letters, it fails at arithmetic, a trailing space wrecks the prompt, Hindi costs 3x more than English — traces back to this one layer. It is also the cheapest interview win: almost nobody can explain BPE properly, and you will build one here in 40 lines. Tokenization is where your context window and your API bill are actually decided.',
-  estMinutes: 50,
+    'A language model does arithmetic. Arithmetic needs numbers. Text is not numbers, so something has to convert one into the other before the model sees a single word — and that converter is the tokenizer. This module builds one by hand, on a five-word corpus, with every count written out. By the end you will know exactly why a model cannot count the letters in "strawberry", why a Hindi sentence costs three times more than the same sentence in English, and why "128k context" is not 128k words.',
+  assumes: [
+    'You know what a Python list and a Python dictionary are',
+    'You have written a for loop and an if statement',
+    'You know that a string is a sequence of characters',
+    'No machine learning background is needed. Every term is defined on this page, the first time it is used.',
+  ],
+  estMinutes: 46,
   sections: [
     {
       type: 'intuition',
-      title: 'A transformer cannot read',
-      md: `Strip the mystique. A neural network is a stack of matrix multiplies. Matrices hold **numbers**. There is nowhere to put the letter "c".
+      title: 'The problem: "hello" is not a number',
+      md: `A neural network is a large pile of multiplications and additions. You feed it numbers, it multiplies them by other numbers, and numbers come out. There is no operation in it that accepts the letter **h**.
 
-- So before anything else, text must become a list of integers: \`"the cat"\` → \`[464, 3797]\`.
-- Each integer is a row index into an **embedding matrix** — a big lookup table of learned vectors, one row per vocabulary entry.
-- That is the entire job of a tokenizer: text in, integer ids out. And the reverse for decoding.
-- The unit you chop text into is called a **token**, and the fixed set of possible tokens is the **vocabulary** (size V).
-- Everything downstream inherits this choice. The model literally cannot perceive anything finer than one token — a fact that comes back to bite in a big way at the end of this module.`,
+- So before anything else happens, the text you typed has to be replaced by a list of whole numbers. For example \`"hello there"\` might become \`[15339, 1070]\`.
+- The piece of software that does this replacement is called the **tokenizer**. It runs before the model and has no learned intelligence of its own.
+- It also has to run backwards: the model produces numbers, and those numbers have to become readable text again.
+
+The whole question of this module is: **what should each number stand for?** That choice sounds like a small engineering detail. It is not. It decides how much your API calls cost, how much text fits in one request, and which tasks the model is quietly incapable of.`,
     },
     {
       type: 'intuition',
-      title: 'Three ways to cut text — and why two of them lose',
-      md: `You have to pick a chopping rule. There are exactly three families, and the tradeoff is always the same: *vocabulary size versus sequence length versus meaning per token*.
+      title: 'Three ways to cut text into numbers',
+      md: `You need a rule that chops text into pieces, and then a number for each distinct piece. There are three obvious rules. Two of them fail, and the reason each one fails is worth holding on to.
 
-1. **Character-level** — vocabulary is ~100 symbols. Tiny embedding table, and no word is ever "unknown" because every word is made of characters you already have. But "internationalization" becomes 20 tokens, so sequences get 4-5x longer (and attention costs O(n²) in that length). Worse, one character carries almost no meaning — the model must relearn from scratch that t-h-e means "the".
-2. **Word-level** — vocabulary is every word you saw: 200k+ for English, and that is before names, typos and URLs. Each token is meaningful, sequences are short. But two killers: the **out-of-vocabulary cliff** — anything unseen at training time collapses to a single \`<UNK>\` token and the information is gone forever — and no shared structure, so "run", "running" and "runner" are three unrelated rows in the table that must each learn "run" independently.
-3. **Subword** — chop into frequent *pieces*. Common words stay whole ("the" = 1 token). Rare words split into parts ("tokenization" → "token" + "ization"). Vocabulary lands around 30k-200k, sequences stay short, and "running" shares the piece "run" with "run".
+**Option 1 — one number per character.** \`h\`=1, \`e\`=2, \`l\`=3, and so on. About 100 different pieces covers English. Nothing is ever missing: any word you have never seen is still made of letters you already have numbers for. The failure is that a single letter means almost nothing. The model gets \`t\`, \`h\`, \`e\` as three separate numbers and has to work out for itself, from scratch, that those three in a row are the word "the". And text gets long: the word "internationalization" is one idea but twenty numbers. Later modules will show that the cost of processing a sequence grows with the *square* of its length, so four times longer is roughly sixteen times more expensive.
 
-Subword won everything. The rest of this module is how the pieces get chosen.`,
+**Option 2 — one number per word.** \`the\`=1, \`cat\`=2, \`internationalization\`=3. Now each number carries real meaning and the list is short. Two things kill it. First, the list of distinct words is enormous: over 200,000 for English before you count names, typos, URLs and product codes. Second and worse, the list has to be fixed in advance. When a word arrives that was not on the list — a new slang word, a misspelling, a surname — there is no number for it. It gets replaced by a single "unknown" number and the actual content is gone permanently.
+
+**Option 3 — the compromise: cut into frequent pieces.** Do not commit to letters or to whole words. Let common words stay whole, and let rare words break into a few pieces. "the" is one piece. "tokenization" becomes "token" + "ization". Now the list of distinct pieces is a manageable 30,000 to 200,000, text stays reasonably short, and nothing is ever unrepresentable because a truly strange word can always fall back to its letters. This is what every real language model uses.`,
     },
     {
       type: 'intuition',
-      title: 'BPE: a 1994 compression algorithm, pointed at text',
-      md: `Byte-Pair Encoding was invented to compress files. Somebody noticed it also solves the subword problem, and it now runs inside GPT. The algorithm is five lines and you can do it in your head.
+      title: 'The four words you need',
+      md: `Now that you have seen the idea, here are the names, each one in plain words.
 
-1. Start with every word split into **single characters**. The vocabulary is just the distinct characters.
-2. Count every **adjacent pair** across the whole corpus, weighted by how often each word appears.
-3. Take the **single most frequent pair** and merge it everywhere into one new symbol. Add that symbol to the vocabulary.
-4. Repeat from step 2, N times. N is your knob: vocabulary size = starting characters + N.
-5. Stop. Save the **ordered list of merges**.
+- A **token** is one piece that the chopping rule produced. It might be a whole word, a fragment of a word, a space, or a single letter. It is whatever the tokenizer decided to treat as one unit.
+- The **vocabulary** is the complete, fixed list of every token the tokenizer knows. Its length is usually written **V**. If V is 50,000, there are exactly 50,000 distinct tokens in the world as far as this model is concerned.
+- A **token id** is simply the position of a token in that list. If "the" is entry number 464, then the token id of "the" is 464. The number itself means nothing else — id 465 is not "bigger" or "next to" id 464 in any meaningful sense.
+- A **subword** is a token that is part of a word rather than a whole word. "ization" is a subword.
 
-The key idea most people miss: **the merge list IS the tokenizer.** There is no clever runtime search. To tokenize new text you split it into characters and replay the same merges, in the same order, and whatever symbols survive are your tokens. Training is greedy and frequency-driven; encoding is deterministic replay.`,
+So tokenizing is two steps: chop the text into tokens, then look up each token's position in the vocabulary. The output is a list of integers. That is all the model ever receives.`,
     },
     {
       type: 'intuition',
-      title: 'Four merges, by hand',
-      md: `Corpus of five words with how often each appears: **hug** ×10, **pug** ×5, **pun** ×12, **bun** ×4, **hugs** ×5. Start: \`h|u|g\`, \`p|u|g\`, \`p|u|n\`, \`b|u|n\`, \`h|u|g|s\`. Base vocabulary = {b, g, h, n, p, s, u} — seven symbols.
+      title: 'Byte-pair encoding: how the pieces are chosen',
+      md: `Option 3 left a question open: who decides which pieces are worth having? Nobody writes that list by hand. It is discovered from data, by an algorithm called **byte-pair encoding**, or **BPE**. It was invented in 1994 to compress files, and it is five steps long.
 
-1. **Count the pairs.** \`u+g\` appears in hug (10), pug (5), hugs (5) = **20**. \`p+u\` = 5+12 = 17. \`u+n\` = 12+4 = 16. \`h+u\` = 10+5 = 15. \`g+s\` = 5, \`b+u\` = 4. Winner: **u+g → "ug"**. Corpus becomes \`h|ug\`, \`p|ug\`, \`p|u|n\`, \`b|u|n\`, \`h|ug|s\`.
-2. **Recount** — the merge changed the pairs. Now \`u+n\` = 16 leads (\`h+ug\` = 15, \`p+u\` = 12). Winner: **u+n → "un"**.
-3. **Recount.** \`h+ug\` = 15 is now top (\`p+un\` = 12). Winner: **h+ug → "hug"** — a merge built on top of an earlier merge. This is how long tokens grow.
-4. **Recount.** \`p+un\` = 12 wins. Winner: **p+un → "pun"**.
+1. Take a big pile of text and count how many times each word appears.
+2. Split every word into individual characters. The vocabulary starts as just the distinct characters.
+3. Count every **adjacent pair** of neighbouring symbols across the whole pile, where a word appearing 12 times contributes 12 to each of its pairs.
+4. Find the most frequent pair and **merge** it: everywhere those two symbols sit side by side, glue them into one new symbol, and add that new symbol to the vocabulary.
+5. Go back to step 3 and repeat, as many times as you want. Each repetition adds exactly one new token to the vocabulary.
 
-Merge list: \`u+g\`, \`u+n\`, \`h+ug\`, \`p+un\`. Vocabulary grew from 7 to 11. Notice what happened without anyone designing it: "hug" and "pun" became single tokens because they were frequent, while "bun" stayed as \`b|un\` because it was rare. Frequency bought wholeness.`,
+A **merge** is that gluing operation — one rule saying "these two symbols become one". The result of training is an **ordered list of merges**, and that list is the entire tokenizer. There is nothing else in the file.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Three merges, worked by hand',
+      md: `Take a corpus of five words, with the number of times each one appears: **hug** 10 times, **pug** 5, **pun** 12, **bun** 4, **hugs** 5.
+
+Split them into characters: \`h u g\`, \`p u g\`, \`p u n\`, \`b u n\`, \`h u g s\`. The starting vocabulary is the distinct characters: b, g, h, n, p, s, u — **7 symbols**.
+
+Count how many tokens the whole corpus takes right now. Each copy of "hug" is 3 tokens and there are 10 copies, so 30. Then pug 3 x 5 = 15, pun 3 x 12 = 36, bun 3 x 4 = 12, hugs 4 x 5 = 20. Total: 30 + 15 + 36 + 12 + 20 = **113 tokens**.
+
+**Merge 1.** Count every adjacent pair, weighting each word by how often it appears. The pair \`u g\` appears inside hug (10), pug (5) and hugs (5), so its count is 20. The pair \`p u\` appears in pug (5) and pun (12), so 17. \`u n\` is in pun (12) and bun (4), so 16. \`h u\` is in hug (10) and hugs (5), so 15. \`g s\` is 5 and \`b u\` is 4. The winner is \`u g\` with 20. Glue it: the corpus becomes \`h ug\`, \`p ug\`, \`p u n\`, \`b u n\`, \`h ug s\`. The vocabulary is now 8 symbols, and the corpus shrank by exactly 20 tokens, from 113 to **93** — one token saved for each place the merge applied.
+
+**Merge 2.** Recount from the new corpus, because merging changed which pairs exist. Now \`u n\` leads with 16, ahead of \`h ug\` at 15 and \`p u\` at 12. Merge it. Vocabulary 9, tokens 93 - 16 = **77**.
+
+**Merge 3.** Recount again. \`h ug\` now wins with 15. Notice what this merge is doing: it glues a single character onto a symbol that was itself created by merge 1. This is how long tokens get built — merges stack on earlier merges. The corpus becomes \`hug\`, \`p ug\`, \`p un\`, \`b un\`, \`hug s\`. Vocabulary 10, tokens 77 - 15 = **62**.
+
+Three merges took the vocabulary from 7 to 10 and the corpus from 113 tokens to 62. Nobody decided that "hug" deserved to be one token. Frequency decided it. And "bun", being rare, is still two pieces.`,
     },
     {
       type: 'code',
       lang: 'python',
-      title: 'A complete BPE trainer in 40 lines — train, print the merge list, encode new words',
-      code: `from collections import Counter
+      title: 'Part 1: split into characters and build the starting vocabulary',
+      code: `corpus = {'hug': 10, 'pug': 5, 'pun': 12, 'bun': 4, 'hugs': 5}
+words = {}
+for w in corpus:
+    words[w] = list(w)
+print(words)
 
-corpus = {'hug': 10, 'pug': 5, 'pun': 12, 'bun': 4, 'hugs': 5}
-words = {w: list(w) for w in corpus}          # step 0: every word is a list of characters
-vocab = sorted({ch for w in corpus for ch in w})
-print("start vocab:", vocab, f"({len(vocab)} symbols)")
+vocab = []
+for w in corpus:
+    for ch in w:
+        if ch not in vocab:
+            vocab.append(ch)
+vocab.sort()
+print(vocab, len(vocab))
 
-def pair_counts(words):
-    c = Counter()
-    for w, toks in words.items():
-        for pair in zip(toks, toks[1:]):      # every ADJACENT pair inside the word
-            c[pair] += corpus[w]              # weighted by how often the word occurs
-    return c
+# ---- real output ----
+# {'hug': ['h', 'u', 'g'], 'pug': ['p', 'u', 'g'], 'pun': ['p', 'u', 'n'], 'bun': ['b', 'u', 'n'], 'hugs': ['h', 'u', 'g', 's']}
+# ['b', 'g', 'h', 'n', 'p', 's', 'u'] 7`,
+      annotations: {
+        1: 'A dictionary from each word to how many times it appears. This word-count is the only thing BPE training ever looks at — real trainers build it from gigabytes of text first.',
+        2: 'An empty dictionary that will hold, for each word, its current list of symbols.',
+        3: 'Looping over a dictionary gives you its keys, so w takes the values \'hug\', \'pug\', \'pun\', \'bun\', \'hugs\' in turn.',
+        4: 'list(\'hug\') turns a string into a list of its single characters: [\'h\', \'u\', \'g\']. This is step 2 of the algorithm — every word starts fully split.',
+        5: 'Prints the five words in their split form, so you can see the starting state.',
+        7: 'An empty list that will become the starting vocabulary.',
+        8: 'Walk the words again, this time to collect characters rather than split them.',
+        9: 'Loop over the characters of one word. Looping over a string gives one character at a time.',
+        10: 'The "in" operator asks whether this character is already in the list. Skipping duplicates is what makes the result a set of DISTINCT characters.',
+        11: 'Add a character we have not seen before to the vocabulary.',
+        12: '.sort() reorders the list alphabetically in place. Purely so the printed output is readable; order does not affect the algorithm.',
+        13: 'Prints the starting vocabulary and its size: 7 symbols, exactly as counted by hand.',
+      },
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Part 2: count adjacent pairs, and count total tokens (paste below Part 1)',
+      code: `def count_pairs(words):
+    counts = {}
+    for w in words:
+        toks = words[w]
+        for i in range(len(toks) - 1):
+            pair = (toks[i], toks[i + 1])
+            counts[pair] = counts.get(pair, 0) + corpus[w]
+    return counts
 
-def apply_merge(toks, a, b):
-    out, i = [], 0
+def total_tokens(words):
+    n = 0
+    for w in words:
+        n = n + len(words[w]) * corpus[w]
+    return n
+
+print(count_pairs(words))
+print('total tokens in corpus:', total_tokens(words))
+
+# ---- real output ----
+# {('h', 'u'): 15, ('u', 'g'): 20, ('p', 'u'): 17, ('u', 'n'): 16, ('b', 'u'): 4, ('g', 's'): 5}
+# total tokens in corpus: 113`,
+      annotations: {
+        1: 'Takes the dictionary of split words and returns a count for every adjacent pair. This is step 3 of the algorithm.',
+        2: 'The counts we are building. Keys will be pairs, values will be numbers.',
+        3: 'Go through each word in the corpus.',
+        4: 'Pull out this word\'s current list of symbols, so the next lines are easier to read.',
+        5: 'len(toks) - 1 is the number of adjacent pairs in a list: 3 symbols have 2 neighbouring pairs. Stopping one short avoids running off the end.',
+        6: 'Build the pair as a tuple — two values wrapped in parentheses. A tuple can be a dictionary key; a list cannot, which is the only reason a tuple is used here.',
+        7: 'counts.get(pair, 0) returns the count so far, or 0 if this pair is new. We add corpus[w], NOT 1 — a word appearing 12 times votes 12 times for each of its pairs.',
+        8: 'Hand the finished count dictionary back to the caller.',
+        10: 'A separate helper that measures how big the corpus currently is, in tokens.',
+        11: 'A running total, starting at zero.',
+        12: 'Visit every word.',
+        13: 'len(words[w]) is how many symbols this word is currently split into; corpus[w] is how many copies of it exist. Multiply, and add.',
+        14: 'Return the total.',
+        16: 'Prints all six pair counts. Compare them to the hand-worked numbers: u+g is 20, p+u is 17, u+n is 16, h+u is 15.',
+        17: 'Prints 113, the same total we computed by hand.',
+      },
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Part 3: pick the winning pair (paste below Part 2)',
+      code: `def best_pair(counts):
+    best = None
+    for pair in counts:
+        if best is None or counts[pair] > counts[best]:
+            best = pair
+    return best
+
+print(best_pair(count_pairs(words)))
+
+# ---- real output ----
+# ('u', 'g')`,
+      annotations: {
+        1: 'Takes the pair counts and returns the single most frequent pair. This is the first half of step 4.',
+        2: 'best holds the winner found so far. None is Python\'s "nothing here yet" value, used because we have not seen any pair yet.',
+        3: 'Loop over the keys of the counts dictionary, which are the pairs.',
+        4: 'Two cases joined by "or": if we have no winner yet, take this pair; otherwise take it only if its count beats the current winner\'s count. This is a plain maximum search.',
+        5: 'Record the new winner.',
+        6: 'Return the winning pair after the whole dictionary has been checked.',
+        8: 'Prints the winner of round one. It is (\'u\', \'g\') with 20 — greedy, with no lookahead and no attempt to plan future merges. If two pairs tie, whichever came first wins, which is why two BPE implementations can disagree on ties.',
+      },
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Part 4: apply a merge to one word (paste below Part 3)',
+      code: `def merge(toks, a, b):
+    out = []
+    i = 0
     while i < len(toks):
         if i < len(toks) - 1 and toks[i] == a and toks[i + 1] == b:
-            out.append(a + b); i += 2
+            out.append(a + b)
+            i = i + 2
         else:
-            out.append(toks[i]); i += 1
+            out.append(toks[i])
+            i = i + 1
     return out
 
-merges = []
-for step in range(1, 5):                      # N = 4 merges
-    counts = pair_counts(words)
-    (a, b), n = counts.most_common(1)[0]      # the single most frequent adjacent pair
-    merges.append((a, b))
-    words = {w: apply_merge(t, a, b) for w, t in words.items()}
-    vocab.append(a + b)
-    print(f"merge {step}: {a!r}+{b!r} -> {a+b!r}  seen {n}x   corpus now: "
-          + "  ".join("|".join(t) for t in words.values()))
+print(merge(['h', 'u', 'g', 's'], 'u', 'g'))
 
-print("\\nmerge list (THIS is the tokenizer):", [f"{a}+{b}" for a, b in merges])
-print("vocab now:", vocab, f"({len(vocab)} symbols)")
-
-def encode(word):
-    toks = list(word)
-    for a, b in merges:                       # replay the merges IN ORDER
-        toks = apply_merge(toks, a, b)
-    return toks
-
-for w in ['hug', 'hugs', 'pun', 'bug', 'mug']:
-    t = encode(w)
-    oov = [s for s in t if s not in vocab]    # symbols this tokenizer cannot represent
-    flag = f"   <- UNK: {oov} never appeared in training" if oov else ""
-    print(f"encode({w!r}) -> {t}   {len(w)} chars -> {len(t)} tokens{flag}")
-
-# ---------- real output ----------
-# start vocab: ['b', 'g', 'h', 'n', 'p', 's', 'u'] (7 symbols)
-# merge 1: 'u'+'g' -> 'ug'  seen 20x   corpus now: h|ug  p|ug  p|u|n  b|u|n  h|ug|s
-# merge 2: 'u'+'n' -> 'un'  seen 16x   corpus now: h|ug  p|ug  p|un  b|un  h|ug|s
-# merge 3: 'h'+'ug' -> 'hug'  seen 15x   corpus now: hug  p|ug  p|un  b|un  hug|s
-# merge 4: 'p'+'un' -> 'pun'  seen 12x   corpus now: hug  p|ug  pun  b|un  hug|s
-#
-# merge list (THIS is the tokenizer): ['u+g', 'u+n', 'h+ug', 'p+un']
-# vocab now: ['b', 'g', 'h', 'n', 'p', 's', 'u', 'ug', 'un', 'hug', 'pun'] (11 symbols)
-# encode('hug') -> ['hug']   3 chars -> 1 tokens
-# encode('hugs') -> ['hug', 's']   4 chars -> 2 tokens
-# encode('pun') -> ['pun']   3 chars -> 1 tokens
-# encode('bug') -> ['b', 'ug']   3 chars -> 2 tokens
-# encode('mug') -> ['m', 'ug']   3 chars -> 2 tokens   <- UNK: ['m'] never appeared in training`,
+# ---- real output ----
+# ['h', 'ug', 's']`,
       annotations: {
-        3: 'Real trainers count words over gigabytes of text first; the dict of word -> frequency is the only thing BPE training ever looks at.',
-        5: 'The starting vocabulary is just the distinct characters present. Seven here. In byte-level BPE this line is replaced by "the 256 possible bytes" — and that one change removes UNK forever.',
-        12: 'Pairs are weighted by word frequency, not counted once per word type. A word appearing 12 times votes 12 times.',
-        27: 'The whole algorithm is this line: take the single most frequent adjacent pair. Greedy, no lookahead, no optimization objective. Ties are broken arbitrarily — which is why two BPE implementations can disagree on a tie and produce different vocabularies.',
-        29: 'The merge is applied everywhere at once, then the counts are recomputed from scratch. Merging changes which pairs exist — that is why step 3 could pick h+ug, a merge stacked on a previous merge.',
-        34: 'This ordered list is the entire trained artifact. Ship this file and you have shipped the tokenizer.',
-        39: 'Encoding replays merges in learned order. Order is load-bearing: applying u+n before u+g on some word would give a different split. Never sort the merge list.',
-        45: 'The out-of-vocabulary check made explicit.',
-        51: 'u+g won at 20 over p+u (17), u+n (16), h+u (15). Frequency alone decided that "ug" deserves to be a token.',
-        62: 'The failure mode: the letter m never appeared in training, so this character-level BPE has no id for it. Real word/char tokenizers emit <UNK> here and the information is destroyed. Byte-level BPE, next section, makes this impossible.',
+        1: 'Takes one word\'s symbol list and the two symbols to glue together. This is the second half of step 4.',
+        2: 'The rebuilt symbol list. We do not edit the original list while walking it — that is a classic source of bugs — we build a new one.',
+        3: 'A manual position counter. A while loop is used instead of a for loop precisely because we sometimes need to skip forward by two.',
+        4: 'Keep going until the counter reaches the end of the list.',
+        5: 'Three conditions joined by "and": there is a next symbol to look at, this symbol equals a, and the next one equals b. All three must hold for a merge here.',
+        6: 'a + b joins the two strings into one, so \'u\' + \'g\' becomes the single symbol \'ug\'. Append it once.',
+        7: 'Skip forward by two, because both symbols were consumed by the merge.',
+        8: 'Otherwise there is no merge at this position.',
+        9: 'Copy the symbol across unchanged.',
+        10: 'Move forward by one.',
+        11: 'Return the rebuilt list.',
+        13: 'A test on the word "hugs": merging u and g turns [\'h\', \'u\', \'g\', \'s\'] into [\'h\', \'ug\', \'s\'] — one symbol shorter, exactly as expected.',
+      },
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Part 5: the training loop, three merges (paste below Part 4)',
+      code: `merges = []
+for step in range(3):
+    counts = count_pairs(words)
+    a, b = best_pair(counts)
+    merges.append((a, b))
+    vocab.append(a + b)
+    for w in words:
+        words[w] = merge(words[w], a, b)
+    print('merge', step + 1, a + b, 'seen', counts[(a, b)], '| vocab', len(vocab), '| tokens', total_tokens(words))
+    print('   corpus:', words)
+
+# ---- real output ----
+# merge 1 ug seen 20 | vocab 8 | tokens 93
+#    corpus: {'hug': ['h', 'ug'], 'pug': ['p', 'ug'], 'pun': ['p', 'u', 'n'], 'bun': ['b', 'u', 'n'], 'hugs': ['h', 'ug', 's']}
+# merge 2 un seen 16 | vocab 9 | tokens 77
+#    corpus: {'hug': ['h', 'ug'], 'pug': ['p', 'ug'], 'pun': ['p', 'un'], 'bun': ['b', 'un'], 'hugs': ['h', 'ug', 's']}
+# merge 3 hug seen 15 | vocab 10 | tokens 62
+#    corpus: {'hug': ['hug'], 'pug': ['p', 'ug'], 'pun': ['p', 'un'], 'bun': ['b', 'un'], 'hugs': ['hug', 's']}`,
+      annotations: {
+        1: 'The merge list we are about to build. This list is the trained tokenizer — everything else in this file is scaffolding.',
+        2: 'range(3) gives 0, 1, 2, so the loop body runs three times: three merges.',
+        3: 'Recount the pairs from the CURRENT corpus. Recounting every round is essential, because the previous merge changed which pairs exist.',
+        4: 'best_pair returns a tuple of two symbols, and "a, b =" unpacks it into two separate variables in one line. This is called tuple unpacking.',
+        5: 'Record the merge, in order. Order will matter when we encode new text.',
+        6: 'The glued symbol becomes a new vocabulary entry. One merge, one new token — which is why vocabulary size is just base characters plus number of merges.',
+        7: 'Now apply the merge to every word in the corpus.',
+        8: 'Replace each word\'s symbol list with the merged version.',
+        9: 'Print the round number, the new symbol, how often the merged pair was seen, and the two numbers that tell the story: vocabulary size and total corpus tokens.',
+        10: 'Print the corpus itself so you can watch the words fuse. By round 3, \'hug\' is a single symbol.',
       },
     },
     {
       type: 'note',
-      md: 'Two things to take from that output. First, `encode(\'hug\')` returns ONE token while `encode(\'bug\')` returns two — the tokenizer is a frequency snapshot of its training corpus, not a linguist. Second, `mug` broke it. Scale that up: a tokenizer trained on English web text meets a Tamil word, a novel emoji, or a base64 blob, and something has to give.',
+      md: 'Read the three output lines as a pair of trends. The vocabulary goes 8, 9, 10 — up by exactly one each round, because each merge adds one symbol. The token count goes 93, 77, 62 — down by exactly the number of times the merged pair was seen, because every place the merge applied turned two tokens into one. That is the whole trade: **you spend vocabulary entries to buy shorter text.** Every real tokenizer is this loop run tens of thousands of times on a large pile of internet text.',
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Part 6: tokenize new words by replaying the merges (paste below Part 5)',
+      code: `def encode(word):
+    toks = list(word)
+    for pair in merges:
+        toks = merge(toks, pair[0], pair[1])
+    return toks
+
+for w in ['hug', 'hugs', 'bun', 'mug']:
+    print(w, '->', encode(w), '|', len(w), 'chars ->', len(encode(w)), 'tokens')
+
+# ---- real output ----
+# hug -> ['hug'] | 3 chars -> 1 tokens
+# hugs -> ['hug', 's'] | 4 chars -> 2 tokens
+# bun -> ['b', 'un'] | 3 chars -> 2 tokens
+# mug -> ['m', 'ug'] | 3 chars -> 2 tokens`,
+      annotations: {
+        1: 'Tokenizing a brand new word. Note what this function does NOT do: it never counts anything and never looks at the corpus. Training happened once; this is just replay.',
+        2: 'Start from scratch, fully split into characters, exactly as training started.',
+        3: 'Walk the merge list in the order it was learned.',
+        4: 'Apply that one merge to the whole word, using the same merge function from Part 4. pair[0] and pair[1] are the two symbols of the tuple.',
+        5: 'Whatever symbols survive all the merges are the tokens.',
+        7: 'Four test words: two the trainer saw, one it saw only as part of a bigger word, and one it never saw at all.',
+        8: 'Print the word, its tokens, and how many characters became how many tokens.',
+      },
+    },
+    {
+      type: 'note',
+      md: 'Three things in that output are the whole module in miniature. **"hug" is one token** because it was frequent enough to earn a merge. **"bun" is two tokens** because it was rare — same length, twice the cost. And **"mug" contains the letter m, which never appeared in training**, so this tokenizer has no symbol for it at all. A character-level tokenizer would have to give up here and emit an "unknown" marker. The next section shows the trick that makes this impossible in real systems.',
     },
     {
       type: 'intuition',
-      title: 'Byte-level BPE: the trick that kills UNK forever',
-      md: `GPT-2 fixed the \`<UNK>\` problem with a change so simple it is almost cheating: **do not start from characters, start from bytes.**
+      title: 'Real tokenizers start from bytes, not characters',
+      md: `The "mug" failure is not acceptable in production, where the input might be any language, an emoji, or a corrupted paste. GPT-2 fixed it with one small change: **do not start from characters, start from bytes.**
 
-- Any text on earth, in any language, is UTF-8 — a sequence of bytes, each 0-255.
-- So make the base vocabulary the **256 possible byte values**. Then run exactly the BPE loop you just wrote, on byte sequences.
-- Now every possible input is representable, by construction. There is no unknown token, ever. Not for emoji, not for Klingon, not for a corrupted binary paste.
-- The bill: characters outside ASCII cost multiple bytes, so they start life shattered. \`é\` is 2 UTF-8 bytes. \`你\` is 3. \`नमस्ते\` is 6 characters but **18 bytes**. \`🙂\` is 4 bytes.
-- If the training corpus had enough Hindi, BPE will have merged those byte runs back into whole Hindi tokens and you never notice. If it did not, Hindi text tokenizes near the byte level and costs 3-4x more tokens than the same meaning in English.
-- That is not a bug in the algorithm. It is the training corpus's language mix, made visible on your invoice.`,
-    },
-    {
-      type: 'note',
-      md: 'The other three names you will be asked about, one line each. **WordPiece** (BERT): same merge loop, but it picks the pair that maximizes corpus likelihood rather than raw count — roughly, it prefers pairs whose parts are rare on their own; continuation pieces are marked `##ing`. **Unigram** (used by ALBERT, T5): works backwards — start with a huge candidate vocabulary and iteratively *delete* the pieces whose removal hurts likelihood least; it can score multiple segmentations of the same word, which enables subword regularization. **SentencePiece** is not an algorithm but the library/format that wraps BPE or Unigram and adds the multilingual-friendly part: it treats the **space as a normal character** (rendered `▁`), so it needs no language-specific pre-tokenizer and works on Japanese or Thai, which have no spaces — and decoding becomes exactly lossless string concatenation.',
-    },
-    {
-      type: 'note',
-      md: 'Step the demo below one merge at a time and watch two different things happen at once. Frequent substrings **fuse** — `t`+`h` becomes `th`, then `the`, then later `trans` and `former` slam together into a single `transformer` token. Meanwhile switch to the sample `zyxwv quartz` and step all the way to the end: it stays shattered into single characters, because no merge in the list ever saw those letter pairs. That contrast is the entire module in one screen — common text is cheap, rare text is expensive, and the model sees the pieces, never the letters.',
+- A **byte** is a number from 0 to 255. Every piece of text stored on a computer is, underneath, a sequence of bytes. English letters take one byte each; other scripts take more.
+- So make the starting vocabulary the 256 possible byte values, then run exactly the loop you just wrote on byte sequences instead of character sequences.
+- Now nothing can ever be unrepresentable, because every possible input is already a sequence of bytes. There is no "unknown" case left to handle.
+- The price: characters outside the English alphabet cost several bytes each, so they start life shattered into more pieces. The letter \`é\` is 2 bytes. A Chinese character is 3. A Devanagari character is 3, so \`नमस्ते\` is 6 characters but 18 bytes.
+- Whether that matters depends entirely on the training pile. If it contained plenty of Hindi, BPE will have merged those byte runs back into whole Hindi tokens and you never notice. If it did not, Hindi stays near the byte level and costs three to four times more tokens than the same meaning in English.`,
     },
     { type: 'visual', component: 'TokenizerDemo', props: {} },
     {
-      type: 'intuition',
-      title: 'Tokens are not words — and that is your bill',
-      md: `Every practical consequence of tokenization starts here. Rules of thumb for English:
-
-- **~4 characters per token.** **~0.75 words per token** — i.e. 1,000 tokens ≈ 750 English words ≈ 4,000 characters ≈ 1.5 pages of prose.
-- Common words are 1 token. Rare words, names, technical terms and typos are 2-4. Leading spaces are usually part of the token: \` the\` and \`the\` are *different ids*.
-- **Code is worse**: indentation, braces, \`snake_case\` and \`camelCase\` all fragment. Budget closer to 2.5-3 characters per token.
-- **Non-English is much worse.** Devanagari, Chinese, Arabic, Thai — 2-4x the tokens for the same meaning, because of the byte cost plus a corpus that under-trained those merges. Same sentence, same model, triple the price and triple the context consumed. Newer tokenizers (Llama 3's 128k, GPT-4o's 200k vocabulary) exist substantially to fix this.
-- Therefore: **the tokenizer decides your real context window.** "128k context" is 128k *tokens*. In English that is roughly 96k words; in Hindi it may be 30k. Never quote a context window in words to a user.
-- Cost estimation rule to actually use: \`tokens ≈ characters / 4\` for English prose, \`/ 3\` for code, \`/ 1.5\` for Devanagari or CJK. Then multiply by the per-million price. For anything you are actually billing for, stop estimating and call the real tokenizer library.`,
-    },
-    {
-      type: 'math',
-      intro:
-        'The vocabulary-size tradeoff, with real models. V = vocabulary size, d = embedding dimension, n = sequence length after tokenizing a fixed piece of text.',
-      latex: [
-        '\\text{embedding params} = V \\times d \\qquad \\text{output softmax} = \\text{another } V \\times d \\text{ matrix (or the same one, "tied")}',
-        'V = 50{,}257,\\; d = 768 \\;\\Rightarrow\\; 38.6\\text{M params} \\;\\approx\\; 31\\% \\text{ of all of GPT-2 small (124M)}',
-        'V = 128{,}256,\\; d = 4096 \\;\\Rightarrow\\; 525\\text{M each} \\;\\Rightarrow\\; 1.05\\text{B untied} \\;\\approx\\; 13\\% \\text{ of Llama-3-8B}',
-        '\\text{Bigger } V \\;\\Rightarrow\\; \\text{smaller } n \\;\\Rightarrow\\; \\text{attention cost } O(n^2) \\text{ drops quadratically, but } V\\!\\times\\! d \\text{ and the softmax grow linearly.}',
-      ],
+      type: 'note',
+      md: 'Step the demo above one merge at a time and watch frequent pieces fuse: `t` and `h` become `th`, then `the`, and eventually `trans` and `former` slam together into a single `transformer` token. Then switch to the sample `zyxwv quartz` and step to the very end — it stays shattered into single characters, because no merge in the list ever saw those letter pairs. Common text is cheap, rare text is expensive, and that is decided entirely by what was in the training pile.',
     },
     {
       type: 'intuition',
       title: 'Why the model cannot count the r\'s in "strawberry"',
-      md: `This is the most-asked "gotcha" about LLMs, and the answer is not "the model is stupid". The answer is that **the information is not there**.
+      md: `This is the most famous LLM failure, and the cause is not stupidity. The information is genuinely not there.
 
-- "strawberry" reaches the model as a couple of ids — commonly reported as \`str\` + \`aw\` + \`berry\` for GPT-4's tokenizer. Three integers.
-- Nothing in those integers exposes their spelling. Asking the model to count r's is like asking you to count the letters in a phone number you were told over the phone as "the Johnson house line". You know what it refers to; you were never given the characters.
-- The model *can* often answer, because training text discusses spelling. It is recalling facts about words, not inspecting them. That is why it is confidently wrong on unusual cases.
-- Same root cause for the whole family: **reversing a string**, **rhyming**, **counting syllables**, **pig latin**, **acrostics**, **"words starting with q"**.
-- **Arithmetic** has a related but distinct problem: number tokenization is inconsistent. Depending on the tokenizer, "1234" may be one token, or \`123\`+\`4\`, or \`12\`+\`34\`, while "1235" splits differently — so digits do not line up by place value and the model cannot learn a clean columnar addition algorithm. Llama tokenizers split every digit separately partly for this reason, and it measurably helps.
-- The fix in production is not a better prompt: **give the model a tool.** A calculator, a \`len()\` call, a regex. Character-level work belongs in code, not in the weights.`,
-    },
-    {
-      type: 'note',
-      md: 'The trailing-whitespace trap, because it costs people real debugging hours. In GPT-family tokenizers the leading space belongs to the token — ` Paris` is one token, `Paris` is a different one. So a prompt ending `"Answer:"` is healthy: the model happily emits ` Paris`. A prompt ending `"Answer: "` with a trailing space is not: you have already spent the space, so the model must now produce a token that starts mid-word, which is a shape it rarely saw in training. Output quality drops for a reason invisible in the text. Rule: **never end a prompt with a trailing space or newline you did not mean.** Related: the tokenizer must match the model exactly — swapping in a different tokenizer maps text to ids the weights never learned, and you get fluent nonsense, not an error.',
-    },
-    {
-      type: 'note',
-      md: 'Finally, the reserved ids. Beyond the learned merges, vocabularies include **special tokens**: `<|endoftext|>` / EOS ends a document or a generation, BOS marks a start, PAD fills a batch to equal length (and is masked out of the loss), and UNK is the fallback that byte-level BPE made obsolete. Chat models add more: the `system` / `user` / `assistant` roles you pass to an API are not magic — a **chat template** renders them into special tokens like `<|im_start|>user` before the text ever reaches the model. Two consequences: those wrapper tokens cost you context on every single turn, and a user who types a role marker into their message is doing the first step of a prompt injection, which is why tokenizers mark special tokens as non-generatable from raw user text.',
+- "strawberry" reaches the model as a small number of token ids — commonly reported as three pieces, \`str\` + \`aw\` + \`berry\`, for GPT-4's tokenizer. Three integers, and nothing else.
+- An integer does not expose its spelling. Asking the model to count the r's is like asking you to count the letters in a phone number after someone told you "it's the Johnson house line". You know what it refers to. You were never given the characters.
+- The model often answers correctly anyway, because training text talks *about* spelling. It is recalling a fact, not inspecting a word — which is exactly why it is confidently wrong on unusual words.
+- The same cause explains the whole family: reversing a string, rhyming, counting syllables, pig latin, and "give me words starting with q".
+- Arithmetic has a related problem. Depending on the tokenizer, "1234" may be one token, or \`123\` + \`4\`, while "1235" splits somewhere else — so digits do not line up by place value and the model cannot learn clean column addition. Some model families now force every digit into its own token for exactly this reason, and it measurably helps.
+
+The production fix is not a cleverer prompt. Give the model a tool: a calculator, a \`len()\` call, a regular expression. Character-level work belongs in code.`,
     },
     {
       type: 'intuition',
-      title: 'Where the ids go next: the embedding table',
-      md: `One loose end, and it is the handoff to everything else. The tokenizer hands the model integers, and an integer carries no meaning — id 464 is not "more" than id 262, and ids 100 and 101 are not related. Meaning arrives one step later.
+      title: 'The context window, and what it costs you',
+      md: `A model can only look at a limited amount of text at once. That limit is the **context window**, and it is measured **in tokens, not words or characters**. A "128k context window" means 128,000 token ids — the prompt, the retrieved documents, the conversation history and the model's own reply all have to fit inside that one number together.
 
-- Immediately after the tokenizer sits one learned matrix of shape **V × d_model**: one row per vocabulary entry, each row a vector of d_model numbers (768 in GPT-2 small, 4096 in a 7B model).
-- The token id is nothing but a **row index**. Embedding lookup is literally \`table[id]\` — a memory read, not a matrix multiply. That is exactly why the ids themselves are allowed to be arbitrary.
-- Those rows start as random noise and are **learned by gradient descent**, like any other weight. Nobody hand-writes what "cat" means.
-- Tokens that appear in similar contexts receive similar gradients, so their rows drift close together. That geometry — not the integer — is where meaning ends up living.
-- This is the same V × d matrix from the math block above, the one that is 31% of GPT-2 small. Vocabulary size is an embedding-table decision as much as a tokenizer decision.
+Useful rules of thumb for English prose, which come straight from the ~4-characters-per-token behaviour of real tokenizers:
 
-The full treatment — cosine similarity, sentence embeddings, ANN indexes — belongs to the module *Embeddings, Vector Databases & Semantic Search*, so do not chase it here. Hold onto the seam: **the tokenizer produces row indices; the embedding table turns them into vectors.**`,
+- About **4 characters per token**, or about **0.75 words per token**. So 1,000 tokens is roughly 750 English words, roughly 4,000 characters, roughly one and a half pages.
+- **Code is worse** — indentation, braces and \`snake_case\` names all fragment. Budget nearer 3 characters per token.
+- **Devanagari, Chinese, Arabic and Thai are much worse** — nearer 1.5 characters per token, for the byte reason above.
+
+The concrete consequence: a 128k window holds about 96,000 English words, but perhaps 30,000 words of Hindi. Same model, same window, a third of the room — and, since you are billed per token, three times the price for the same conversation. This is also why a chat gets more expensive as it goes: the entire history is re-sent as tokens on every single turn.`,
+    },
+    {
+      type: 'note',
+      md: 'One more kind of token exists that never came from a merge. A **special token** is a reserved vocabulary entry that carries structure rather than text: one marks the end of a document or of a generation, one marks a start, one pads a short input so a batch of inputs has equal length. Chat models add more of them — the `system`, `user` and `assistant` roles you pass to an API are rendered into special tokens like `<|im_start|>user` before the text ever reaches the model. Two consequences worth knowing now: those wrapper tokens are charged to you on every turn, and a user who types a role marker into their message is attempting the first step of a prompt injection, which is why tokenizers refuse to produce special tokens from ordinary user text.',
+    },
+    {
+      type: 'intuition',
+      title: 'Where a token id goes next: it is a row number',
+      md: `One loose end, and it is the handoff to the rest of deep learning. The tokenizer hands over integers, and an integer carries no meaning — id 464 is not "more" than id 262. Meaning arrives one step later.
+
+Sitting immediately after the tokenizer is a single learned table with one row per vocabulary entry. **The token id is nothing but the row number.** Looking up an embedding is literally "fetch row 464" — a memory read, not a calculation. That is exactly why the ids themselves are allowed to be arbitrary: they are addresses, not values. The rows start as random numbers and are learned during training, and tokens that appear in similar contexts drift towards similar rows.
+
+That table is where meaning actually lives, and it is a whole topic of its own. It is taught in the deep learning module *Embeddings: Meaning as Vectors*. Do not chase it here. Just hold the seam: **the tokenizer produces row numbers; the embedding table turns them into vectors.**`,
+    },
+    {
+      type: 'intuition',
+      title: 'Worked case: budgeting a support-bot request by hand',
+      md: `You are building a support bot. Per request it sends: a system prompt of 1,200 characters of English, three retrieved help-centre articles of 3,000 characters each, and a user question of about 200 characters. The model replies with about 600 characters. Pricing is 2 rupees per million input tokens and 8 rupees per million output tokens. Estimate the cost of 100,000 requests a month.
+
+Step 1, convert each part to tokens at 4 characters per token. System prompt: 1,200 / 4 = 300 tokens. Articles: 3 x 3,000 = 9,000 characters, so 9,000 / 4 = 2,250 tokens. Question: 200 / 4 = 50 tokens. Input total: 300 + 2,250 + 50 = **2,600 tokens**. Output: 600 / 4 = **150 tokens**.
+
+Step 2, price one request. Input: 2,600 x 2 / 1,000,000 = 0.0052 rupees. Output: 150 x 8 / 1,000,000 = 0.0012 rupees. Total 0.0064 rupees per request.
+
+Step 3, scale it. 0.0064 x 100,000 = **640 rupees a month**. Note that the retrieved articles are 2,250 of the 2,600 input tokens — 87% of the input bill is retrieval, so that is the only place worth optimising.
+
+Step 4, redo it for Hindi users, at roughly 1.5 characters per token instead of 4. The same input becomes 10,400 / 1.5 = 6,933 tokens instead of 2,600, and the output 400 instead of 150. Input 0.0139 rupees, output 0.0032, total 0.0171 per request — **1,710 rupees a month, 2.7 times the English figure for identical content.** Nothing about the model changed. Only the tokenizer's opinion of Devanagari did.`,
+    },
+    {
+      type: 'intuition',
+      title: 'The classic mistake, walked into on purpose',
+      md: `Same support bot. A colleague estimates it differently: "the articles are about 500 words each, three of them is 1,500 words, plus a hundred words of prompt and question — call it 1,600 tokens. One word, one token. We have an 8,000-token window, so we can easily fit eight articles instead of three."
+
+Follow that to the end. Eight articles at 500 words each is 4,000 words. At one token per word that is 4,000 tokens, comfortably inside 8,000. So they ship it.
+
+In production it breaks. The real count, at 0.75 words per token, is 4,000 / 0.75 = **5,333 tokens** for the articles alone. Add the system prompt and question, about 1,600 / 0.75 = 2,133 more... and the total is 7,466 tokens before the model has written a single word of reply. There is almost no room left for the answer, so replies get truncated mid-sentence. Non-English requests overflow the window entirely and the API returns an error. The cost estimate was also understated by a third.
+
+Two separate errors are hiding in "one word, one token":
+
+- **The direction is backwards.** A token is *smaller* than a word on average, not equal to it, because rare words split into pieces. Every word-based estimate is an underestimate, by about a third for English and by three or four times for Hindi or Chinese.
+- **The output was never budgeted.** The context window has to hold the prompt *and* the reply. Filling it with input leaves nothing to generate into.
+
+The habit that prevents both: **estimate in characters, divide by 4 (or 3 for code, 1.5 for Devanagari or CJK), reserve room for the reply, and before you commit to a price, run the model's actual tokenizer over a sample of real traffic.** The rules of thumb are for sizing a decision. They are not for signing a contract.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Practice problems',
+      md: `Work these with pen and paper before reading the solutions in the next section.
+
+1. Corpus: **low** 5 times, **lower** 2 times, **newest** 6 times, **widest** 3 times. Split into characters and find the first merge. Give the winning pair and its count.
+2. Using the trained tokenizer from the code above, whose merge list is \`u+g\`, \`u+n\`, \`h+ug\`, in that order, encode the word "hugsun". How many tokens?
+3. Someone sorts the merge list alphabetically before saving it, so it becomes \`h+ug\`, \`u+g\`, \`u+n\`. Encode "hug" with the sorted list. What comes out, and why is this a serious bug?
+4. A document is 12,000 characters of English prose. A second document is the same content translated into Hindi, 11,000 characters. Estimate tokens for each, and state which one might not fit in a 4,096-token window.
+5. A vocabulary starts from 256 bytes and you run 49,744 merges. What is the final vocabulary size, and why is that arithmetic exact?`,
+    },
+    {
+      type: 'intuition',
+      title: 'Worked solutions',
+      md: `**1.** Split them: \`l o w\`, \`l o w e r\`, \`n e w e s t\`, \`w i d e s t\`. Count adjacent pairs weighted by word frequency. \`l o\` appears in low (5) and lower (2) = 7. \`o w\` likewise = 7. \`w e\` appears in lower (2) and newest (6) = 8. \`e s\` appears in newest (6) and widest (3) = 9. \`s t\` appears in newest (6) and widest (3) = 9. \`e r\` = 2, \`n e\` = 6, \`e w\` = 6, \`w i\` = 3, \`i d\` = 3, \`d e\` = 3. The top count is 9, and two pairs tie on it: \`e s\` and \`s t\`. A real implementation breaks the tie by whichever it encountered first. **Answer: \`e s\` or \`s t\`, count 9** — and noticing the tie is the point of the question.
+
+**2.** Start from characters: \`h u g s u n\`. Apply \`u+g\`: \`h ug s u n\`. Apply \`u+n\`: \`h ug s un\`. Apply \`h+ug\`: \`hug s un\`. **Three tokens: hug, s, un.** Note that "hugsun" never appeared in training and still tokenized fine — that is subword tokenization doing its job.
+
+**3.** With the sorted list, \`h+ug\` is applied first — but at that moment the word is still \`h u g\` and the symbol \`ug\` does not exist yet, so the rule matches nothing. Then \`u+g\` gives \`h ug\`, then \`u+n\` matches nothing. Output: **two tokens, \`h\` and \`ug\`**, instead of the one token \`hug\`. The bug is serious because it does not crash. The model receives ids it was never trained on, and produces fluent, grammatical, wrong output with no error anywhere. **The merge list is ordered. Never sort it.**
+
+**4.** English at 4 characters per token: 12,000 / 4 = **3,000 tokens**, which fits in 4,096 with about 1,000 to spare. Hindi at roughly 1.5 characters per token: 11,000 / 1.5 = **7,333 tokens**, which does not fit — it overflows a 4,096 window by nearly double, despite being the shorter document by character count. This is the whole reason context windows must be quoted in tokens.
+
+**5.** 256 + 49,744 = **50,000**. It is exact because each merge adds exactly one new symbol to the vocabulary and never removes one. That is also the answer to "how do I get a vocabulary of exactly size V?" — start with your base symbols and run V minus base merges. (Real vocabularies add a handful of special tokens on top, which is why published sizes are often odd numbers like 50,257.)`,
+    },
+    {
+      type: 'intuition',
+      title: 'Beyond the basics - skip this on your first read',
+      md: `Everything above stands alone. This section names things you will meet later so the words are not new when you get there.
+
+- **WordPiece** (used by BERT) runs the same merge loop as BPE but picks the pair that most improves how well the vocabulary explains the corpus, rather than the raw count — informally it prefers gluing pieces that are rare on their own but common together. Continuation pieces are written with a \`##\` prefix.
+- **Unigram** (used by T5) works in the opposite direction: start from a large candidate vocabulary and repeatedly delete the pieces whose removal costs the least. Because it keeps a probability for each piece, it can score several different splits of the same word, which allows sampling different splits during training as a form of data augmentation.
+- **SentencePiece** is not a third algorithm. It is the library and file format that wraps BPE or Unigram and adds the genuinely important part: it treats the space as an ordinary character, so it needs no language-specific pre-processing and works on Japanese or Thai, which are written without spaces. Decoding becomes exact string joining, with nothing lost.
+- **The vocabulary-size trade-off, in parameters.** The embedding table is V rows by d numbers per row. For GPT-2 small, V = 50,257 and d = 768, so the table is 38.6 million numbers — about 31% of that model's 124 million total. For Llama-3-8B, V = 128,256 and d = 4,096, giving 525 million per table. A bigger vocabulary means shorter sequences, and processing cost grows with the square of sequence length, so the saving is real. But the table itself grows in a straight line. Modern models have pushed V upwards mostly to serve more languages, not to save compute.
+- **The trailing-space trap.** In GPT-family tokenizers a leading space belongs to the token, so \` Paris\` and \`Paris\` are two different ids. A prompt ending "Answer:" is healthy — the model emits \` Paris\` naturally. A prompt ending "Answer: " with a trailing space is not: you have already spent the space, so the model must now produce a token that starts mid-word, a shape it rarely saw in training. Output quality drops for a reason that is invisible in the text. Never end a prompt with whitespace you did not mean.
+- **Tokenizer and model must match exactly.** Loading a different tokenizer than the one the weights were trained with maps text to ids the model never learned. It does not error; it produces fluent nonsense. The same applies to adding special tokens without resizing the embedding table.`,
     },
   ],
   quiz: [
     {
-      question: 'What is the single biggest failure of a pure word-level tokenizer?',
+      question: 'Why is one number per word rejected as a tokenization scheme?',
       options: [
+        { text: 'The sequences it produces are far too long', explanation: 'Word-level gives the SHORTEST sequences of the three options. Length is the problem with one number per character.' },
         {
-          text: 'The vocabulary is too small to be useful',
-          explanation: 'The opposite — word vocabularies are enormous (200k+ for English), which is a separate problem.',
+          text: 'The list of words must be fixed in advance, so anything unseen — a typo, a name, new slang — has no number and its content is lost',
+          explanation: 'Correct. That is the fatal one. The 200,000-plus vocabulary size is a real cost too, but a large table is survivable; permanently destroying the content of every unseen word is not.',
         },
-        {
-          text: 'Any word unseen during training collapses to <UNK> and its information is permanently lost',
-          explanation:
-            'Correct. That is the out-of-vocabulary cliff. Typos, names, new slang and code identifiers all fall off it, and no amount of model capacity recovers what the tokenizer threw away.',
-        },
-        {
-          text: 'Sequences become far too long',
-          explanation: 'Word-level gives the SHORTEST sequences of the three families. Length is character-level\'s problem.',
-        },
+        { text: 'Words carry too little meaning to be useful units', explanation: 'Backwards — a word carries a lot of meaning. It is a single character that carries almost none.' },
       ],
       correct: 1,
     },
     {
-      question: 'In BPE training, which pair gets merged at each step?',
-      options: [
-        { text: 'A random pair, for regularization', explanation: 'Training is fully deterministic and greedy. (Randomized segmentation exists at ENCODE time in Unigram models, which is a different thing.)' },
-        { text: 'The longest pair available', explanation: 'Length is never consulted. Long tokens emerge only because frequent merges stack on top of earlier frequent merges.' },
-        {
-          text: 'The most frequent adjacent pair in the current corpus, weighted by word frequency',
-          explanation: 'Correct. Count all adjacent pairs, take the argmax, merge it everywhere, recount. That recount matters — merging changes which pairs exist.',
-        },
-      ],
-      correct: 2,
-    },
-    {
-      question: 'You trained BPE and now need to tokenize a new sentence. What do you actually do?',
+      question: 'In the hand-worked corpus, merge 1 glued u+g, which had been seen 20 times. The corpus went from 113 tokens to 93, and the vocabulary from 7 symbols to 8. Why exactly those numbers?',
       options: [
         {
-          text: 'Split into characters and replay the learned merges in their original order',
-          explanation:
-            'Correct. The ordered merge list IS the tokenizer. Encoding is deterministic replay — no search, no re-counting. Sorting or reordering that list silently produces a different tokenizer.',
+          text: 'Each of the 20 places the pair occurred turned two tokens into one, saving 20 tokens; and one merge always adds exactly one new symbol',
+          explanation: 'Correct, and both halves generalise: total tokens drop by the merged pair\'s count, and vocabulary size is always base symbols plus number of merges.',
         },
-        { text: 'Re-run the training loop on the new sentence', explanation: 'That would invent new merges and produce ids the model has never seen. Training happens once, offline.' },
-        { text: 'Look each word up in a dictionary of known words', explanation: 'That is word-level tokenization, and it reintroduces the OOV cliff BPE exists to remove.' },
+        { text: 'Coincidence of this particular corpus; the relationship does not hold in general', explanation: 'It holds always. Merging replaces two adjacent tokens with one, once per occurrence, and adds one vocabulary entry.' },
+        { text: 'The 20 came from the number of distinct words, and the vocabulary grew because "hug" was added', explanation: 'There are only five distinct words. The 20 is the frequency-weighted count of the pair u+g, and the symbol added was \'ug\', not \'hug\'.' },
       ],
       correct: 0,
     },
     {
-      question: 'Why does byte-level BPE guarantee no unknown token, ever?',
+      question: 'You have finished training BPE. To tokenize a sentence it has never seen, what do you do?',
       options: [
-        { text: 'Because it has a very large vocabulary', explanation: 'Vocabulary size does not create a guarantee — a 200k word vocabulary still misses the 200,001st word.' },
-        { text: 'Because it falls back to <UNK> gracefully', explanation: 'Backwards: the whole point is that no <UNK> token is needed at all.' },
         {
-          text: 'Because the base vocabulary is all 256 byte values, and every possible input is a sequence of bytes',
-          explanation:
-            'Correct, and it is a guarantee by construction rather than by coverage. The cost is that non-ASCII characters take 2-4 bytes each, so under-trained languages tokenize near the byte level and get expensive.',
+          text: 'Split it into characters and replay the learned merges, in the order they were learned',
+          explanation: 'Correct. Encoding is deterministic replay with no counting and no search. The ordered merge list is the entire trained tokenizer.',
         },
+        { text: 'Run the counting-and-merging loop again on the new sentence', explanation: 'That would invent new merges and produce ids the model has never seen. Training happens once, offline.' },
+        { text: 'Look each word up in a dictionary of known words', explanation: 'That is word-level tokenization, and it brings back the unseen-word problem that subword tokenization exists to remove.' },
       ],
-      correct: 2,
+      correct: 0,
     },
     {
-      question: 'Roughly how many tokens is 400 characters of ordinary English prose?',
+      question: 'Why does starting from the 256 byte values instead of from characters guarantee that nothing is ever unrepresentable?',
       options: [
-        { text: 'About 400 — one token per character', explanation: 'That is character-level tokenization, which no production LLM uses.' },
+        { text: 'Because 256 is a much bigger starting vocabulary than the number of English letters', explanation: 'Size alone guarantees nothing — a 200,000-word vocabulary still misses the 200,001st word. The guarantee comes from coverage being total, not large.' },
         {
-          text: 'About 100 — the ~4-characters-per-token rule',
-          explanation: 'Correct. Equivalently ~0.75 words per token: 1,000 tokens ≈ 750 English words. For code use ~3 chars/token, for Devanagari or CJK closer to ~1.5.',
+          text: 'Because every possible piece of text is already stored as a sequence of bytes, so every input is built from symbols the vocabulary already contains',
+          explanation: 'Correct, and it is a guarantee by construction. The price is that non-English characters take 2 to 4 bytes each, so an under-represented language starts life shattered and stays expensive.',
         },
-        { text: 'About 25', explanation: 'That would be 16 characters per token — far beyond what any subword vocabulary achieves on real text.' },
+        { text: 'Because the tokenizer falls back to an "unknown" token gracefully', explanation: 'The opposite — the point is that no unknown token needs to exist at all.' },
       ],
       correct: 1,
     },
@@ -291,175 +463,138 @@ The full treatment — cosine similarity, sentence embeddings, ANN indexes — b
       question: 'An LLM insists "strawberry" has two r\'s. What is the real cause?',
       options: [
         {
-          text: 'The model never receives the letters — it receives a few token ids, so the spelling information is genuinely absent',
-          explanation:
-            'Correct. It answers from things training text said ABOUT words, not by inspecting them. Same root cause as failing at reversal, rhyming and syllable counting. The production fix is a tool call, not a better prompt.',
+          text: 'The model never receives the letters — it receives a few token ids, so the spelling information is genuinely absent from its input',
+          explanation: 'Correct. When it answers correctly it is recalling what training text said about the word, not inspecting it. Same cause as failures at reversal, rhyming and syllable counting. The fix is a tool call, not a better prompt.',
         },
-        { text: 'The model was undertrained and more data would fix it', explanation: 'More data teaches more memorized spelling facts, but the character information still never enters the forward pass.' },
-        { text: 'Its temperature setting is too high', explanation: 'Sampling settings change which token is picked from a distribution; they cannot add information that was never in the input.' },
+        { text: 'The model was undertrained; more data would fix it', explanation: 'More data teaches more memorised spelling facts, but the characters still never enter the model\'s input.' },
+        { text: 'Its randomness setting is too high', explanation: 'Sampling settings change which token gets picked from a set of options. They cannot add information that was never in the input.' },
       ],
       correct: 0,
     },
     {
-      question: 'What does increasing the vocabulary from 32k to 128k buy you, and what does it cost?',
+      question: 'You need to fit a 12,000-character English document into an 8,000-token context window alongside a 2,000-character prompt, and leave room for a 2,000-character reply. Does it fit?',
       options: [
-        { text: 'Buys nothing; costs nothing — it is a cosmetic choice', explanation: 'It changes both parameter count and sequence length materially; it is one of the more consequential architecture knobs.' },
-        { text: 'Buys accuracy on every task; costs training time only', explanation: 'There is no direct accuracy guarantee, and the cost is structural (parameters and memory), not just wall-clock.' },
+        { text: 'No — 14,000 characters is well over the 8,000 limit', explanation: 'The window is counted in tokens, not characters. Comparing a character count to a token limit is the mistake this module exists to prevent.' },
         {
-          text: 'Buys shorter sequences (attention is O(n²), so the saving is quadratic); costs a 4x fatter embedding matrix and output softmax',
-          explanation:
-            'Correct. 128,256 × 4096 = 525M parameters per embedding matrix versus 131M at 32k. Bigger vocabularies also help under-represented languages by giving their byte runs real merges.',
+          text: 'Yes — about 3,000 + 500 tokens of input and 500 of output, roughly 4,000 tokens, comfortably inside 8,000',
+          explanation: 'Correct. At 4 characters per token: 12,000/4 = 3,000, 2,000/4 = 500, reply 2,000/4 = 500. Note that the reply must be budgeted inside the same window — that is the half people forget.',
         },
-      ],
-      correct: 2,
-    },
-    {
-      question: 'Why does ending a prompt with a trailing space hurt output quality in GPT-family models?',
-      options: [
-        { text: 'The API strips it, so the prompt is truncated', explanation: 'Nothing is stripped or truncated — the space is tokenized like any other text.' },
-        {
-          text: 'Leading spaces belong to the token, so you have consumed the space and forced the model to start a word mid-token — a distribution it rarely saw',
-          explanation:
-            'Correct. ` Paris` and `Paris` are different ids. End with "Answer:" and the model emits ` Paris` naturally; end with "Answer: " and it must produce an unusual continuation. Silent quality loss, invisible in the text.',
-        },
-        { text: 'Whitespace tokens are expensive, so it wastes context', explanation: 'One extra token is negligible cost — the damage is distributional, not budgetary.' },
+        { text: 'Yes, and the reply does not count because it is generated separately', explanation: 'The reply is generated into the same window and consumes the same budget. Filling the window with input leaves nothing to generate into.' },
       ],
       correct: 1,
     },
   ],
   interviewQuestions: [
     {
-      question: 'Explain BPE to me as if I have never seen it. Then tell me what the trained artifact actually is.',
+      question: 'Explain BPE to someone who has never seen it, and tell me what the trained artifact actually is.',
       answer:
-        'Start with every word split into characters, so the vocabulary is just the distinct characters. Count every adjacent pair across the corpus, weighted by how often each word appears. Take the single most frequent pair, merge it everywhere into one new symbol, add that symbol to the vocabulary, and recount — recounting matters because merging changes which pairs exist, which is how merges stack into long tokens. Repeat N times; vocabulary size = base characters + N. The trained artifact is the **ordered list of merges** plus the resulting vocabulary — that is the whole tokenizer, a text file. Encoding new text is not a search: you split into characters and replay the same merges in the same order. Say the order matters, because it is the detail that separates people who have implemented it from people who have read about it.',
+        'Split every word in a large corpus into characters, so the starting vocabulary is just the distinct characters. Count every adjacent pair of symbols, weighting each word by how often it appears. Take the single most frequent pair, glue it into one new symbol everywhere it occurs, add that symbol to the vocabulary, then recount — recounting matters, because merging changes which pairs exist, and that is how merges stack into long tokens. Repeat N times; the vocabulary ends at base symbols plus N. The trained artifact is the ordered list of merges plus the resulting vocabulary. That is the whole tokenizer, and it is a text file. Encoding new text is not a search: split into characters and replay the same merges in the same order. The order is load-bearing — sorting the list silently produces a different tokenizer.',
       isCaseBased: false,
     },
     {
-      question: 'Compare character-level, word-level and subword tokenization. Give the tradeoff axis, not just a list.',
+      question: 'Compare character-level, word-level and subword tokenization. Give me the trade-off axis, not a list.',
       answer:
-        'The axis is: vocabulary size traded against sequence length traded against meaning per token. Character-level: ~100 vocabulary, no OOV ever, but sequences 4-5x longer, and attention is O(n²) in that length, so it is expensive — plus each token carries almost no meaning, so the model burns capacity relearning that t-h-e means "the". Word-level: shortest sequences and maximum meaning per token, but a 200k+ vocabulary, a hard OOV cliff where anything unseen becomes <UNK> and is destroyed, and no morphological sharing — "run" and "running" are unrelated rows. Subword sits in the middle deliberately: 30k-200k vocabulary, frequent words stay whole, rare words decompose into reusable pieces, no OOV once you go byte-level. It is not a compromise that loses on both ends; it is the only option where the failure modes of the other two both disappear.',
+        'The axis is vocabulary size against sequence length against meaning per token. Character-level: about a hundred entries, nothing is ever unrepresentable, but sequences are four to five times longer, and since processing cost grows with the square of sequence length that is roughly sixteen to twenty-five times more attention compute — plus each token carries so little meaning that the model burns capacity relearning that t-h-e is "the". Word-level: shortest sequences and the most meaning per token, but a 200,000-plus vocabulary, no sharing between "run" and "running", and a hard cliff where anything unseen becomes an unknown token and its content is destroyed. Subword sits in the middle deliberately: 30,000 to 200,000 entries, frequent words stay whole, rare words decompose into reusable pieces, and once you start from bytes nothing is unrepresentable. It is not a compromise that loses at both ends; it is the only option where both other failure modes disappear.',
       isCaseBased: false,
     },
     {
       question: 'What is byte-level BPE and why did GPT-2 adopt it?',
       answer:
-        'Instead of starting from characters, start from the 256 possible byte values and run the identical BPE loop on UTF-8 byte sequences. Because all text is bytes, every conceivable input is representable — no <UNK> token needs to exist. That matters for web-scale training data, which contains emoji, every language, mojibake and binary paste. The cost is that non-ASCII characters occupy multiple bytes: "é" is 2 bytes, a CJK character 3, a Devanagari character 3, an emoji 4 — so if the training corpus did not contain enough of a language, BPE never learned merges for those byte runs and that language tokenizes near the byte level. One nuance worth mentioning: GPT-2 uses a reversible byte-to-unicode mapping so that whitespace and control bytes get printable stand-ins, which keeps the merge machinery text-based and the decode lossless.',
+        'Instead of starting from characters, start from the 256 possible byte values and run the identical loop on byte sequences. Since all text is bytes underneath, every conceivable input is representable and no unknown token needs to exist. That matters for web-scale training data full of emoji, every language, and corrupted text. The cost is that non-ASCII characters occupy several bytes each — two for an accented Latin letter, three for a CJK or Devanagari character, four for an emoji — so if the training corpus was thin in a language, BPE never learned merges for those byte runs and that language tokenizes near the byte level and is expensive forever. One implementation nuance: GPT-2 maps bytes through a reversible byte-to-printable-character table so whitespace and control bytes get visible stand-ins, which keeps the merge machinery text-based and decoding exactly lossless.',
       isCaseBased: false,
     },
     {
-      question: 'Case: your RAG product works well in English but users in India report it gives worse answers and costs 3x more per query. Diagnose.',
+      question: 'Why do LLMs fail at counting letters, reversing strings and rhyming? Is more scale the fix?',
       answer:
-        'First hypothesis is the tokenizer, and it explains both symptoms at once. Devanagari costs 3 UTF-8 bytes per character, and if the tokenizer\'s corpus was English-heavy it never learned merges for those byte runs, so Hindi text tokenizes near the byte level — 3-4x the tokens for the same meaning. That directly triples cost. It also silently shrinks the effective context: your retriever\'s "top 8 chunks" now overflows the window, or your chunker\'s "500 tokens per chunk" is now cutting sentences into thirds of what it does in English, wrecking retrieval quality. Verification: run the real tokenizer over matched English/Hindi sentence pairs and compare token counts — this is a five-minute measurement, do it before theorizing further. Fixes, ranked: (1) switch to a model whose tokenizer has a large multilingual vocabulary (Llama 3\'s 128k, GPT-4o\'s ~200k) — usually the biggest single win; (2) define chunk sizes in tokens using that exact tokenizer, never in characters or words; (3) re-tune retrieval top-k against the real token budget; (4) only if you control training, extend the vocabulary or train a SentencePiece model on your domain — expensive and requires re-training embeddings. Name the tradeoff honestly: options 1-3 are configuration, option 4 is a project.',
+        'Because the character information never enters the model. "strawberry" arrives as a handful of token ids — reportedly str, aw, berry for GPT-4 — and an integer does not expose its spelling. When the model answers correctly it is recalling what training text said about the word, not inspecting it, which is precisely why it is confidently wrong on unusual words. Scale helps only in that memorised sense; it does not put characters into the input. Genuinely related failures: reversal, syllable counting, pig latin, acrostics, "words starting with q". Arithmetic is adjacent but distinct — number tokenization is inconsistent, so 1234 and 1235 can split at different boundaries and digits do not align by place value; several model families now split every digit into its own token to fix this, and it measurably helps. The production answer is a tool call: character work and arithmetic belong in code, not in weights.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Case: your RAG product works well in English, but users in India report worse answers and a 3x higher bill per query. Diagnose it.',
+      answer:
+        'First hypothesis is the tokenizer, because it explains both symptoms at once. Devanagari costs three bytes per character, and if the tokenizer was trained on an English-heavy corpus it never learned merges for those byte runs, so Hindi tokenizes near the byte level — three to four times the tokens for the same meaning. That directly triples cost. It also silently shrinks the effective context: your retriever\'s "top 8 chunks" now overflows the window, and a chunker configured for "500 tokens per chunk" is cutting Hindi sentences into a fraction of what it cuts in English, which wrecks retrieval quality. Verification first, theory second: run the real tokenizer over matched English and Hindi sentence pairs and compare counts. That is a five-minute measurement. Fixes, ranked: one, move to a model whose tokenizer has a large multilingual vocabulary — usually the single biggest win; two, define chunk sizes in tokens using that exact tokenizer, never in characters or words; three, re-tune retrieval top-k against the real token budget; four, only if you control training, extend the vocabulary and continue training — expensive, and it requires retraining the embedding rows. State the trade-off honestly: the first three are configuration changes, the fourth is a project.',
       isCaseBased: true,
     },
     {
-      question: 'Why do LLMs fail at counting letters, reversing strings and rhyming? Is this fixable by scale?',
+      question: 'Case: you fine-tuned a model and the outputs are fluent but semantically garbage — grammatical sentences about nothing, and no errors anywhere. Where do you look?',
       answer:
-        'Because the character information never enters the model. "strawberry" arrives as a handful of token ids — commonly reported as str + aw + berry for GPT-4\'s tokenizer — and nothing in an integer exposes its spelling. When the model does answer correctly it is recalling what training text said about the word, not inspecting it, which is exactly why it is confidently wrong on unusual words. Scale helps only in that memorized-spelling sense; it does not put characters into the forward pass. Genuinely related failures: reversal, syllable counting, pig latin, acrostics, "words starting with q". Arithmetic is adjacent but distinct: number tokenization is inconsistent, so "1234" and "1235" can split at different boundaries and digits do not align by place value — several model families now split every digit into its own token specifically to fix this, and it measurably helps. The production answer is a tool call: character work and arithmetic belong in code, not in weights.',
-      isCaseBased: false,
-    },
-    {
-      question: 'How does vocabulary size interact with model size and inference cost? Use numbers.',
-      answer:
-        'The embedding matrix is V×d, and the output projection is another V×d unless they are tied. GPT-2 small: 50,257 × 768 = 38.6M parameters, which is about 31% of its 124M total — the vocabulary dominates a small model. Llama-3-8B: 128,256 × 4096 = 525M per matrix, untied, so ~1.05B of 8B, around 13%. What a bigger vocabulary buys is shorter sequences for the same text, and since attention is O(n²), a 15% reduction in tokens is roughly a 28% reduction in attention cost — plus proportionally smaller KV-cache. What it costs is those parameters, the memory to hold them, and a wider final softmax on every generated token. The sweet spot has moved up over time (32k → 128k → 200k) mostly because multilingual coverage was the binding constraint, not because the compute math changed.',
-      isCaseBased: false,
-    },
-    {
-      question: 'Case: you fine-tuned a model and outputs are fluent but semantically garbage — grammatical sentences about nothing. No errors anywhere. Where do you look?',
-      answer:
-        'Fluent-but-wrong with zero errors points at an id-space mismatch, and the tokenizer is the first suspect. Checks in order: (1) Are you using the exact tokenizer that shipped with the checkpoint? Loading a different tokenizer maps text to ids the weights never learned — the model still produces confident, well-formed text, because the language modelling head is intact; it is just reading a different language. (2) Did you add special tokens or extend the vocabulary without resizing the embedding matrix, or resize it and leave the new rows randomly initialized? (3) Does your training data go through the model\'s chat template, or did you hand it raw text while inference applies the template? A template mismatch means the model never sees the role markers it was aligned around. (4) Check BOS/EOS: a missing EOS means the model never learned to stop; a doubled BOS shifts everything. (5) Sanity test that decodes cleanly: encode a sentence, decode it back, assert the round trip is identical. The general lesson to state: tokenizer bugs do not crash, they degrade — which is why they hide.',
+        'Fluent but meaningless with zero errors points at a mismatch in id space, and the tokenizer is the first suspect. In order: one, are you using the exact tokenizer that shipped with the checkpoint? A different tokenizer maps text to ids the weights never learned — the model still emits confident, well-formed text because the generation machinery is intact, it is just reading a different language. Two, did you add special tokens or extend the vocabulary without resizing the embedding table, or resize it and leave the new rows random? Three, does your training data go through the same chat template as inference? If training saw raw text and serving applies role markers, the model never sees the structure it was aligned around. Four, check the start and end markers: a missing end token means generation never stops, a doubled start token shifts every position. Five, a sanity test that takes one minute — encode a sentence, decode it back, and assert the round trip is identical. The general lesson: tokenizer bugs do not crash, they degrade, which is exactly why they hide.',
       isCaseBased: true,
     },
     {
-      question: 'Explain WordPiece, Unigram and SentencePiece, and when you would pick each.',
+      question: 'Case: estimate the monthly LLM cost of a feature before any code is written, and tell me where tokenization will make you wrong.',
       answer:
-        'WordPiece (BERT) runs the same merge loop as BPE but selects the pair that maximizes corpus likelihood rather than raw frequency — informally it prefers merging pieces that are rare individually but common together; continuation pieces are prefixed "##". Unigram (T5, ALBERT) inverts the direction: start from a large candidate vocabulary and iteratively prune the pieces whose removal costs the least likelihood. Because Unigram keeps a probability per piece, it can score multiple segmentations of the same word, which enables subword regularization — sampling different segmentations during training as data augmentation. SentencePiece is not a third algorithm; it is the library and file format that wraps BPE or Unigram and adds the genuinely important bit: it treats the space as an ordinary character (shown as ▁), so it needs no language-specific pre-tokenizer and works on Japanese, Chinese and Thai, which have no spaces — and decoding becomes exact string concatenation, fully lossless. Picking: byte-level BPE for a general generative LLM, SentencePiece+Unigram when multilinguality or a space-free language is central, WordPiece essentially only for BERT-lineage compatibility.',
-      isCaseBased: false,
-    },
-    {
-      question: 'What are special tokens, and what breaks if you get them wrong?',
-      answer:
-        'They are reserved vocabulary entries carrying structure rather than text: EOS/<|endoftext|> ends a document or a generation, BOS marks a start, PAD pads a batch to equal length and must be masked out of both the loss and attention, and UNK is the fallback that byte-level BPE made obsolete. Chat models add role markers — <|im_start|>system, and so on — which a chat template renders from the messages array before anything reaches the model. Failure modes: no EOS in training data means generation never stops; PAD not masked means the model trains on padding and learns to emit it; BOS added twice shifts every position; a chat template mismatch between fine-tuning and serving produces fluent off-target output. And a security point worth raising unprompted: if raw user text could tokenize into role markers, a user could forge a system turn — so tokenizers mark special tokens as not producible from user text, and you should keep it that way.',
-      isCaseBased: false,
-    },
-    {
-      question: 'Case: you must estimate the monthly LLM cost for a feature before writing any code. How do you do it, and where does tokenization make you wrong?',
-      answer:
-        'Build the estimate per request first: system prompt tokens + retrieved context + user message + output tokens, priced separately because input and output have different rates and output is usually several times more expensive. Convert with characters/4 for English prose, characters/3 for code, characters/1.5 for Devanagari or CJK — then multiply by requests per month. Where tokenization makes you wrong, in order of damage: (1) forgetting that the system prompt and chat-template wrapper tokens are re-sent on every single turn, and in a multi-turn chat the whole history is re-sent, so cost grows quadratically with conversation length, not linearly — this is the one that blows budgets; (2) assuming a non-English user base costs the same as English, when it can be 3x; (3) estimating in words instead of tokens for retrieved chunks, which is where the volume actually is; (4) ignoring that output tokens dominate for generative features. The discipline: estimate with the rule of thumb to size the decision, then run the real tokenizer over a sample of actual traffic before committing to a price. And name the mitigations — prompt caching for the repeated prefix, and trimming or summarizing history — because that is what the interviewer is fishing for.',
+        'Build a per-request estimate first: system prompt plus retrieved context plus user message as input, and the reply as output, priced separately because output usually costs several times more per token. Convert with characters divided by 4 for English prose, by 3 for code, by 1.5 for Devanagari or CJK, then multiply by requests per month. Where tokenization makes you wrong, worst first: one, forgetting that the system prompt and chat-template wrapper are re-sent every turn, and that in a multi-turn chat the entire history is re-sent, so cost grows with the square of conversation length rather than linearly — this is the one that blows budgets; two, assuming a non-English user base costs the same as English when it can be three times more; three, estimating retrieved chunks in words instead of tokens, which is where the volume actually sits; four, forgetting to budget output tokens inside the same context window. The discipline is: use the rule of thumb to size the decision, then run the real tokenizer over a sample of actual traffic before committing to a price. And name the mitigations — prompt caching for the repeated prefix, and trimming or summarising history.',
       isCaseBased: true,
     },
     {
-      question: 'Someone proposes training a new LLM with a character-level tokenizer to "avoid all these problems". Argue both sides.',
+      question: 'Someone proposes training a new model with a character-level tokenizer to avoid all these problems. Argue both sides.',
       answer:
-        'For: no OOV by construction, a ~100-symbol vocabulary so the embedding matrix and softmax nearly vanish, genuinely uniform cost across languages, and the character tasks — spelling, reversal, rhyming, arithmetic alignment — become natively solvable because the model actually sees letters. Against, and this is why nobody ships it: sequences get 4-5x longer, and attention is O(n²) in sequence length, so the same document costs roughly 16-25x more attention compute; the effective context window shrinks by the same factor; each token carries so little information that the model must spend depth reconstructing word identity before it can reason; and training is correspondingly slower to reach the same quality. The honest current position: it is an active research direction — byte-level and tokenizer-free architectures with learned patching exist and are improving — and the blocker is the quadratic cost of long sequences, so progress there is coupled to progress in efficient attention. A strong answer names that coupling rather than just declaring character-level dead.',
+        'For: nothing is ever unrepresentable, the vocabulary is about a hundred entries so the embedding table nearly vanishes, cost per character is genuinely uniform across languages instead of penalising Hindi and Thai, and the character tasks — spelling, reversal, rhyming, digit alignment for arithmetic — become natively solvable because the model actually sees letters. Against, and this is why nobody ships it: sequences get four to five times longer, and attention cost grows with the square of length, so the same document costs roughly sixteen to twenty-five times more compute; the effective context window shrinks by the same factor; and each token carries so little information that the model must spend layers reconstructing word identity before it can reason at all. The honest current position is that this is an active research direction — byte-level and tokenizer-free architectures with learned grouping exist and are improving — and the blocker is the quadratic cost of long sequences, so progress is coupled to progress in efficient attention rather than to tokenization itself.',
       isCaseBased: false,
     },
   ],
   flashcards: [
-    { front: 'Why tokenize at all?', back: 'Networks multiply matrices, not strings. Text must become integer ids that index rows of an embedding matrix. Token = the chopping unit, vocabulary = the fixed set of possible tokens.' },
-    { front: 'The three granularities, in one line each', back: 'Character: tiny vocab, no OOV, but 4-5x longer sequences and almost no meaning per token. Word: short sequences and rich tokens, but 200k+ vocab and a hard OOV cliff. Subword: the compromise that won.' },
-    { front: 'BPE training loop', back: 'Split into characters → count adjacent pairs (weighted by word frequency) → merge the single most frequent pair everywhere → recount → repeat N times. Vocab size = base characters + N.' },
-    { front: 'What is the trained BPE artifact?', back: 'The ORDERED merge list (plus the vocabulary). Encoding new text = split to characters and replay those merges in the same order. Order is load-bearing; never sort it.' },
-    { front: 'Byte-level BPE', back: 'Base vocabulary = the 256 byte values, so every possible UTF-8 input is representable and <UNK> never exists. Cost: non-ASCII characters are 2-4 bytes each, so under-trained languages tokenize near the byte level.' },
-    { front: 'WordPiece vs Unigram vs SentencePiece', back: 'WordPiece (BERT): merge by likelihood gain, "##" continuations. Unigram (T5): prune a big vocab by likelihood loss, allows sampled segmentations. SentencePiece: the wrapper that treats space as a character (▁) — no pre-tokenizer, works on space-free languages, lossless decode.' },
-    { front: 'Token count rules of thumb (English)', back: '~4 characters/token, ~0.75 words/token → 1,000 tokens ≈ 750 words ≈ 4,000 characters. Code ~3 chars/token. Devanagari/CJK ~1.5. Context windows are quoted in tokens, never words.' },
-    { front: 'Why LLMs fail at "count the r\'s in strawberry"', back: 'The model receives a few token ids, never the letters — the information is genuinely absent. Same cause: reversal, rhyming, syllable counts, acrostics. Fix with a tool call, not a better prompt.' },
-    { front: 'Vocabulary-size tradeoff', back: 'Bigger V → shorter sequences → attention O(n²) cost drops quadratically. But embedding and output softmax are V×d each. GPT-2: 50,257×768 = 38.6M ≈ 31% of a 124M model. Llama-3-8B: 128,256×4096 = 525M each.' },
-    { front: 'What happens to a token id after tokenization?', back: 'It indexes one row of the embedding table, a learned V × d_model matrix. The id is meaningless; the row is not. Rows are trained by gradient descent, and tokens used in similar contexts end up with nearby rows. Detail lives in "Embeddings, Vector Databases & Semantic Search".' },
-    { front: 'Trailing whitespace + special tokens', back: 'Leading spaces belong to the token, so a trailing space in a prompt forces an off-distribution mid-word start. Special tokens (BOS/EOS/PAD/UNK) plus chat-template role markers are reserved ids — mismatched templates or a missing EOS degrade output silently rather than erroring.' },
+    { front: 'Why tokenize at all?', back: 'A network multiplies numbers, and a letter is not a number. Text must become a list of integers first. Token = one piece of the chopped-up text. Vocabulary = the fixed list of all possible tokens. Token id = a token\'s position in that list.' },
+    { front: 'The three options, one line each', back: 'One number per character: tiny vocabulary, nothing unrepresentable, but 4-5x longer text and almost no meaning per token. One number per word: short text and rich tokens, but a 200k+ list and unseen words are destroyed. Subword: common words whole, rare words split — the one that won.' },
+    { front: 'The BPE training loop', back: 'Split every word into characters, count adjacent pairs weighted by word frequency, glue the most frequent pair everywhere, recount, repeat N times. Vocabulary size = base symbols + N, exactly, because each merge adds one symbol.' },
+    { front: 'What is the trained BPE artifact, and how is new text encoded?', back: 'The ORDERED merge list plus the vocabulary — a text file, nothing more. Encoding = split into characters and replay those merges in the same order. No counting, no search. Sorting the list produces a different tokenizer and fails silently.' },
+    { front: 'Why start from bytes instead of characters?', back: 'All text is a sequence of bytes, so a base vocabulary of the 256 byte values makes every possible input representable and removes the unknown-token case entirely. Cost: non-English characters take 2-4 bytes each, so under-trained languages tokenize near the byte level and stay expensive.' },
+    { front: 'Token count rules of thumb', back: 'English prose: ~4 characters per token, ~0.75 words per token, so 1,000 tokens is about 750 words. Code: ~3 characters per token. Devanagari or CJK: ~1.5. Context windows are counted in tokens, never words — and the reply shares the same budget.' },
+    { front: 'Why LLMs cannot count the r\'s in "strawberry"', back: 'The model receives three token ids, never the letters, so the spelling information is absent from its input. It answers from what training text said about words, not by inspecting them. Same cause: reversal, rhyming, syllable counts, acrostics. Fix with a tool call, not a prompt.' },
+    { front: 'What happens to a token id immediately after tokenization?', back: 'It is used as a row number into a learned table with one row per vocabulary entry. Lookup is a memory read, not a calculation, which is why the ids themselves can be arbitrary. The rows are learned by training, and that is where meaning lives. Taught fully in the DL module Embeddings: Meaning as Vectors.' },
   ],
   mindmapMarkdown: `- Tokenization: How Text Becomes Numbers
-  - Why at all
-    - networks multiply matrices, not strings
-    - text -> integer ids -> embedding rows
-    - vocabulary V = the fixed set of tokens
-  - Three granularities
-    - character: ~100 vocab, no OOV, 4-5x longer seq, no meaning per token
-    - word: short seq, but 200k vocab + OOV cliff + run/running unrelated
-    - subword: the compromise that won
-  - BPE, step by step
-    - start from characters
-    - count adjacent pairs (weighted by word freq)
+  - The problem
+    - networks multiply numbers, letters are not numbers
+    - text -> list of integers -> back to text
+    - the tokenizer runs before the model
+  - Three options
+    - per character: ~100 vocab, nothing lost, but 4-5x longer, no meaning
+    - per word: short + meaningful, but 200k list and unseen words destroyed
+    - subword: common words whole, rare words split - the winner
+  - The four words
+    - token = one piece
+    - vocabulary = fixed list of all tokens, size V
+    - token id = position in that list
+    - subword = a piece of a word
+  - BPE, by hand
+    - split into characters
+    - count adjacent pairs, weighted by word frequency
     - merge the most frequent pair everywhere
-    - recount, repeat N times
-    - vocab = base chars + N
+    - recount, repeat
+    - worked: ug (20), un (16), hug (15)
+    - vocab 7 -> 10, tokens 113 -> 93 -> 77 -> 62
   - The artifact
     - the ORDERED merge list IS the tokenizer
     - encoding = replay merges in order
-    - order is load-bearing, never sort
-    - worked example: ug, un, hug, pun
-  - Byte-level BPE (GPT)
-    - base vocab = 256 bytes
-    - no UNK, ever, by construction
-    - non-ASCII costs 2-4 bytes per char
+    - sorting the list = silent wrong output
+  - Byte-level start
+    - base vocab = 256 byte values
+    - nothing unrepresentable, ever
+    - non-English chars cost 2-4 bytes
     - namaste = 6 chars but 18 bytes
-  - Other algorithms
-    - WordPiece (BERT): likelihood merges, ## continuations
-    - Unigram (T5): prune a big vocab, sampled segmentations
-    - SentencePiece: space as a character, no pre-tokenizer, lossless
   - Tokens are not words
     - ~4 chars/token, ~0.75 words/token
-    - code ~3 chars/token
-    - Hindi/CJK 2-4x more tokens = 3x cost
-    - the tokenizer sets the REAL context capacity
-    - cost rule: chars/4, then per-million price
-  - Vocab-size tradeoff
-    - bigger V -> shorter n -> O(n^2) attention drops
-    - but embedding + softmax are V x d each
-    - GPT-2: 50,257 x 768 = 38.6M = 31% of 124M
-    - Llama-3-8B: 128,256 x 4096 = 525M each
+    - code ~3, Devanagari/CJK ~1.5
+    - context window is counted in tokens
+    - the reply shares the same window
+    - history is re-sent every turn
   - Failure modes
-    - counting r's in strawberry: letters never reach the model
+    - counting r's in strawberry: letters never arrive
     - reversing, rhyming, syllables, acrostics
-    - numbers split inconsistently -> weak arithmetic
-    - trailing space forces an off-distribution start
-    - wrong tokenizer = fluent nonsense, no error
-    - fix character tasks with a tool, not a prompt
+    - digits split inconsistently -> weak arithmetic
+    - fix with a tool, not a prompt
   - Special tokens
-    - BOS / EOS / PAD / UNK
-    - chat templates render roles into reserved ids
-    - wrapper tokens cost context every turn
-    - user-forged role markers = prompt injection`,
+    - end, start, padding
+    - chat roles rendered into reserved ids
+    - wrapper tokens billed every turn
+    - user-typed role markers = prompt injection
+  - Beyond the basics
+    - WordPiece, Unigram, SentencePiece
+    - vocab size vs embedding table size
+    - trailing space breaks the prompt
+    - tokenizer must match the model exactly`,
 }
 
 export default m

@@ -50,10 +50,10 @@ export const genai: SubjectDef = {
   - Evaluation
     - Perplexity, LLM-as-judge, guardrails`,
   modules: [
-    mod('genai-l0-tokenization', 0, 'Tokenization: How Text Becomes Numbers', 50, () => import('./l0-tokenization')),
-    mod('genai-l0-self-attention', 0, 'Self-Attention from zero', 60, () => import('./l0-self-attention')),
-    mod('genai-l1-multihead-attention', 1, 'Multi-Head Attention & Causal Masking', 55, () => import('./l1-multihead-attention')),
-    mod('genai-l1-positional-encoding', 1, 'Positional Encoding: Teaching Attention About Order', 45, () => import('./l1-positional-encoding')),
+    mod('genai-l0-tokenization', 0, 'Tokenization: How Text Becomes Numbers', 46, () => import('./l0-tokenization')),
+    mod('genai-l0-self-attention', 0, 'Self-Attention from zero', 46, () => import('./l0-self-attention')),
+    mod('genai-l1-multihead-attention', 1, 'Multi-Head Attention & Causal Masking', 50, () => import('./l1-multihead-attention')),
+    mod('genai-l1-positional-encoding', 1, 'Positional Encoding: Teaching Attention About Order', 44, () => import('./l1-positional-encoding')),
     mod('genai-l1-transformer-block', 1, 'The Transformer Block & the Residual Stream', 55, () => import('./l1-transformer-block')),
     mod('genai-l1-build-gpt-capstone', 1, 'CAPSTONE: Code a GPT from Scratch', 90, () => import('./l1-build-gpt-capstone')),
     mod('genai-l2-pretraining-scaling', 2, 'Pretraining & Scaling Laws', 50, () => import('./l2-pretraining-scaling')),
@@ -64,6 +64,6 @@ export const genai: SubjectDef = {
     mod('genai-l3-embeddings-vector-db', 3, 'Embeddings, Vector Databases & Semantic Search', 50, () => import('./l3-embeddings-vector-db')),
     mod('genai-l3-rag', 3, 'RAG End to End: Retrieve, Rerank, Generate', 60, () => import('./l3-rag')),
     mod('genai-l3-agents-tools', 3, 'Agents & Tool Use: Function Calling, ReAct & MCP', 55, () => import('./l3-agents-tools')),
-    mod('genai-l3-evaluation-safety', 3, 'Evaluating LLMs: Judges, Hallucination, Guardrails & Multimodal', 60, () => import('./l3-evaluation-safety')),
+    mod('genai-l3-evaluation-safety', 3, 'Evaluating LLM Systems: Judges, Hallucination & Guardrails', 55, () => import('./l3-evaluation-safety')),
   ],
 }

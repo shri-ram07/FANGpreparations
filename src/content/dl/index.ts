@@ -59,6 +59,7 @@ export const dl: SubjectDef = {
     mod('dl-l2-embeddings', 2, 'Embeddings: Meaning as Vectors', 33, () => import('./l2-embeddings')),
     mod('dl-l3-generative-models', 3, 'Generative Models: Autoencoders, VAEs, GANs & Diffusion', 40, () => import('./l3-generative-models')),
     mod('dl-l3-ssl-and-scale', 3, 'Self-Supervised Learning: Labels Out of Raw Data', 34, () => import('./l3-ssl-and-scale')),
-    mod('dl-l3-practicals-and-debugging', 3, 'The Four Practicals + The Debugging Playbook', 60, () => import('./l3-practicals-and-debugging')),
+    mod('dl-l3-practicals-and-debugging', 3, 'The Four Practicals: Things You Build Yourself', 29, () => import('./l3-practicals-and-debugging')),
+    mod('dl-l3-debugging-playbook', 3, 'The Debugging Playbook: When Training Goes Wrong', 33, () => import('./l3-debugging-playbook')),
   ],
 }
