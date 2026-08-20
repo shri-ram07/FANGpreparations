@@ -4,642 +4,742 @@ const m: Module = {
   id: 'ml-l2-ensembles',
   subjectId: 'ml',
   level: 2,
-  title: 'Ensembles: Bagging, Random Forest & Gradient Boosting',
+  title: 'Ensembles: Many Weak Opinions Beat One Strong Opinion',
   whyItMatters:
-    'On tabular data — the data most companies actually have — a gradient-boosted forest still beats the deep net, and it is what you will reach for on day one of the job. Interviewers know this, so "why RF over one deep tree" and "boosting vs bagging" are near-guaranteed questions. Both have the same one-line answer if you understand variance.',
-  estMinutes: 65,
+    'On the kind of data most companies actually have — rows and columns in a database — the winning model is almost never one big clever model. It is a few hundred small dumb ones, combined. This module shows you why that works, with six hand-written predictions you can check on paper, and then builds the two ways of combining models from scratch: bagging, where the models are trained independently and vote, and boosting, where each model is trained specifically to fix the previous one\'s mistakes. Every number on this page came out of a real Python run.',
+  assumes: [
+    'You have read the *Decision Trees* module: you know a tree asks yes/no questions about a feature and gives an answer at the end, and that a deep tree can memorise its training data',
+    'You know what an average is, and what a percentage is',
+    'You have seen a Python list, a for loop, an if statement, and a function',
+    'Nothing else. Every term used here is defined here, in plain words, the first time it appears',
+  ],
+  estMinutes: 55,
   sections: [
     {
       type: 'intuition',
-      title: 'Why a crowd beats an expert',
-      md: `Ask one person to guess the number of jellybeans in a jar: they are off by a lot. Ask 500 people and average the guesses: the average lands shockingly close.
+      title: 'Three mediocre guessers beat any one of them',
+      md: `Six emails. Each is spam (written as 1) or not spam (written as 0). The truth, in order, is **1, 1, 1, 0, 0, 0**.
 
-- Nobody in the crowd got smarter. The *errors* cancelled: some guessed high, some low.
-- Same trick for models. Train many models that are each **unbiased but noisy**, average them, and the noise shrinks.
-- Formally: this kills **variance** (sensitivity to the particular training set), not **bias** (being systematically wrong).
-- One deep decision tree is exactly the right raw material — very low bias, wildly high variance. Change 5 rows and it grows a different tree.`,
-    },
-    {
-      type: 'intuition',
-      title: 'The honest condition: errors must be decorrelated',
-      md: `Now ask 500 people who all read the same wrong blog post. The average is just as wrong as any one of them. The crowd only works if people are wrong *independently*.
+Three different spam filters look at the same six emails. None of them is good — each gets exactly four out of six right, which is 66.7%. Here is what each one says:
 
-- Averaging identical models = the same model, at 500× the cost.
-- So every ensemble method is really an answer to one question: **how do I make these models disagree?**
-- Bagging's answer: give each model a different random slice of the data.
-- Random Forest adds: give each *split* a different random slice of the features.
-- Boosting's answer is stranger: make each model deliberately specialise in what the previous ones got wrong.
-- If you remember one sentence from this module, remember that decorrelation is the whole game.`,
-    },
-    {
-      type: 'math',
-      intro:
-        'The formula that makes "decorrelated" concrete. Average n predictors, each with variance sigma-squared, pairwise correlation rho.',
-      latex: [
-        '\\operatorname{Var}\\!\\left(\\frac{1}{n}\\sum_{i=1}^{n} f_i\\right) = \\rho\\,\\sigma^2 + \\frac{1-\\rho}{n}\\,\\sigma^2',
-        '\\rho = 0 \\;\\Rightarrow\\; \\frac{\\sigma^2}{n} \\quad\\text{(variance vanishes)} \\qquad \\rho = 1 \\;\\Rightarrow\\; \\sigma^2 \\quad\\text{(nothing happened)}',
-        '\\text{More trees only shrink the } \\tfrac{1-\\rho}{n} \\text{ term. The } \\rho\\sigma^2 \\text{ floor is set by how correlated your trees are.}',
-      ],
-    },
-    {
-      type: 'note',
-      md: `Read that floor again, because it is the whole design pressure on Random Forest. Adding trees forever cannot push variance below **rho times sigma-squared**. The only way to lower the floor is to lower rho — to make the trees genuinely different. That is why RF does not stop at bootstrap sampling.`,
-    },
-    {
-      type: 'intuition',
-      title: 'Bagging: bootstrap, train, vote',
-      md: `**Bagging** = **B**ootstrap **AGG**regat**ING**. Three steps, no cleverness.
+- Filter **A** says 1, 1, 1, 1, 1, 0. Compare to the truth: it is wrong on email 4 and email 5. Four right.
+- Filter **B** says 1, 0, 1, 0, 0, 1. It is wrong on email 2 and email 6. Four right.
+- Filter **C** says 0, 1, 0, 0, 0, 0. It is wrong on email 1 and email 3. Four right.
 
-1. Draw a **bootstrap sample**: n rows sampled from your n rows *with replacement* — so some rows appear twice, some not at all.
-2. Train one model on it. Repeat for B samples, completely independently.
-3. Predict by averaging (regression) or majority vote (classification).
-- Because each model sees a slightly different dataset, each makes slightly different mistakes. That is the decorrelation, bought cheaply.
-- Step 2 is embarrassingly parallel — B trees on B cores, no coordination.`,
+Now combine them by **majority vote**: for each email, take the answer that at least two of the three filters gave.
+
+- Email 1: A says 1, B says 1, C says 0. Two votes for 1, so the vote says **1**. Truth is 1. Correct.
+- Email 2: 1, 0, 1 — two votes for 1, so **1**. Truth is 1. Correct.
+- Email 3: 1, 1, 0 → **1**. Correct. Email 4: 1, 0, 0 → **0**. Correct.
+- Email 5: 1, 0, 0 → **0**. Correct. Email 6: 0, 1, 0 → **0**. Correct.
+
+The vote gets **six out of six**. Every individual filter got 66.7%; the combination got 100%. Nobody got smarter. Look at why: on every single email, exactly one filter is wrong and the other two are right, so the wrong one is always outvoted.`,
     },
     {
       type: 'code',
       lang: 'python',
-      title: 'The 63% fact — why bootstrap leaves rows over',
-      code: `import numpy as np
+      title: 'The same six emails, in code',
+      code: `truth = [1, 1, 1, 0, 0, 0]
+A     = [1, 1, 1, 1, 1, 0]
+B     = [1, 0, 1, 0, 0, 1]
+C     = [0, 1, 0, 0, 0, 0]
 
-rng = np.random.default_rng(0)
-n = 1000                                   # 1000 rows in the training set
-draws = [np.unique(rng.integers(0, n, n)).size / n for _ in range(500)]
-print('mean unique fraction:', round(float(np.mean(draws)), 4))
-print('theory  1 - 1/e     :', round(1 - 1 / np.e, 4))
+def score(guesses):
+    return sum(1 for i in range(6) if guesses[i] == truth[i]) / 6
 
-# mean unique fraction: 0.6322
-# theory  1 - 1/e     : 0.6321`,
+vote = []
+for i in range(6):
+    votes_for_1 = A[i] + B[i] + C[i]
+    vote.append(1 if votes_for_1 >= 2 else 0)
+
+print('A', round(score(A), 4), 'B', round(score(B), 4), 'C', round(score(C), 4))
+print('vote', vote)
+print('vote score', score(vote))
+
+# ---- real output ----
+# A 0.6667 B 0.6667 C 0.6667
+# vote [1, 1, 1, 0, 0, 0]
+# vote score 1.0`,
       annotations: {
-        5: 'rng.integers(0, n, n) IS the bootstrap: n draws from n row indices, with replacement. unique().size counts how many distinct rows made it in.',
-        7: 'Not folklore. P(a given row is never picked in n draws) = (1 - 1/n)^n, which converges to 1/e = 0.368. So ~63% unique, ~37% left out.',
+        1: 'The true label for each of the six emails, 1 for spam and 0 for not spam. A plain Python list of six whole numbers.',
+        2: 'Filter A\'s six answers, in the same order, so A[0] and truth[0] describe the same email. The extra spaces before the = are only there to line the four lists up on screen; Python ignores them.',
+        3: 'Filter B\'s six answers. Note it is wrong on different emails than A.',
+        4: 'Filter C\'s six answers. Again wrong on a different pair.',
+        6: 'Defines a function that takes one list of six guesses and returns the fraction it got right.',
+        7: 'Reads inside-out: for each position i, produce a 1 when the guess matches the truth. sum() adds those 1s up, giving the number correct, and dividing by 6 turns the count into a fraction. The "1 for i in range(6) if ..." form is a generator expression - a compact way to write "make one value per loop pass, but only when the if holds".',
+        9: 'An empty list that will collect the combined answer for each email.',
+        10: 'range(6) gives i = 0, 1, 2, 3, 4, 5 - the six email positions.',
+        11: 'Because every answer is 0 or 1, adding the three answers together counts how many filters voted for spam. Three filters voting 1, 0, 1 gives 2.',
+        12: 'Majority means at least 2 of 3. "1 if condition else 0" is a Python conditional expression: the whole thing becomes 1 when the condition holds and 0 when it does not. append() adds that value to the end of the list.',
+        14: 'Score each filter on its own. round(value, 4) cuts the float to 4 decimal places so 0.6666666666666666 prints as 0.6667.',
+        15: 'Print the combined answers so you can compare them to truth by eye.',
+        16: 'Score the combination with the exact same function. 1.0 means all six correct.',
       },
     },
     {
-      type: 'note',
-      md: `Those left-out ~37% have a name: **out-of-bag (OOB) rows**. For every row, some trees never saw it — so score that row using only those trees, and you get an honest validation estimate for free, without ever holding out a test set. That is the **OOB score**, and it is a real advantage of bagging that boosting cannot offer.`,
-    },
-    {
       type: 'intuition',
-      title: 'Random Forest: the second randomization',
-      md: `Bag some trees and you hit a wall. Suppose one feature (say \`income\`) is hugely predictive. Every bootstrap sample still contains it, so **every tree splits on income first** — and the trees end up near-identical. High rho, tiny variance reduction.
+      title: 'The condition: the models must be wrong in different places',
+      md: `That result was not luck, but it was not free either. Rerun it with three filters that are wrong on the *same* two emails.
 
-- Random Forest's fix: at *each split*, let the tree consider only a **random subset of features** (typically sqrt(d) for classification, d/3 for regression).
-- Now most splits cannot even see \`income\`. Trees are forced to find the second-best and third-best signals.
-- Individually each tree is slightly *worse*. Collectively they are far less correlated — and the formula says correlation is what matters.
-- **Random Forest = bagging + per-split feature subsampling.** Both randomizations, or it is just bagged trees.`,
-    },
-    {
-      type: 'intuition',
-      title: 'The interview answer: why RF over one deep tree',
-      md: `Say this, in this order, and you are done:
+- Suppose A, B and C are all wrong on email 4 and email 5, and right everywhere else.
+- Email 4: all three say the wrong thing, so the majority says the wrong thing. Same for email 5.
+- The vote scores 4/6 = 66.7% — exactly what each filter scored alone. Combining bought nothing.
 
-- A single deep tree has **low bias, high variance** — it can memorise anything, so it memorises noise too. Train accuracy 100%, test accuracy mediocre.
-- Pruning the tree fixes variance by *adding bias* — you throw away real signal along with the noise.
-- A forest fixes variance *without* adding bias: it keeps every tree deep and unbiased, then averages the noise away.
-- The averaging only works because bootstrap + feature subsampling make the trees' errors decorrelated.
-- Bonus: the forest gives you an OOB score and a feature-importance ranking for free.
-- One-liner: *"A deep tree is unbiased but unstable; a forest keeps the low bias and averages the instability out."*`,
-    },
-    {
-      type: 'note',
-      md: `RF's practical profile, honestly. **Strengths:** works out of the box (defaults are genuinely good), essentially cannot overfit by adding more trees — the curve flattens, it does not turn upward — trains in parallel, no feature scaling needed, handles mixed feature types. **Limits:** the model is big (hundreds of trees in memory), inference is slower than one tree, it is not interpretable the way a single tree is, and it **cannot extrapolate** — a forest predicts by averaging training leaf values, so it can never output a number above the largest y it ever saw. Do not use it for trending time series.`,
-    },
-    {
-      type: 'intuition',
-      title: 'Boosting: the opposite philosophy',
-      md: `Bagging is a committee of equals voting in parallel. Boosting is a relay race.
+So the whole trick rests on one condition: the models must make **different** mistakes. If their mistakes overlap completely, the vote is just a copy of any one model. Everything else in this module is a technique for forcing models to be wrong in different places.
 
-- Train model 1. Look at what it got wrong. Train model 2 **specifically to fix those mistakes**. Add it in. Repeat.
-- Models are trained **sequentially** — model k depends on models 1..k−1. No parallelism across the chain.
-- The base models are deliberately **weak**: stumps or depth-3 trees, barely better than a coin flip alone.
-- Bagging takes low-bias/high-variance models and cuts variance. Boosting takes high-bias/low-variance models and cuts **bias**, by stacking up corrections.
-- Same word "ensemble", opposite mechanism. Interviewers love this contrast because it is easy to get backwards.`,
-    },
-    {
-      type: 'intuition',
-      title: 'AdaBoost: reweight what you got wrong',
-      md: `The first boosting algorithm that worked, and still the cleanest to explain.
+You can also compute the payoff when the models are wrong *independently* — meaning one being wrong tells you nothing about whether another is wrong. Three filters, each right 65% of the time, independently. The vote is right when all three are right, or when exactly two are right:
 
-- Start with every training row at equal weight.
-- Train a stump. Compute its weighted error rate.
-- **Raise the weight of every misclassified row, lower the weight of every correct one.** The next stump is trained on this reweighted data, so it is forced to care about the hard rows.
-- Each stump also earns a vote weight alpha: accurate stumps get a loud vote, near-random ones a whisper.
-- Final prediction: weighted vote of all the stumps.
-- Weakness that follows straight from the design: a mislabeled row gets up-weighted every single round until it dominates. **AdaBoost is fragile to label noise and outliers.**`,
-    },
-    {
-      type: 'math',
-      intro:
-        'AdaBoost is three formulas, and every number in the walkthrough below falls out of them. Weights start uniform and always sum to 1.',
-      latex: [
-        '\\varepsilon_t = \\sum_i w_i^{(t)}\\, \\mathbf{1}\\!\\left[h_t(x_i) \\neq y_i\\right] \\qquad \\alpha_t = \\tfrac{1}{2}\\ln\\!\\frac{1 - \\varepsilon_t}{\\varepsilon_t}',
-        'w_i^{(t+1)} \\;\\propto\\; w_i^{(t)}\\, e^{+\\alpha_t}\\ (\\text{wrong}) \\qquad w_i^{(t+1)} \\;\\propto\\; w_i^{(t)}\\, e^{-\\alpha_t}\\ (\\text{right}) \\qquad \\text{then rescale so } \\sum_i w_i^{(t+1)} = 1',
-        'F(x) = \\operatorname{sign}\\!\\left(\\sum_t \\alpha_t\\, h_t(x)\\right) \\qquad \\varepsilon_t = 0.5 \\Rightarrow \\alpha_t = 0 \\ (\\text{a coin flip gets no vote})',
-      ],
-    },
-    {
-      type: 'code',
-      lang: 'python',
-      title: 'The weight table, computed — not guessed',
-      code: `import numpy as np
-
-n = 5
-w = np.full(n, 1 / n)                    # round 1: every row equally important
-wrong = {1: [1, 3], 2: [4], 3: []}       # 0-based rows each stump gets wrong
-
-for t in (1, 2, 3):
-    miss = np.zeros(n, dtype=bool)
-    miss[wrong[t]] = True
-    eps = w[miss].sum()                  # WEIGHTED error rate, not a raw count
-    print(f'round {t}  w = {np.round(w, 4)}  eps = {eps:.4f}', end='')
-    if eps == 0:
-        print('  -> perfect stump, alpha infinite, AdaBoost stops')
-        break
-    alpha = 0.5 * np.log((1 - eps) / eps)
-    print(f'  alpha = {alpha:.4f}')
-    w *= np.exp(alpha * np.where(miss, 1, -1))   # wrong rows up, right rows down
-    w /= w.sum()                                 # renormalize back to sum 1
-
-# round 1  w = [0.2 0.2 0.2 0.2 0.2]  eps = 0.4000  alpha = 0.2027
-# round 2  w = [0.1667 0.25   0.1667 0.25   0.1667]  eps = 0.1667  alpha = 0.8047
-# round 3  w = [0.1  0.15 0.1  0.15 0.5 ]  eps = 0.0000  -> perfect stump, alpha infinite, AdaBoost stops`,
-      annotations: {
-        5: 'The only hand-written input: which rows each stump misses. Stump 1 misses rows 2 and 4 (0-based 1 and 3), stump 2 misses row 5, stump 3 misses nothing. Every weight below is computed from that.',
-        10: 'The error rate is WEIGHTED, not a count. Round 1 it equals 2/5 = 0.40 only because the weights are still uniform. Round 2 the one missed row carries 0.1667, so eps = 0.1667 — a raw count would have wrongly said 1/5 = 0.20.',
-        15: 'eps = 0.40 gives alpha = 0.5*ln(1.5) = 0.2027, a near-coin-flip stump with a quiet vote. eps = 0.1667 gives 0.5*ln(5) = 0.8047, four times louder. Accuracy buys volume.',
-        17: 'The update is a multiply: e^(+0.2027) = 1.2247 on the wrong rows, e^(-0.2027) = 0.8165 on the right ones. Round 1 therefore ends at 0.25 and 0.1667, not at some dramatic 10x jump.',
-        18: 'Renormalizing is what makes rounds comparable, and it produces the AdaBoost invariant worth quoting in an interview: after every update the misclassified rows carry exactly half the total weight. Round 3 shows it — row 5 alone weighs 0.50.',
-        22: 'eps = 0 means a stump that is perfect on the reweighted data, so alpha would be infinite and AdaBoost stops. A real edge case, not a bug — sklearn handles it the same way.',
-      },
+- All three right: 0.65 x 0.65 x 0.65 = **0.274625**.
+- Exactly two right: there are 3 ways to choose which one is wrong, each with chance 0.65 x 0.65 x 0.35 = 0.147875, so 3 x 0.147875 = **0.443625**.
+- Add them: 0.274625 + 0.443625 = **0.71825**. The vote is right 71.8% of the time, up from 65%.`,
     },
     {
       type: 'visual',
-      component: 'PointerBoxDiagram',
+      component: 'PythonPlayground',
       props: {
-        title: 'Bagging vs boosting, frame by frame',
-        notice:
-          'Left column = training rows and their weights. Right column = the models being built. Red dashed = rows the current ensemble still gets wrong.',
-        leftLabel: 'rows / samples',
-        rightLabel: 'models built',
-        frames: [
-          {
-            note: 'BAGGING, step 1. Three bootstrap samples drawn from the SAME 100 rows, each with replacement — so each holds only ~63 distinct rows.',
-            stack: [
-              { name: 'bootstrap A', value: '63 uniq/100', to: 'tA' },
-              { name: 'bootstrap B', value: '64 uniq/100', to: 'tB' },
-              { name: 'bootstrap C', value: '62 uniq/100', to: 'tC' },
-            ],
-            heap: [
-              { id: 'tA', value: 'tree A (fresh)', label: 'core 1' },
-              { id: 'tB', value: 'tree B (fresh)', label: 'core 2' },
-              { id: 'tC', value: 'tree C (fresh)', label: 'core 3' },
-            ],
-          },
-          {
-            note: 'Step 2. All three train at the same time, each on its own sample, each split limited to a random feature subset. No tree knows the others exist.',
-            stack: [
-              { name: 'bootstrap A', value: 'training', to: 'tA' },
-              { name: 'bootstrap B', value: 'training', to: 'tB' },
-              { name: 'bootstrap C', value: 'training', to: 'tC' },
-            ],
-            heap: [
-              { id: 'tA', value: 'tree A: depth 11', label: 'split on age' },
-              { id: 'tB', value: 'tree B: depth 13', label: 'split on city' },
-              { id: 'tC', value: 'tree C: depth 12', label: 'split on tenure' },
-            ],
-          },
-          {
-            note: 'Step 3. A new row arrives. Tree B is wrong — A and C outvote it. The vote only saved us because B was wrong somewhere the others were right.',
-            stack: [
-              { name: 'tree A votes', value: '1' },
-              { name: 'tree B votes', value: '0  (wrong)' },
-              { name: 'tree C votes', value: '1' },
-              { name: 'ensemble', value: 'majority', to: 'out' },
-            ],
-            heap: [{ id: 'out', value: 'prediction: 1', label: '2 of 3' }],
-          },
-          {
-            note: 'Free validation. Row 41 was left out of samples A and C, so score it with trees A and C only. Do that for every row: the out-of-bag score.',
-            stack: [{ name: 'row 41', value: 'OOB for A, C', to: 'oob' }],
-            heap: [
-              { id: 'oob', value: 'scored by A + C', label: 'never saw it' },
-              { id: 'held', value: 'holdout set needed: none', label: 'saved' },
-            ],
-          },
-          {
-            note: 'BOOSTING, round 1. One dataset, all five rows at weight 0.20 (weights always sum to 1). Stump 1 gets rows 2 and 4 wrong (red), so eps = 0.40 and alpha = 0.5*ln(1.5) = 0.2027. Ensemble accuracy 0.60.',
-            stack: [
-              { name: 'row 1', value: 'w 0.2000', to: 'm1' },
-              { name: 'row 2', value: 'w 0.2000', to: 'm1', danger: true },
-              { name: 'row 3', value: 'w 0.2000', to: 'm1' },
-              { name: 'row 4', value: 'w 0.2000', to: 'm1', danger: true },
-              { name: 'row 5', value: 'w 0.2000', to: 'm1' },
-            ],
-            heap: [
-              { id: 'm1', value: 'stump 1', label: 'eps 0.40, alpha 0.2027' },
-              { id: 'F1', value: 'ensemble acc 0.60', label: 'running' },
-            ],
-          },
-          {
-            note: 'Round 2. Wrong rows were multiplied by e^(+0.2027) = 1.2247, right rows by e^(-0.2027) = 0.8165, then renormalized: 0.25 vs 0.1667. Stump 2 fixes rows 2 and 4 and slips on row 5, so eps = 0.1667 and alpha = 0.5*ln(5) = 0.8047. Accuracy 0.80.',
-            stack: [
-              { name: 'row 1', value: 'w 0.1667', to: 'm2' },
-              { name: 'row 2', value: 'w 0.2500', to: 'm2', danger: true },
-              { name: 'row 3', value: 'w 0.1667', to: 'm2' },
-              { name: 'row 4', value: 'w 0.2500', to: 'm2', danger: true },
-              { name: 'row 5', value: 'w 0.1667', to: 'm2' },
-            ],
-            heap: [
-              { id: 'm2', value: 'stump 2', label: 'eps 0.1667, alpha 0.8047' },
-              { id: 'F2', value: 'ensemble acc 0.80', label: 'running' },
-            ],
-          },
-          {
-            note: 'Round 3. Row 5 was the only miss, so it alone now carries 0.50 — after every update the misclassified rows sum to exactly half the weight. Stump 3 fixes it. Running accuracy 0.60 to 0.80 to 1.00: each stump alone is weak, the alpha-weighted SUM is strong.',
-            stack: [
-              { name: 'row 1', value: 'w 0.1000', to: 'm3' },
-              { name: 'row 2', value: 'w 0.1500', to: 'm3' },
-              { name: 'row 3', value: 'w 0.1000', to: 'm3' },
-              { name: 'row 4', value: 'w 0.1500', to: 'm3' },
-              { name: 'row 5', value: 'w 0.5000', to: 'm3', danger: true },
-            ],
-            heap: [
-              { id: 'm3', value: 'stump 3', label: 'chases row 5' },
-              { id: 'F3', value: 'ensemble acc 1.00', label: 'running' },
-            ],
-          },
-          {
-            note: 'GRADIENT BOOSTING drops weights entirely: the next tree fits the RESIDUALS (leftover error) directly, and only 0.05 of it is added to the ensemble.',
-            stack: [
-              { name: 'row 1 resid', value: '-0.08', to: 'g4' },
-              { name: 'row 2 resid', value: '+0.41', to: 'g4', danger: true },
-              { name: 'row 3 resid', value: '-0.05', to: 'g4' },
-              { name: 'row 4 resid', value: '+0.38', to: 'g4', danger: true },
-              { name: 'row 5 resid', value: '+0.02', to: 'g4' },
-            ],
-            heap: [
-              { id: 'g4', value: 'tree 4 fits these', label: 'target = -gradient' },
-              { id: 'F4', value: 'F := F + 0.05 * tree4', label: 'shrunk step' },
-            ],
-          },
-          {
-            note: 'The cost of going sequential: one mislabeled row keeps gaining weight, and late trees memorise the noise. Bagging never does this. Early-stop on validation.',
-            stack: [{ name: 'row 3', value: 'mislabeled', to: 'gN', danger: true }],
-            heap: [
-              { id: 'gN', value: 'trees 200..400 chase it', label: 'overfitting' },
-              { id: 'val', value: 'val acc peaks, then falls', label: 'stop here' },
-            ],
-          },
-        ],
+        code: `import random
+random.seed(1)
+
+def majority_correct(n_models):
+    wins = 0
+    for trial in range(20000):
+        right = 0
+        for m in range(n_models):
+            if random.random() < 0.65:
+                right = right + 1
+        if right > n_models / 2:
+            wins = wins + 1
+    return wins / 20000
+
+for n in [1, 3, 7, 15, 31]:
+    print(n, 'models ->', round(majority_correct(n), 4))`,
+        precomputedOutput: `1 models -> 0.6534
+3 models -> 0.7162
+7 models -> 0.8001
+15 models -> 0.8860
+31 models -> 0.9568`,
+        caption: 'Each model is right 65% of the time on its own, independently of the others. Three of them vote at 71.6% (the 71.8% we computed by hand, measured by simulation). Thirty-one of them vote at 95.7%.',
+        annotations: {
+          1: 'random is Python\'s built-in module for producing random numbers.',
+          2: 'seed(1) fixes the starting point of the random number generator, so this program prints the same answer every time you run it.',
+          4: 'Defines a function that takes how many models are voting and returns how often the vote is right.',
+          5: 'A counter for how many trials the vote got right. Starts at zero.',
+          6: 'Repeat the whole experiment 20000 times. More trials means a more stable estimate.',
+          7: 'For this one trial, count how many of the models happened to be right. Reset to zero each trial.',
+          8: 'Loop once per model in this vote.',
+          9: 'random.random() returns a fresh number between 0 and 1, each equally likely. It lands below 0.65 about 65% of the time, which is exactly "this model is right 65% of the time". Each call is independent of the last, which is the decorrelation condition, built in.',
+          10: 'This model was right, so add one.',
+          11: 'The majority is right when more than half the models were right.',
+          12: 'Count this trial as a win for the vote.',
+          13: 'Wins divided by trials is the fraction of the time the vote was correct.',
+          15: 'Try five different committee sizes.',
+          16: 'Print the size and its measured accuracy, rounded to 4 decimal places.',
+        },
       },
     },
     {
       type: 'intuition',
-      title: 'Gradient Boosting: fit the residuals',
-      md: `AdaBoost reweights rows. Gradient Boosting does something cleaner: the next tree does not classify anything — it **predicts the leftover error**.
+      title: 'The words',
+      md: `Four terms, defined now and used for the rest of the module.
 
-- Start with a constant prediction (the mean of y). Compute the residual for each row: **r = y − prediction**.
-- Train a small tree to predict **r**. Add a shrunk copy of it to the running prediction.
-- Recompute residuals. Repeat. Each tree eats a bit more of the error.
-- The residual is not an ad-hoc choice: for squared loss, **r is exactly the negative gradient of the loss with respect to the prediction**.
-- So swapping in a different loss (log-loss, Huber, quantile) just changes what the next tree fits. Same algorithm, any differentiable loss.`,
-    },
-    {
-      type: 'math',
-      intro:
-        'Gradient boosting is gradient descent — but the thing being updated is the function F, not a weight vector. Compare this to the update rule from the gradient descent module.',
-      latex: [
-        'r_i^{(t)} = -\\left[\\frac{\\partial L(y_i, F(x_i))}{\\partial F(x_i)}\\right]_{F = F_{t-1}} \\;\\;\\overset{\\text{squared loss}}{=}\\;\\; y_i - F_{t-1}(x_i)',
-        'h_t = \\arg\\min_{h} \\sum_i \\left(h(x_i) - r_i^{(t)}\\right)^2 \\qquad F_t = F_{t-1} + \\nu\\, h_t',
-        '\\text{Same shape as } w := w - \\alpha \\nabla J. \\text{ Here the "parameter" is the whole function } F, \\text{ and } \\nu \\text{ is the learning rate.}',
-      ],
+- An **ensemble** is a group of models whose answers are combined into one answer. Combining means majority vote when the answer is a category, and plain average when the answer is a number.
+- A **weak learner** is a deliberately simple model that is only a little better than guessing. A decision tree of depth 1 — one yes/no question, then an answer — is the standard example. It is called a **stump**.
+- A **base model** is one member of the ensemble. All the base models in one ensemble are usually the same kind of model, trained differently.
+- **Variance**, here, means: if you retrained on a slightly different set of rows, how much would the model change? A deep decision tree has huge variance — change five rows and it grows a visibly different tree. That instability is exactly the raw material an ensemble needs, because it is what makes the trees disagree.
+
+There are two ways to build an ensemble, and they are arranged in opposite directions. The next sections build each one.`,
     },
     {
       type: 'intuition',
-      title: 'Learning rate, tree count, early stopping',
-      md: `The shrinkage **nu** (sklearn calls it \`learning_rate\`) decides how much of each new tree you actually keep.
+      title: 'Bagging: train them side by side, then vote',
+      md: `**Bagging** is short for **b**ootstrap **agg**regat**ing**. It is three steps.
 
-- \`nu = 1.0\`: take the full correction each round. Fast, and it overfits fast.
-- \`nu = 0.05\`: take 5% of each correction. Each tree matters less, so a bad tree does less damage — but you need many more trees.
-- The two knobs trade off directly: **halve the learning rate, roughly double the trees.** Small nu with many trees generalises better; it just costs compute.
-- Unlike a Random Forest, **more trees CAN overfit here** — the validation curve dips, bottoms out, then climbs again.
-- So gradient boosting needs **early stopping**: watch validation loss, stop when it stops improving for k rounds. \`n_estimators\` becomes a budget, not a target.`,
+1. Make a **bootstrap sample**: from your n training rows, draw n rows *with replacement*. "With replacement" means after you pick a row you put it back, so it can be picked again. A bootstrap sample therefore has the same number of rows as the original, but some rows appear twice or three times and some do not appear at all.
+2. Train one model on that sample. Repeat from step 1, independently, until you have as many models as you want. Nothing is shared between them, so they can all be trained at the same time on different processors.
+3. To predict, ask every model and combine: majority vote, or average.
+
+The bootstrap is what makes the models disagree. Each one sees a slightly different version of the data, so each one grows a slightly different tree, so each one is wrong in a slightly different place — which is the condition we established two sections ago.`,
     },
     {
       type: 'code',
       lang: 'python',
-      title: 'Watch the validation curve peak, then decay',
-      code: `import numpy as np
-from sklearn.datasets import load_breast_cancer
-from sklearn.model_selection import train_test_split
-from sklearn.ensemble import GradientBoostingClassifier
+      title: 'How much of the data does a bootstrap sample miss?',
+      code: `import random
+random.seed(0)
 
-X, y = load_breast_cancer(return_X_y=True)
-Xtr, Xva, ytr, yva = train_test_split(X, y, test_size=0.3, random_state=0, stratify=y)
+rows = list(range(1000))
+left_out = []
+for trial in range(500):
+    sample = []
+    for _ in range(1000):
+        sample.append(random.choice(rows))
+    unique_rows = set(sample)
+    left_out.append((1000 - len(unique_rows)) / 1000)
 
-for lr in (0.5, 0.05):
-    g = GradientBoostingClassifier(n_estimators=400, learning_rate=lr, random_state=0).fit(Xtr, ytr)
-    acc = np.array([(p == yva).mean() for p in g.staged_predict(Xva)])
-    print(f'lr={lr}: peak {acc.max():.3f} at tree {acc.argmax() + 1}, at 400 trees {acc[-1]:.3f}')
+print('average fraction left out:', round(sum(left_out) / 500, 4))
+print('formula (1 - 1/1000) ** 1000:', round((1 - 1 / 1000) ** 1000, 4))
 
-# lr=0.5 : peak 0.947 at tree 47, at 400 trees 0.936
-# lr=0.05: peak 0.947 at tree 20, at 400 trees 0.942`,
+# ---- real output ----
+# average fraction left out: 0.3669
+# formula (1 - 1/1000) ** 1000: 0.3677`,
       annotations: {
-        11: 'staged_predict replays the ensemble after 1, 2, 3 ... 400 trees. A full validation curve with no refitting — this is how you pick n_estimators.',
-        12: 'Read the output honestly: BOTH runs peak long before 400 trees and then get worse. That decay is the overfitting a Random Forest never shows.',
-        14: 'The aggressive learner (lr=0.5) decays further: 0.947 down to 0.936. The gentle one holds 0.942. Small steps forgive a late bad tree; big steps do not.',
+        1: 'Python\'s built-in random number module.',
+        2: 'Fix the random starting point so this run is reproducible.',
+        4: 'range(1000) counts 0 to 999; list() turns that count into an actual list. These stand in for 1000 training rows, each identified by its position number.',
+        5: 'Will collect one number per trial: the fraction of rows that trial missed.',
+        6: 'Build 500 separate bootstrap samples so we can average the answer instead of trusting one draw.',
+        7: 'An empty list to hold the 1000 drawn rows for this trial.',
+        8: 'Draw 1000 times, because a bootstrap sample has the same size as the original data. The underscore is the conventional name for a loop variable you never use.',
+        9: 'random.choice(rows) picks one row at random and does NOT remove it from rows, so the same row can come up again on a later draw. That is what "with replacement" means, in one line.',
+        10: 'set() throws away duplicates, so its length is how many DISTINCT rows made it into the sample.',
+        11: 'Rows drawn minus distinct rows drawn, divided by 1000: the fraction of the original rows that this sample never saw.',
+        13: 'Average the 500 answers. It lands near 0.367.',
+        14: 'The reason. A given row survives one draw untouched with chance 999/1000. Draws are independent, so it survives all 1000 draws untouched with chance (999/1000) to the power 1000, which is 0.3677. The simulation agrees to three decimals.',
+      },
+    },
+    {
+      type: 'note',
+      md: `So a bootstrap sample contains about 63% of the original rows, and misses about 37% of them. Those missed rows have a name: for a given tree, they are its **out-of-bag rows** — the rows that tree never trained on.
+
+That is worth something. Take any row, find the trees that left it out, and ask only those trees to predict it. None of them has seen it, so their answer is an honest test answer. Do this for every row and average the results: that is the **out-of-bag score**, a free estimate of how the ensemble performs on unseen data, with no separate test set held aside. You will compute one by hand later in this module.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Random Forest: bagging trees, plus one more source of disagreement',
+      md: `Bag a few hundred decision trees and you hit a ceiling. Suppose one feature — say a customer\'s income — is far more predictive than the rest. Every bootstrap sample still contains that column, so **every tree splits on income first**, and the trees come out looking almost the same. Almost the same means almost the same mistakes, which means the vote buys almost nothing.
+
+**Feature subsampling** is the fix: at every single split, the tree is only allowed to look at a random handful of the features, not all of them. With 16 features and a handful of 4, a given split has a 12-in-16 chance of not even being offered income, and must find the next-best signal instead.
+
+A **Random Forest** is exactly this: bagging, applied to decision trees, with feature subsampling at every split. Two independent sources of disagreement — different rows, different columns — stacked on top of each other.
+
+- The usual handful size is the square root of the number of features when predicting a category, and about a third of them when predicting a number.
+- Each individual tree comes out slightly *worse* than it would have been, because it was sometimes denied its best question.
+- The forest comes out better anyway, because the trees now make genuinely different mistakes. Accepting worse parts to get a better whole is the trade at the centre of bagging.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Boosting: train them one after another, each fixing the last',
+      md: `Boosting rearranges everything. Put the two side by side, because this contrast is the thing to walk out of this module with.
+
+- **Bagging** trains its models **in parallel**, each on its own random resample of the data, and none of them knows the others exist. The combination is a plain vote or average, everyone weighted equally.
+- **Boosting** trains its models **in sequence**. Model 2 is trained specifically on what model 1 got wrong, model 3 on what models 1 and 2 together still get wrong, and so on. The combination is a running sum, not a vote.
+- Bagging reduces variance: it takes unstable, over-flexible models and steadies them by averaging. Its base models are deliberately deep.
+- Boosting reduces bias: it takes models too simple to fit the data and adds them up until the sum is complex enough. Its base models are deliberately shallow — usually stumps or trees of depth 3.
+- Adding more models to a bagged ensemble is always safe; it just stops helping. Adding more models to a boosted ensemble eventually makes it worse, because the sequence starts fixing noise. That difference gets its own section later, with numbers.
+
+**Boosting** is the general name for the sequential arrangement. The two ways of doing it — reweighting the rows, or fitting the leftovers — come next.`,
+    },
+    {
+      type: 'intuition',
+      title: 'One round of gradient boosting, by hand',
+      md: `Five houses. The feature x is size, and y is the price we want to predict.
+
+- x = 1, 2, 3, 4, 5 and y = 2, 4, 6, 9, 14.
+
+Start with the dumbest possible model: predict the average of y for everything. The average is (2+4+6+9+14)/5 = **7.0**, so the current prediction for every house is 7.0.
+
+A **residual** is what is left over: the true value minus what we currently predict. One residual per row.
+
+- Residuals: 2−7 = **−5**, 4−7 = **−3**, 6−7 = **−1**, 9−7 = **+2**, 14−7 = **+7**.
+- Read them as instructions. The first three say "you are predicting too high here", the last two say "too low here".
+
+Now fit a stump — one yes/no question — not to the prices, but **to the residuals**. Try the question "is x at most 3?". The rows with x ≤ 3 have residuals −5, −3, −1, averaging **−3.0**. The rows with x > 3 have residuals +2, +7, averaging **+4.5**. So the stump says: left side, subtract 3; right side, add 4.5.
+
+We will not apply the full correction. We apply half of it — that fraction is the **learning rate**, also called **shrinkage**, and here it is 0.5.
+
+- Left rows: 7.0 + 0.5 × (−3.0) = **5.5**. Right rows: 7.0 + 0.5 × (+4.5) = **9.25**.
+- New residuals: 2−5.5 = −3.5, 4−5.5 = −1.5, 6−5.5 = +0.5, 9−9.25 = −0.25, 14−9.25 = +4.75.
+- Compare the sizes. Before: −5, −3, −1, 2, 7. After: −3.5, −1.5, 0.5, −0.25, 4.75. Every one of them shrank.
+
+That is one round. Round 2 does exactly the same thing to the new residuals, and so on. **Gradient boosting** is that loop: each new tree is trained to predict the current residuals, and a shrunken version of its answer is added to the running total.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Round 1, part 1: the starting guess and the residuals',
+      code: `x = [1, 2, 3, 4, 5]
+y = [2, 4, 6, 9, 14]
+
+start = sum(y) / 5
+F = [start, start, start, start, start]
+residual = []
+for i in range(5):
+    residual.append(y[i] - F[i])
+
+def mean(values):
+    return sum(values) / len(values)
+
+def mse(values):
+    return sum(v * v for v in values) / len(values)
+
+print('start guess', start)
+print('residuals  ', residual)
+print('mse        ', round(mse(residual), 3))
+
+# ---- real output ----
+# start guess 7.0
+# residuals   [-5.0, -3.0, -1.0, 2.0, 7.0]
+# mse         17.6`,
+      annotations: {
+        1: 'The one feature, house size, for five houses.',
+        2: 'The true price of each house, in the same order.',
+        4: 'sum(y) adds the five prices, divided by 5 gives the average: 7.0. This is the dumbest model there is - one number for everybody.',
+        5: 'F is the current prediction for each of the five houses. Right now they are all the same 7.0. F will grow as rounds are added.',
+        6: 'An empty list to hold the five residuals.',
+        7: 'Walk the five rows by position.',
+        8: 'The residual: truth minus current prediction. Positive means we are predicting too low for this house.',
+        10: 'A small helper that averages a list. Defined once so the next snippet can reuse it.',
+        11: 'Sum divided by count. len() is how many items the list holds.',
+        13: 'Another helper: the mean of the squared values. Squaring makes negatives and positives count the same, so this is one number summarising how big the residuals are overall.',
+        14: '"v * v for v in values" is a generator expression: it produces one squared value per item, and sum() adds them as they come. Dividing by len() averages them.',
+        16: 'Show the starting prediction.',
+        17: 'Show the five residuals. These are what the next tree will be trained on.',
+        18: 'One number for how wrong we currently are: 17.6. We want the next round to lower it.',
       },
     },
     {
       type: 'code',
       lang: 'python',
-      title: 'One deep tree vs Random Forest vs Gradient Boosting, same split',
-      code: `from sklearn.datasets import load_breast_cancer
-from sklearn.model_selection import train_test_split
-from sklearn.tree import DecisionTreeClassifier
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+      title: 'Round 1, part 2: pick the best yes/no question about the residuals',
+      code: `best = None
+for cut in [1, 2, 3, 4]:
+    left = [residual[i] for i in range(5) if x[i] <= cut]
+    right = [residual[i] for i in range(5) if x[i] > cut]
+    err = sum((v - mean(left)) ** 2 for v in left) + sum((v - mean(right)) ** 2 for v in right)
+    print('cut x <=', cut, '| left mean', round(mean(left), 3), '| right mean', round(mean(right), 3), '| err', round(err, 3))
+    if best is None or err < best[0]:
+        best = (err, cut, mean(left), mean(right))
 
-X, y = load_breast_cancer(return_X_y=True)          # 569 rows, 30 features
-Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.3, random_state=0, stratify=y)
+print('best cut', best[1], 'predicts', round(best[2], 3), 'and', round(best[3], 3))
 
-models = {
-    'one deep tree': DecisionTreeClassifier(random_state=0),
-    'random forest': RandomForestClassifier(n_estimators=300, oob_score=True, random_state=0),
-    'grad boosting': GradientBoostingClassifier(n_estimators=300, learning_rate=0.05, random_state=0),
-}
-for name, mdl in models.items():
-    mdl.fit(Xtr, ytr)
-    oob = f'  oob={mdl.oob_score_:.3f}' if hasattr(mdl, 'oob_score_') else ''
-    print(f'{name}: train={mdl.score(Xtr, ytr):.3f}  test={mdl.score(Xte, yte):.3f}{oob}')
-
-# one deep tree: train=1.000  test=0.906
-# random forest: train=1.000  test=0.953  oob=0.967
-# grad boosting: train=1.000  test=0.942`,
+# ---- real output ----
+# cut x <= 1 | left mean -5.0 | right mean 1.25 | err 56.75
+# cut x <= 2 | left mean -4.0 | right mean 2.667 | err 34.667
+# cut x <= 3 | left mean -3.0 | right mean 4.5 | err 20.5
+# cut x <= 4 | left mean -1.75 | right mean 7.0 | err 26.75
+# best cut 3 predicts -3.0 and 4.5`,
       annotations: {
-        10: 'No max_depth: the tree grows until every leaf is pure. Its train score is 1.000 by construction — it memorised the training set.',
-        11: '300 trees, each on its own bootstrap sample, each split restricted to sqrt(30) = 5 random features. Zero tuning beyond the tree count.',
-        16: 'oob_score_ exists only on the forest: validation the model computed for itself during training, on rows each tree never saw. No data spent.',
-        19: 'The whole module in three numbers: the tree and the forest both hit train=1.000, but test goes 0.906 to 0.953. Identical bias, less variance.',
+        1: 'best will hold the winning question. None is Python\'s "nothing here yet" value, so the first cut tried always wins by default.',
+        2: 'The four places a yes/no question could split five houses: at most 1, at most 2, at most 3, at most 4.',
+        3: 'The residuals of the rows that answer yes. "[residual[i] for i in range(5) if x[i] <= cut]" is a list comprehension: walk every position, keep residual[i] only when the condition holds, and collect the kept ones into a new list.',
+        4: 'The residuals of the rows that answer no. Together lines 3 and 4 split the five residuals into two groups.',
+        5: 'How badly one number represents each group. For each group, take each residual minus that group\'s average, square it, and add them up. A group whose values are all close together scores near zero. Adding the two groups gives one score for this cut.',
+        6: 'Print the cut and what it would predict on each side, so you can check the arithmetic against the section above by eye.',
+        7: 'best[0] is the score of the best cut found so far. Keep this cut if it scores lower.',
+        8: 'Store four things together as a tuple: the score, the cut, and the two predictions. A tuple is just a fixed group of values in one variable.',
+        10: 'The winner is "is x at most 3", predicting -3.0 on the left and +4.5 on the right - exactly the stump we fitted by hand.',
+      },
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Round 1, part 3: apply half the correction and watch the residuals shrink',
+      code: `lr = 0.5
+err, cut, left_pred, right_pred = best
+
+new_F = []
+for i in range(5):
+    step = left_pred if x[i] <= cut else right_pred
+    new_F.append(F[i] + lr * step)
+
+new_residual = []
+for i in range(5):
+    new_residual.append(y[i] - new_F[i])
+
+print('new prediction', [round(v, 3) for v in new_F])
+print('new residual  ', [round(v, 3) for v in new_residual])
+print('mse before', round(mse(residual), 3), '-> after', round(mse(new_residual), 3))
+
+# ---- real output ----
+# new prediction [5.5, 5.5, 5.5, 9.25, 9.25]
+# new residual   [-3.5, -1.5, 0.5, -0.25, 4.75]
+# mse before 17.6 -> after 7.475`,
+      annotations: {
+        1: 'The learning rate: the fraction of the tree\'s correction we actually apply. 0.5 means half.',
+        2: 'Tuple unpacking: best holds four values, and this line hands them to four named variables in one go, in the order they were stored.',
+        4: 'Will hold the updated prediction for each house.',
+        5: 'Once per house.',
+        6: 'What the stump says for this house: the left prediction if the house answers yes to the question, otherwise the right one. This is the same "value if condition else other" form used earlier.',
+        7: 'The update: old prediction plus learning rate times the stump\'s correction. This addition is the whole of boosting - the models are summed, never averaged.',
+        9: 'Will hold the residuals that remain after the update.',
+        10: 'Once per house again.',
+        11: 'Truth minus the NEW prediction. These leftovers are what round 2 would be trained on.',
+        13: 'Print the updated predictions. Notice there are only two distinct values, because one stump can only say two things.',
+        14: 'Print the remaining residuals. Every one is smaller in size than before.',
+        15: 'One number confirming it: 17.6 down to 7.475 after a single stump, using only half its advice.',
       },
     },
     {
       type: 'note',
-      md: `Note what the numbers do *not* say. All three models memorise the training set (train=1.000) — training accuracy tells you nothing here. Boosting at 0.942 lands slightly below the forest at 0.953, and that is normal on a small, clean, 569-row dataset with untuned hyperparameters: boosting's edge shows up on larger, messier data *after* tuning. The forest's 0.967 OOB estimate, computed without touching the test set, is close to its real 0.953 — that is the free validation working.`,
+      md: `Why apply only half? Because the stump was fitted to these five rows, and part of what it found is real pattern while part is the accident of this particular sample. Taking the full correction commits hard to the accident. Taking half, and letting the next tree look again at what is left, keeps every step reversible by later steps.
+
+The cost is that you need more rounds: a learning rate of 0.05 needs roughly ten times as many trees as 0.5 to travel the same distance. So the two settings trade against each other — small learning rate with many trees is the safer, slower combination, and it is the usual default.`,
     },
     {
       type: 'intuition',
-      title: 'XGBoost, LightGBM, CatBoost: what each actually added',
-      md: `All three are gradient boosting. None changed the core idea. Each fixed a different practical bottleneck.
+      title: 'AdaBoost: the older method, which reweights rows instead of fitting leftovers',
+      md: `AdaBoost is the original boosting method, and it works on classification. Instead of fitting the leftovers, it keeps a **weight** on each training row — a number saying how much that row matters — and after each round it raises the weight of the rows the model got wrong, so the next model is forced to care about them.
 
-- **XGBoost** — added an explicitly **regularized objective** (penalties on leaf count and leaf weights), second-order gradients for better steps, built-in handling of missing values, and serious engineering: cache-aware, out-of-core, parallel split-finding.
-- **LightGBM** — went for **speed on big data**: histogram binning (bucket continuous features into ~256 bins instead of sorting every value) and **leaf-wise growth** (split the single most promising leaf, not the whole level). Much faster; slightly more prone to overfit small data, so cap \`num_leaves\`.
-- **CatBoost** — went for **categorical features**: ordered target encoding computed so a row never uses its own label, which kills the leakage that naive target encoding causes. Strong defaults, minimal preprocessing.
-- Why they dominate tabular Kaggle: they handle mixed types and missing values natively, need no scaling, capture feature interactions automatically, and squeeze bias down where a neural net would need far more data to compete.`,
+Here is the rule, and then the arithmetic. Five rows, each starting with weight 1/5 = 0.2. The first stump gets 2 of the 5 wrong.
+
+- **Epsilon** is the total weight of the wrong rows: 0.2 + 0.2 = **0.4**.
+- **Alpha** is how much this model\'s vote counts, defined as half the natural logarithm of (1 − epsilon) / epsilon. Here that is 0.5 × ln(0.6/0.4) = 0.5 × ln(1.5) = 0.5 × 0.4055 = **0.2027**. A model with a low error rate gets a large alpha and therefore a loud vote; a model at 50% error gets alpha = 0, meaning no vote at all.
+- Wrong rows have their weight multiplied by e raised to alpha = **1.2247**. Right rows are multiplied by e raised to minus alpha = **0.8165**.
+- Wrong rows: 0.2 × 1.2247 = 0.24495 each. Right rows: 0.2 × 0.8165 = 0.1633 each.
+- Those five weights add up to 0.9798, not 1, so divide every one by 0.9798 to make them add to 1 again. Wrong rows become 0.24495/0.9798 = **0.25**; right rows become 0.1633/0.9798 = **0.1667**.
+
+Each wrong row went from 0.2 to 0.25 and each right row from 0.2 to 0.1667. The next stump is trained with those weights, so getting the two hard rows right now matters half again as much as before.`,
     },
     {
-      type: 'note',
-      md: `**Bagging vs boosting, the table interviewers want.** *Training:* parallel and independent vs sequential and dependent. *Base models:* deep low-bias trees vs shallow high-bias stumps. *Primarily reduces:* variance vs bias. *More models:* safe, curve flattens vs risky, can overfit. *Noise and outliers:* robust — bad rows are diluted vs sensitive — bad rows get chased. *Tuning:* few knobs, defaults work vs learning rate, depth, tree count, all interacting. *Free validation:* OOB score vs none, you must hold out. *Typical accuracy ceiling:* good vs usually higher, once tuned.`,
+      type: 'code',
+      lang: 'python',
+      title: 'AdaBoost, part 1: the error rate and the vote weight',
+      code: `import math
+
+weight = [0.2, 0.2, 0.2, 0.2, 0.2]
+wrong = [False, True, False, True, False]
+
+epsilon = 0.0
+for i in range(5):
+    if wrong[i]:
+        epsilon = epsilon + weight[i]
+
+alpha = 0.5 * math.log((1 - epsilon) / epsilon)
+print('epsilon', round(epsilon, 4), 'alpha', round(alpha, 4))
+print('e ** alpha', round(math.exp(alpha), 4), 'e ** -alpha', round(math.exp(-alpha), 4))
+
+# ---- real output ----
+# epsilon 0.4 alpha 0.2027
+# e ** alpha 1.2247 e ** -alpha 0.8165`,
+      annotations: {
+        1: 'math is Python\'s built-in module for logarithms, exponentials and similar functions.',
+        3: 'The five row weights, all equal at the start. They add up to 1.',
+        4: 'Which rows this stump got wrong. True means wrong. Rows 2 and 4 are the two failures.',
+        6: 'A running total for the weighted error rate, starting at zero. Written 0.0 to make clear it holds decimals.',
+        7: 'Walk the five rows.',
+        8: 'Only wrong rows contribute to the error.',
+        9: 'Add this row\'s weight, not 1. That is what "weighted" means: a row with a big weight counts for more when scoring the model.',
+        11: 'math.log is the natural logarithm - the logarithm to base e, where e is about 2.718. This is the alpha formula written out: half the log of (1 - epsilon) over epsilon.',
+        12: 'Print both. epsilon 0.4 and alpha 0.2027, matching the hand arithmetic above.',
+        13: 'math.exp(v) is e raised to the power v. These two multipliers, 1.2247 and 0.8165, are what the weights get multiplied by next. Notice they are reciprocals of each other.',
+      },
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'AdaBoost, part 2: reweight the rows and renormalise',
+      code: `updated = []
+for i in range(5):
+    if wrong[i]:
+        updated.append(weight[i] * math.exp(alpha))
+    else:
+        updated.append(weight[i] * math.exp(-alpha))
+
+total = sum(updated)
+final = []
+for value in updated:
+    final.append(value / total)
+
+print('before normalising', [round(v, 5) for v in updated])
+print('total             ', round(total, 5))
+print('after normalising ', [round(v, 4) for v in final])
+
+# ---- real output ----
+# before normalising [0.1633, 0.24495, 0.1633, 0.24495, 0.1633]
+# total              0.9798
+# after normalising  [0.1667, 0.25, 0.1667, 0.25, 0.1667]`,
+      annotations: {
+        1: 'Will hold the five new weights before they are rescaled.',
+        2: 'Once per row.',
+        3: 'Was this row a mistake?',
+        4: 'If yes, multiply its weight up by 1.2247. This row now matters more to the next model.',
+        5: 'Otherwise.',
+        6: 'Multiply its weight down by 0.8165. Note the minus inside exp(), which is what turns the multiplier into its reciprocal.',
+        8: 'Add the five new weights. They come to 0.9798, so they no longer add to 1.',
+        9: 'Will hold the rescaled weights.',
+        10: 'Walk the new weights directly, without an index, since we only need the values.',
+        11: 'Dividing every weight by their total forces the five of them to add to exactly 1. That is what "normalise" means here.',
+        13: 'The unscaled weights: the two wrong rows are up at 0.24495, the three right ones down at 0.1633.',
+        14: 'The total, showing why a rescale was needed at all.',
+        15: 'The final weights: 0.25 on each wrong row, 0.1667 on each right row. Exactly the numbers computed by hand in the section above.',
+      },
     },
     {
       type: 'intuition',
-      title: 'Stacking, honestly',
-      md: `Stacking combines *different kinds* of models — a forest, a boosted ensemble, a logistic regression, a k-NN — with a **meta-model** that learns how much to trust each one.
+      title: 'Stacking, in one section',
+      md: `There is a third way to combine models, and it does not require them to be the same kind of model.
 
-- The meta-model's inputs are the base models' predictions. Its output is the final prediction.
-- The one rule that makes or breaks it: those inputs must be **out-of-fold** predictions. Split into k folds; for each fold, predict it with base models trained on the *other* folds.
-- Skip that and you leak: base models predict rows they memorised, look flawless, and the meta-model learns to trust an accuracy that will not exist in production. Silent, and it always looks great offline.
-- Verdict: real gains, usually small (a fraction of a percent), for a large jump in pipeline complexity and inference latency. Kaggle leaderboards yes; a production service, rarely.`,
+**Stacking** means: train several different models — say a random forest, a boosted model, and a plain linear model — and then train one more small model, called the **meta-model**, whose input is the *predictions* of the first ones and whose output is the final answer. Instead of averaging the three answers with equal weight, the meta-model learns how much to trust each one, and when.
+
+There is one mistake that destroys it. If you train the meta-model on predictions the base models made about rows they were trained on, those predictions are unrealistically good — the base models partly memorised those rows — so the meta-model learns to trust an accuracy that will not exist at prediction time. The fix is to feed the meta-model only **out-of-fold** predictions: split the training data into parts, and for each part, predict it using base models that were trained without it. Same idea as out-of-bag, done deliberately.`,
     },
     {
-      type: 'note',
-      md: `**When a single model still wins.** Regulated domains where you must *explain* a decision — one shallow tree or a logistic regression is auditable, a 300-tree ensemble is not. Latency budgets in the single-digit milliseconds, where traversing hundreds of trees is too slow. Genuinely tiny datasets, where a complex ensemble just memorises. And problems needing **extrapolation** beyond the training range, which no tree ensemble can do at all — that is a linear model's job. Reaching for an ensemble is a default, not a law.`,
+      type: 'intuition',
+      title: 'Worked case: three bagged stumps and a hand-computed out-of-bag score',
+      md: `Six emails again, truth **1, 1, 1, 0, 0, 0**, and one feature: the number of links in the email. Call the rows 1 to 6.
+
+- Links, in row order: **8, 6, 5, 2, 3, 1**. Truth, in row order: **1, 1, 1, 0, 0, 0**.
+
+Draw three bootstrap samples of six rows each, with replacement. These are the draws we got:
+
+- **Sample 1** = rows 1, 1, 2, 4, 5, 6 — so it never saw **row 3**.
+- **Sample 2** = rows 2, 3, 3, 4, 6, 6 — it never saw **row 1 or row 5**.
+- **Sample 3** = rows 1, 2, 3, 5, 5, 6 — it never saw **row 4**.
+
+Now fit one stump to each sample: pick the link-count threshold that misclassifies the fewest rows *in that sample*.
+
+- **Tree 1** sees link counts 8, 8, 6, 2, 3, 1 with labels 1, 1, 1, 0, 0, 0. The threshold "links ≤ 3 means not spam" separates them perfectly. Zero errors on its own sample.
+- **Tree 2** sees 6, 5, 5, 2, 1, 1 with labels 1, 1, 1, 0, 0, 0. Row 5, whose link count is 3, is not in this sample, so the tree has no reason to put the line above 2. It picks **"links ≤ 2 means not spam"**. Also zero errors on its own sample — but it has guessed the boundary wrong.
+- **Tree 3** sees 8, 6, 5, 3, 3, 1 with labels 1, 1, 1, 0, 0, 0 and picks **"links ≤ 3 means not spam"**. Zero errors.
+
+Now the out-of-bag score. Each row is judged only by trees that never saw it.
+
+- **Row 1** (8 links, truth 1) was left out of sample 2 only. Tree 2 says 8 > 2, so spam. **Correct.**
+- **Row 3** (5 links, truth 1) was left out of sample 1 only. Tree 1 says 5 > 3, so spam. **Correct.**
+- **Row 4** (2 links, truth 0) was left out of sample 3 only. Tree 3 says 2 ≤ 3, so not spam. **Correct.**
+- **Row 5** (3 links, truth 0) was left out of sample 2 only. Tree 2 says 3 > 2, so spam. **Wrong.**
+- **Rows 2 and 6** appear in all three samples, so no tree is out-of-bag for them and they get no out-of-bag prediction at all.
+
+Out-of-bag score = 3 correct out of the 4 rows that could be scored = **0.75**. Three things to take from it. It cost no held-out data. It caught tree 2\'s bad boundary, which its own training sample could not — tree 2 scored zero errors on itself and still failed row 5. And with only three trees, two rows went unscored; with 200 trees, essentially every row is out-of-bag for some of them, which is why out-of-bag scores are trustworthy on real forests and shaky on tiny ones.`,
+    },
+    {
+      type: 'intuition',
+      title: 'The classic mistake: assuming more trees always helps',
+      md: `"More trees is always safer" is true for bagging and false for boosting, and the sentence gets carried across without anyone noticing.
+
+Set up a case where it bites. Six houses, x = 1 to 6, and the true price is exactly 2x: **2, 4, 6, 8, 10, 12**. But one training label is a typo — the fourth house is recorded as **20** instead of 8. So the training labels are 2, 4, 6, **20**, 10, 12, and one of them is simply wrong.
+
+Run the gradient boosting loop from earlier on that data, learning rate 0.3, one stump per round. Track two numbers each round: the error against the **training labels** (which include the typo), and the error against the **true prices** (which do not). These came from a real run:
+
+- Round 0: prediction at house 4 is 9.0; training error 35.67; true error 15.67.
+- Round 2: prediction 11.55; training error 16.67; true error 6.87.
+- Round 4: prediction 12.69; training error 11.73; true error **6.50** — the lowest it gets.
+- Round 10: prediction 14.53; training error 6.74; true error 8.87 — rising now.
+- Round 20: prediction 16.67; training error 2.74; true error 13.43.
+- Round 30: prediction 17.94; training error 1.23; true error **17.00**.
+
+The training error falls every single round, all the way to 1.23. If that is the number on your screen, boosting looks like it is working beautifully at round 30. The true error bottomed out at round 4 and then more than doubled.
+
+The mechanism is visible in the first column. Every round, boosting looks at the biggest remaining residual and sends the next tree at it. House 4 has the biggest residual precisely *because* its label is wrong, so round after round the model is dragged from 9.0 towards 20 — and because a stump answers a whole region at once, house 5 and house 6 get dragged along with it. Boosting cannot tell "this row is hard" from "this row is mislabelled". It attacks both.
+
+Bagging does not do this. Each bagged tree sees the typo or does not (about 37% of them do not), each fits it or dilutes it independently, and the average is pulled towards the majority rather than towards the outlier. So the diagnosis, when a boosted model gets worse as rounds go up: you are reading training error, not held-out error. The fix is to measure on held-out rows every round and stop at the bottom of that curve — round 4 here — rather than at the round count you happened to configure.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Practice problems',
+      md: `Pen and paper first. All the arithmetic is small on purpose; the solutions are in the next section.
+
+1. Three models answer five rows whose truth is 1, 0, 1, 1, 0. Model A says 1, 0, 1, 0, 1. Model B says 1, 1, 1, 1, 0. Model C says 0, 0, 1, 1, 1. Score each model, then score the majority vote.
+2. You have 5 training rows and draw a bootstrap sample of 5 with replacement. What is the chance a particular row is missed entirely, and what fraction of rows would you expect to be out-of-bag?
+3. Four houses, x = 1, 2, 3, 4 and y = 1, 3, 5, 11. Do one round of gradient boosting with learning rate 0.5: compute the starting guess, the residuals, the best of the three possible stumps (cut at 1, 2 or 3, scored the way the code did it), the updated predictions and the new residuals.
+4. AdaBoost with 4 rows, all starting at weight 0.25, and the first stump gets exactly one of them wrong. Compute epsilon, alpha, both multipliers, and the four weights after renormalising.
+5. A colleague says: "our random forest has 200 trees and scores 0.86. I am going to add feature subsampling — each split will only see 4 of the 16 features — but that makes each tree worse, so the forest will get worse too." What is wrong with the reasoning?`,
+    },
+    {
+      type: 'intuition',
+      title: 'Worked solutions',
+      md: `Check each step against your own working, not just the final number.
+
+**1.** Truth is 1, 0, 1, 1, 0. Model A matches on rows 1, 2, 3 and misses rows 4 and 5, so **3/5 = 0.6**. Model B matches on rows 1, 3, 4, 5 and misses row 2: **4/5 = 0.8**. Model C matches on rows 2, 3, 4 and misses rows 1 and 5: **3/5 = 0.6**. Votes, row by row: row 1 gets 1, 1, 0 → 1 (correct); row 2 gets 0, 1, 0 → 0 (correct); row 3 gets 1, 1, 1 → 1 (correct); row 4 gets 0, 1, 1 → 1 (correct); row 5 gets 1, 0, 1 → 1, but truth is 0 (wrong). The vote scores **4/5 = 0.8**. It beat two of the three models and only tied the best one — and row 5 shows why: A and C were both wrong there, so the vote had no majority left to rescue it.
+
+**2.** One draw misses a particular row with chance 4/5 = 0.8. Five draws are independent, so all five miss it with chance 0.8 to the power 5 = **0.32768**, about 33%. So roughly a third of the rows are out-of-bag, and about **0.67** of them appear at least once. With 1000 rows instead of 5 the same calculation gives 0.3677, which is the number the code measured — the fraction settles down as n grows.
+
+**3.** Starting guess = (1+3+5+11)/4 = **5.0**. Residuals = 1−5, 3−5, 5−5, 11−5 = **−4, −2, 0, +6**, and the mean of their squares is (16+4+0+36)/4 = **14.0**. The three cuts: "x ≤ 1" gives left mean −4.0 and right mean (−2+0+6)/3 = 1.333, scoring 34.667; "x ≤ 2" gives −3.0 and 3.0, scoring 20.0; "x ≤ 3" gives (−4−2+0)/3 = −2.0 and 6.0, scoring **8.0** — the winner. Update with learning rate 0.5: the first three houses become 5.0 + 0.5×(−2.0) = **4.0**, the fourth becomes 5.0 + 0.5×6.0 = **8.0**. New residuals: 1−4 = −3, 3−4 = −1, 5−4 = +1, 11−8 = **+3**. Mean of squares = (9+1+1+9)/4 = **5.0**, down from 14.0.
+
+**4.** Epsilon is the weight of the wrong row, so **0.25**. Alpha = 0.5 × ln(0.75/0.25) = 0.5 × ln(3) = 0.5 × 1.0986 = **0.5493**. Multipliers: e to the 0.5493 = **1.7321** for the wrong row, e to the −0.5493 = **0.5774** for the right ones. New unscaled weights: 0.25 × 1.7321 = **0.43301** for the wrong row, 0.25 × 0.5774 = **0.14434** for each of the three right ones. Total = 0.43301 + 3×0.14434 = **0.86603**. Divide through: the wrong row lands at 0.43301/0.86603 = **0.5**, and each right row at **0.1667**. One row now carries half the total weight — which is also the warning about AdaBoost: give it a mislabelled row and it will keep escalating that row\'s weight round after round.
+
+**5.** The premise is right and the conclusion does not follow. Each tree does get worse, because it is sometimes denied its best question. But the forest\'s accuracy does not come from the quality of one tree; it comes from the mistakes cancelling when the trees vote, and mistakes only cancel if they are different mistakes. Without feature subsampling, a single dominant feature is the first split in nearly every tree, so the 200 trees are near-copies and their mistakes land in the same rows — exactly the case in this module where the vote scored the same 66.7% as one filter. Feature subsampling trades a little accuracy per tree for a lot of disagreement between trees, and the second effect is usually the larger one. It is also cheap to settle: run it both ways and compare the out-of-bag scores.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Beyond the basics - skip this on your first read',
+      md: `Everything above stands on its own. This section is for a second pass.
+
+- **The variance formula.** Average n models, each with variance sigma-squared, where every pair of models has correlation rho. The variance of the average is rho×sigma-squared + (1−rho)/n × sigma-squared. Only the second term shrinks as you add models, so adding trees forever cannot push the variance below **rho × sigma-squared**. That floor is set entirely by how similar your trees are, which is the formal version of the decorrelation argument, and the reason Random Forest works so hard to lower rho.
+- **Why "gradient" boosting.** With squared error, the slope of the loss with respect to the current prediction is −2 × (truth − prediction), which is just the residual, times −2. So "fit the next tree to the residuals" is literally "fit the next tree to the negative slope of the loss". Swap in a different loss and you fit the tree to that loss\'s slope instead, which is how the same algorithm handles classification.
+- **Stochastic gradient boosting.** Fit each round\'s tree on a random subset of the rows rather than all of them. Cheaper per round, and the extra randomness usually helps a little.
+- **Early stopping.** The practical form of the classic-mistake section: measure held-out error every round, keep the round count that scored best, and stop when it has not improved for, say, 50 rounds. This is what makes a large tree count safe.
+- **The three well-known implementations.** XGBoost added second-order derivative information and an explicit penalty on tree complexity. LightGBM speeds training up by bucketing continuous features into a few hundred bins and growing trees leaf-by-leaf rather than level-by-level. CatBoost handles categorical features natively using target statistics computed in a way that avoids leaking the label. They are all gradient boosting; the differences are speed and defaults, not a different idea.`,
     },
   ],
   quiz: [
     {
-      question: 'You bag 500 trees but forget to bootstrap — every tree trains on the identical full dataset. What happens?',
+      question: 'Three filters each score 4/6 on the six emails, and the majority vote scores 6/6. What single property of the three filters made that possible?',
       options: [
+        { text: 'Each filter was individually well above chance', explanation: 'Necessary but not sufficient. Three filters at 66.7% that are wrong on the same two emails still vote at 66.7%.' },
         {
-          text: 'You get 500 identical trees and no variance reduction at all',
-          explanation:
-            'Correct. Deterministic training on identical data gives identical trees: rho = 1, so variance stays at sigma-squared. You paid 500x compute for one tree.',
+          text: 'Each email was missed by only one of the three filters, so the wrong answer was always outvoted',
+          explanation: 'Correct. The mistakes were spread across different emails. Overlapping mistakes would have carried the vote with them.',
         },
-        { text: 'Variance still drops by a factor of 500', explanation: 'That only holds at rho = 0. With identical models rho = 1 and the (1-rho)/n term is zero.' },
-        { text: 'Bias drops instead', explanation: 'Averaging identical unbiased models changes neither bias nor variance. Nothing happens.' },
-      ],
-      correct: 0,
-    },
-    {
-      question: 'Why does Random Forest restrict each split to a random subset of features?',
-      options: [
-        { text: 'To train faster by looking at less data', explanation: 'It is a small speed side-effect, not the reason — accuracy would not improve if speed were the goal.' },
-        { text: 'To avoid using irrelevant features', explanation: 'Backwards: the subset is random, so irrelevant features get considered just as often as good ones.' },
-        {
-          text: 'To decorrelate the trees — otherwise every tree splits on the same dominant feature first',
-          explanation: 'Correct. Bootstrap alone leaves the dominant feature in every sample, so trees look alike. Feature subsampling lowers rho, which is what actually shrinks variance.',
-        },
-      ],
-      correct: 2,
-    },
-    {
-      question: 'In gradient boosting with squared loss, what does each new tree fit?',
-      options: [
-        {
-          text: 'The residuals of the current ensemble — which equal the negative gradient of the loss',
-          explanation: 'Correct. y minus the running prediction is exactly -dL/dF for squared loss, which is why this is gradient descent in function space.',
-        },
-        { text: 'The original labels y, like every other tree', explanation: 'Only the very first constant model targets y. Every later tree targets what is left over.' },
-        { text: 'A reweighted version of the data', explanation: 'That is AdaBoost. Gradient boosting drops sample weights and fits the residual values directly.' },
-      ],
-      correct: 0,
-    },
-    {
-      question: 'Your gradient boosting validation loss falls for 120 rounds, then steadily rises through round 500. Best fix?',
-      options: [
-        { text: 'Increase the learning rate to converge before it overfits', explanation: 'A bigger learning rate overfits sooner and harder. Wrong direction.' },
-        {
-          text: 'Stop at the round where validation bottomed out, and consider a smaller learning rate',
-          explanation: 'Correct. Boosting genuinely overfits with more trees, so early stopping on a validation set is mandatory. Smaller nu makes the curve flatter and more forgiving.',
-        },
-        { text: 'Add more trees — the curve will come back down', explanation: 'It will not. Once boosting starts fitting noise, more rounds fit more noise.' },
+        { text: 'Majority voting is guaranteed to beat the average member', explanation: 'It is not. If all three make identical mistakes, the vote reproduces them exactly.' },
       ],
       correct: 1,
     },
     {
-      question: 'Which statement about out-of-bag (OOB) score is true?',
+      question: 'A bootstrap sample of 1000 rows is drawn from 1000 rows with replacement. Roughly what fraction of the original rows does it contain?',
       options: [
-        { text: 'It works for both bagging and boosting', explanation: 'Boosting trains sequentially on all the data — there are no consistently left-out rows to score against.' },
-        { text: 'It is computed on the test set', explanation: 'The opposite: its whole appeal is that it never touches the test set.' },
+        { text: 'All of them, just in a different order', explanation: 'That would be sampling without replacement. With replacement, some rows are drawn twice and others never.' },
+        { text: 'About half', explanation: 'The measured answer is higher. (999/1000) to the power 1000 = 0.3677 are missed, so about 63% are present.' },
         {
-          text: 'It scores each row using only the trees whose bootstrap sample excluded it — free validation',
-          explanation: 'Correct. About 37% of trees never saw any given row, so those trees form an honest mini-ensemble for it.',
+          text: 'About 63%, with the other 37% missing entirely',
+          explanation: 'Correct, and the 500-trial simulation measured 0.3669 missing against the formula\'s 0.3677. The missing rows are that tree\'s out-of-bag rows.',
         },
       ],
       correct: 2,
     },
     {
-      question: 'Your training labels contain about 5% random mislabeling. Which ensemble degrades more, and why?',
+      question: 'In gradient boosting with squared error, what is each new tree trained to predict?',
       options: [
+        { text: 'The true target values, on a bootstrap sample of the rows', explanation: 'That is bagging. Boosting trees are not trained on the target and are not independent of each other.' },
         {
-          text: 'Boosting — the noisy rows stay wrong, so they keep gaining weight and later models chase them',
-          explanation: 'Correct. The sequential design has no defence against a permanently-wrong row. Bagging dilutes it: it appears in only ~63% of samples and gets outvoted.',
+          text: 'The residuals — the true value minus what the ensemble so far predicts',
+          explanation: 'Correct. In the worked example the first tree was fitted to -5, -3, -1, +2, +7, not to the prices 2, 4, 6, 9, 14.',
         },
-        { text: 'Bagging — averaging propagates the noise to every tree', explanation: 'Averaging suppresses noise; it does not spread it. Bagging is the robust one here.' },
-        { text: 'Neither — trees are immune to label noise', explanation: 'Deep trees memorise mislabeled rows readily. Nothing is immune.' },
+        { text: 'The rows the previous tree got wrong, reweighted', explanation: 'That is AdaBoost\'s mechanism. Gradient boosting changes the target each round rather than the row weights.' },
       ],
-      correct: 0,
+      correct: 1,
     },
     {
-      question: 'You stack a forest and a boosted model, feeding the meta-model predictions from base models trained on the full training set. What goes wrong?',
+      question: 'AdaBoost, 5 rows at weight 0.2 each, 2 of them wrong. Epsilon is 0.4 and alpha is 0.2027. What weight does each wrong row carry in the next round?',
       options: [
-        { text: 'Nothing — this is the standard recipe', explanation: 'It is a common bug, not the recipe. The standard recipe requires out-of-fold predictions.' },
-        { text: 'The meta-model will underfit', explanation: 'The opposite: it will look excellent offline and collapse in production.' },
+        { text: '0.4, because that is the error rate', explanation: 'Epsilon is the total weight of all wrong rows combined, not the new weight of one of them.' },
         {
-          text: 'Leakage — the base predictions are on memorised rows, so the meta-model learns to trust an accuracy that will not exist in production',
-          explanation: 'Correct. Base models score near-perfectly on their own training rows. Only out-of-fold predictions show the meta-model realistic base-model behaviour.',
+          text: '0.25 — multiply 0.2 by e to the alpha (1.2247) to get 0.24495, then divide by the new total 0.9798',
+          explanation: 'Correct. Right rows get 0.2 x 0.8165 = 0.1633, which renormalises to 0.1667. The five new weights add to 1.',
+        },
+        { text: '0.24495, straight from the multiplier', explanation: 'That is the value before renormalising. The five unscaled weights sum to 0.9798, so every one is divided by 0.9798 to restore a total of 1.' },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'A boosted model is trained on data with one badly mislabelled row. Training error falls every round for 30 rounds. What is happening to error on clean, held-out data?',
+      options: [
+        { text: 'It falls too, since the model is genuinely improving', explanation: 'The run in this module shows otherwise: true error bottomed at 6.50 in round 4 and rose to 17.00 by round 30 while training error kept falling to 1.23.' },
+        { text: 'It stays flat, since one row cannot matter much', explanation: 'One row matters a lot in boosting, because the biggest residual attracts every subsequent tree, and a shallow tree drags nearby rows along with it.' },
+        {
+          text: 'It falls for a few rounds and then rises, because the sequence starts chasing the mislabelled row',
+          explanation: 'Correct. Boosting cannot distinguish a hard row from a wrong one, so it keeps attacking the largest leftover error, which here is a typo. This is why held-out error must be measured every round.',
         },
       ],
       correct: 2,
     },
     {
-      question: 'You train a Random Forest on 2019-2023 sales to forecast 2024, whose true values are all above any historical figure. What happens?',
+      question: 'What is the single practical difference between how bagging and boosting are trained?',
       options: [
         {
-          text: 'Predictions cap out at roughly the largest training value — forests cannot extrapolate',
-          explanation: 'Correct. A forest predicts by averaging training leaf values, so its output is bounded by the training range. Trending series need a model with a trend term.',
+          text: 'Bagging trains its models independently and in parallel on resampled data; boosting trains them in sequence, each on what the previous ones still get wrong',
+          explanation: 'Correct, and everything else follows from it. Bagged models can be trained on separate machines at once; boosted models cannot begin round k before round k-1 finishes.',
         },
-        { text: 'It extrapolates the trend as long as you add enough trees', explanation: 'More trees change nothing about the range: every prediction is still an average of seen values.' },
-        { text: 'It handles it fine because the trend is a feature it can learn', explanation: 'It can learn the trend within the training range and still cannot output a value beyond it.' },
+        { text: 'Bagging uses trees and boosting uses linear models', explanation: 'Both normally use trees. The difference is the arrangement, not the base model type.' },
+        { text: 'Bagging averages predictions and boosting takes the best single model', explanation: 'Boosting keeps every model. It adds their shrunken contributions into a running sum.' },
       ],
       correct: 0,
     },
   ],
   interviewQuestions: [
     {
-      question: 'Why use a Random Forest instead of one deep decision tree?',
+      question: 'Why does combining several mediocre models beat using one of them?',
       answer:
-        'A single deep tree has low bias and very high variance — resample 5 rows and you get a different tree, so it memorises noise. You could prune it, but pruning buys stability by adding bias. A forest gets stability for free instead: keep every tree deep and unbiased, then average many of them so the noise cancels. The averaging works only because the trees are decorrelated, which is why RF does two randomizations — bootstrap sampling of rows, plus a random feature subset at every split (without the second one, every tree splits on the dominant feature first and they all look alike). You also get an OOB score and feature importances for free. The cost: a bigger, slower, less interpretable model.',
+        'Because the models make different mistakes, and combining lets the correct majority outvote each mistake. Concretely: three spam filters on six emails, each scoring 4/6, but each wrong on a different pair of emails. On every email exactly one filter is wrong, so the majority vote is right on all six — 100% from three 66.7% models. The condition is that the mistakes must be spread out. If all three are wrong on the same two emails, the vote scores 4/6 as well and combining gained nothing. For independent models it is arithmetic: three models each right 65% of the time vote correctly 0.65^3 + 3 x 0.65^2 x 0.35 = 71.8% of the time. So the design question for any ensemble is not "how do I make the models good", it is "how do I make them disagree".',
       isCaseBased: false,
     },
     {
-      question: 'Gradient boosting vs bagging — compare them properly.',
+      question: 'Explain bagging and boosting, and be specific about how they differ.',
       answer:
-        'Training: bagging trains B models in parallel on independent bootstrap samples; boosting trains sequentially, each model fitting what the running ensemble still gets wrong. Base models: bagging wants deep, low-bias, high-variance trees; boosting wants weak, high-bias, low-variance stumps. Error attacked: bagging reduces variance and leaves bias alone; boosting reduces bias by accumulating corrections. Adding models: harmless in bagging (the curve flattens), dangerous in boosting (validation loss eventually rises, so you need early stopping). Noise: bagging is robust because a bad row appears in only ~63% of samples and gets outvoted; boosting chases the bad row round after round. Tuning: RF works on defaults, boosting needs learning rate, depth and tree count tuned together. Accuracy: a tuned boosted model usually wins on tabular data, which is why XGBoost/LightGBM dominate Kaggle — but RF is the better default when you have one afternoon.',
+        'Bagging trains its models in parallel and independently. Each one gets its own bootstrap sample — n rows drawn from n rows with replacement, so it sees about 63% of the distinct rows — and the models are combined by vote or plain average, all weighted equally. It reduces variance, so its base models are deliberately deep and unstable. Boosting trains its models in sequence. Each one is fitted to what the ensemble so far gets wrong: in gradient boosting to the residuals, in AdaBoost to a reweighted version of the data where the previous round\'s mistakes carry more weight. The models are summed, each shrunk by a learning rate, not averaged. It reduces bias, so its base models are deliberately shallow. Two consequences follow. Bagging parallelises across machines and boosting cannot. And more trees is always safe in bagging but is a tuned hyperparameter in boosting, because past a point the sequence starts fitting noise.',
       isCaseBased: false,
     },
     {
-      question: 'Explain the ~63% figure in bootstrap sampling, and what the other 37% is used for.',
+      question: 'What is an out-of-bag score, and why is it useful?',
       answer:
-        'You draw n rows from n with replacement. For any given row, P(not picked in one draw) = 1 - 1/n, so P(never picked) = (1 - 1/n)^n, which converges to 1/e = 0.368. So each bootstrap sample contains about 63.2% distinct rows; duplicates make up the rest. The excluded ~37% are that tree\'s out-of-bag rows. Across the forest, every row is out-of-bag for roughly a third of the trees, so you can predict it using only those trees and average the result over all rows: an honest generalization estimate that costs no data and no extra fitting. It is roughly comparable to leave-one-out CV and is why RF can skip a separate validation split on small datasets.',
+        'Each bagged tree is trained on a bootstrap sample that misses about 37% of the rows — the formula is (1 - 1/n)^n, which converges to 1/e = 0.368, and a 500-trial simulation on 1000 rows measured 0.3669. Those missed rows are that tree\'s out-of-bag rows. To score row i, use only the trees that never saw it; their prediction is an honest unseen-data prediction. Average over all rows and you have a validation estimate that cost no held-out data. It is useful when data is scarce, and as a fast first check when a model disappoints in production: if the out-of-bag score already matched the offline score, the model really did learn the training distribution, which points at leakage or distribution shift rather than at overfitting. It is only trustworthy with many trees. With three trees, some rows are in every sample and get no out-of-bag prediction at all.',
       isCaseBased: false,
     },
     {
-      question: 'What exactly makes gradient boosting "gradient descent", and where does it descend?',
+      question: 'What does the learning rate do in gradient boosting, and how does it interact with the number of trees?',
       answer:
-        'Ordinary gradient descent updates a parameter vector: w := w - alpha * dJ/dw. Gradient boosting updates a whole function: F := F + nu * h, where h is a tree fitted to the negative gradient of the loss with respect to the current predictions, -dL/dF, evaluated at each training point. For squared loss that negative gradient is exactly y - F(x), the residual — which is why the folk explanation "fit the residuals" is correct but incomplete. The general statement is: it is steepest descent in function space, with a regression tree used as the (approximate) step direction and nu as the learning rate. That framing is what lets the same algorithm run on log-loss, Huber, quantile, or ranking objectives — you only change what the next tree is asked to predict.',
+        'Each round fits a tree to the current residuals, and the learning rate is the fraction of that tree\'s correction actually added to the running prediction. In the worked example, a stump said "subtract 3 on the left, add 4.5 on the right", and at a learning rate of 0.5 the predictions moved from 7.0 to 5.5 and 9.25, cutting the mean squared residual from 17.6 to 7.475. The reason to shrink is that the tree was fitted to one particular sample, so part of what it found is real pattern and part is that sample\'s accident. Taking half of it, and letting later trees revisit what remains, keeps each step correctable. The interaction is a direct trade: a learning rate of 0.05 needs roughly ten times as many rounds as 0.5 to travel the same distance. Small rate with many trees generalises better and is the usual default; the number of trees is then set by early stopping on held-out error, not chosen up front.',
       isCaseBased: false,
     },
     {
-      question: 'How do learning rate and number of trees interact in gradient boosting?',
+      question: 'Why does Random Forest restrict each split to a random subset of features, when that makes each individual tree worse?',
       answer:
-        'They are two views of the same total step size. Shrinkage nu scales how much of each new tree gets added, so roughly, halving nu requires doubling n_estimators to reach the same fit. Small nu with many trees generalises better — each individual tree contributes little, so a bad or noise-fitting tree cannot do much damage, and the ensemble approaches the optimum along a smoother path. The cost is training time and model size. The practical recipe: fix nu at something small (0.05 to 0.1), set n_estimators generously high, and let early stopping on a validation set choose the actual count. Never grid-search both independently — they are correlated, and you will waste most of the grid.',
+        'Because the forest\'s accuracy comes from the trees making different mistakes, not from any one tree being good. If a single feature is strongly predictive, it survives every bootstrap sample, so every tree splits on it first and the trees end up near-copies. Near-copies make the same mistakes on the same rows, and a vote among identical mistakes reproduces them. Restricting each split to a random handful of features — the square root of the feature count for classification, about a third for regression — means most splits cannot even see the dominant feature and must use the second- and third-best signals. Each tree is slightly weaker, the set of trees is far more varied, and the second effect is normally the larger one. It is worth stating as a general principle: bagging trades quality per member for disagreement between members, and the trade usually pays.',
       isCaseBased: false,
     },
     {
-      question: 'What did XGBoost, LightGBM and CatBoost each add over plain gradient boosting?',
+      question: 'Case: your Random Forest scores 0.94 offline but 0.71 in production, with an unchanged pipeline. Walk through your debugging.',
       answer:
-        'XGBoost: a regularized objective (L1/L2 penalties on leaf weights plus a penalty per leaf), second-order Taylor approximation of the loss for better split scoring, native missing-value handling, and heavy systems engineering — parallel split-finding, cache-aware access, out-of-core training. LightGBM: speed at scale, via histogram binning (continuous features bucketed into ~256 bins so split-finding is O(bins) not O(sorted values)) and leaf-wise rather than level-wise growth (always split the leaf with the biggest loss reduction), which converges in fewer trees but overfits small data unless num_leaves is capped. CatBoost: ordered target statistics for categorical features, computed so a row never sees its own label — removing the leakage in naive target encoding — plus ordered boosting to fight prediction shift, and very strong defaults. All three are the same algorithm underneath; the differences are regularization, split-finding strategy, and categorical handling.',
-      isCaseBased: false,
-    },
-    {
-      question: 'Case: your Random Forest scores 0.94 offline but 0.71 in production. The pipeline is unchanged. Walk through your debugging.',
-      answer:
-        'The gap is too big for variance, so suspect the evaluation, not the model. (1) Leakage — the number one cause. Was any feature computed using information unavailable at prediction time (an aggregate over the full dataset, a post-outcome field, a target-encoded column fitted before the split)? Check whether the top features by importance are ones you could actually have at request time. (2) Split methodology — random split on temporal or grouped data leaks near-duplicate rows across train and test; re-evaluate with a time-based or group-aware split. (3) Distribution shift — compare production feature distributions to training; a forest cannot extrapolate, so a shifted numeric range silently clamps predictions. (4) Threshold and prior — offline accuracy at 0.5 may not transfer if the production class balance differs. (5) Serving skew — different preprocessing or feature versions in the serving path. Order matters: check the OOB score first; if OOB was also 0.94, the model really did learn the training distribution, which points hard at leakage or shift rather than overfitting.',
+        'A gap that size is not variance, so I suspect the evaluation rather than the model. First, check the out-of-bag score. If it was also 0.94, the model genuinely learned the training distribution, which points at leakage or shift rather than at overfitting, and that reordering saves a lot of time. Then, in order: (1) Leakage — was any feature computed using information not available at prediction time, such as an aggregate over the whole dataset, a field only filled in after the outcome, or a target-encoded column fitted before the split? Look at the top features by importance and ask whether each is available at request time. (2) Split methodology — a random split on temporal or grouped data puts near-duplicate rows on both sides; re-evaluate with a time-based or group-aware split. (3) Distribution shift — compare the production feature distributions against training. A forest cannot extrapolate beyond the ranges it saw, so shifted numeric inputs silently clamp. (4) Threshold and class balance — accuracy at a 0.5 cut-off does not transfer if production has a different base rate. (5) Serving skew — different preprocessing code or a different feature version on the serving path.',
       isCaseBased: true,
     },
     {
-      question: 'Case: a teammate reports "our XGBoost model gets worse the more trees we add — boosting must be broken". What do you tell them, and what do you check?',
+      question: 'Case: a teammate says "our boosted model gets worse the more trees we add, so boosting must be broken". What do you tell them and what do you check?',
       answer:
-        'Nothing is broken; that is boosting behaving exactly as designed. Unlike a Random Forest, added trees keep reducing training loss, so past a point they fit noise and validation loss rises. Checks and fixes, in order: (1) Are they reading training or validation loss? Training loss falling forever is expected. (2) Turn on early stopping with a validation set and a patience of ~50 rounds — n_estimators should be a ceiling, not a target. (3) Lower learning_rate (0.3 to 0.05) so the overfitting onset is gentler and later. (4) Regularize: cap max_depth (3 to 6), raise min_child_weight, add subsample and colsample_bytree below 1.0 for stochastic gradient boosting, add lambda/alpha. (5) Check label noise — if a chunk of labels is wrong, boosting will chase it and a Random Forest may genuinely be the better model here. The one-line summary for them: "more trees is safe in bagging, a hyperparameter in boosting".',
+        'Nothing is broken; that is boosting working as designed. Unlike bagging, each round is fitted to what is still wrong, so training error keeps falling forever, and past some round the sequence is fitting noise rather than signal. I have a small demonstration: six houses whose true prices are 2x, with one label mistyped as 20 instead of 8. Training error falls monotonically from 35.67 to 1.23 over 30 rounds while error against the true prices bottoms at 6.50 in round 4 and rises to 17.00 by round 30, because the mistyped row has the largest residual and therefore attracts every subsequent tree. Checks, in order: (1) Are they reading training error or held-out error? Training error falling forever is expected. (2) Turn on early stopping against a validation set with a patience of around 50 rounds, so the tree count is a ceiling rather than a target. (3) Lower the learning rate, which makes the onset of overfitting later and gentler. (4) Cap tree depth and add row and column subsampling per round. (5) Check for label noise — if a chunk of labels is wrong, a bagged forest may simply be the better model for this data, since averaging dilutes an outlier that boosting chases.',
       isCaseBased: true,
     },
     {
-      question: 'How does stacking work, and what is the single mistake that ruins it?',
+      question: 'How does stacking work, and what is the one mistake that ruins it?',
       answer:
-        'Stacking trains several diverse base models, then a meta-model (often a simple regularized linear model) that takes the base predictions as features and learns how to weight them — so it can learn "trust the k-NN in dense regions, trust the boosted trees elsewhere". The fatal mistake is generating the meta-model\'s training features with base models trained on the same rows they predict. Those in-sample predictions are near-perfect, so the meta-model calibrates against an accuracy that will never exist at inference and the whole stack degrades in production, silently and with a great offline score. The fix is out-of-fold prediction: split into k folds, and for each fold predict it with base models trained only on the other folds. Worth adding: stacking usually buys a fraction of a percent for a large increase in pipeline complexity, training cost and inference latency — great on a leaderboard, usually not worth it in a service.',
-      isCaseBased: false,
-    },
-    {
-      question: 'When would you deliberately NOT use an ensemble?',
-      answer:
-        'Four cases. (1) Explainability requirements — credit, insurance, medical or anything with a regulator: one shallow tree or a logistic regression can justify a decision per feature; a 300-tree ensemble cannot, and SHAP values are an approximation, not the model. (2) Strict latency or memory budgets — hundreds of tree traversals per request, or hundreds of megabytes on an edge device. (3) Very small data — an ensemble has more capacity to memorise, and with a few hundred rows a regularized linear model often generalises better and is far easier to defend. (4) Extrapolation — any tree ensemble predicts averages of training leaf values, so it is structurally incapable of outputting a value beyond the training range; trending time series need a model with an explicit trend. Also worth naming: if a linear baseline is already within a fraction of a percent, the ensemble is buying complexity you will maintain for years.',
-      isCaseBased: false,
-    },
-    {
-      question: 'Why does averaging reduce variance but not bias, and what follows from that?',
-      answer:
-        'Take B unbiased predictors with the same variance. The expected value of their average equals the common expected value, so bias is untouched — averaging cannot fix a model that is systematically wrong. Variance, though, becomes rho*sigma^2 + (1-rho)/B * sigma^2. Two consequences. First, bagging is only useful on high-variance base models — bagging 500 linear regressions is nearly pointless, which is why the base learner is always a deep tree. Second, more models only shrink the (1-rho)/B term, so the variance floor is set by correlation, not by B; once trees are correlated, adding trees stops helping. That is the entire justification for feature subsampling in Random Forest, and it also explains why boosting had to take a completely different route: since it targets bias, it must build models that depend on each other, and it gives up the parallelism and noise-robustness of bagging in exchange.',
-      isCaseBased: false,
-    },
-    {
-      question: 'AdaBoost in your own words, and one concrete weakness that follows from its design.',
-      answer:
-        'Start with uniform sample weights. Each round: train a weak learner (usually a stump) on the weighted data, compute its weighted error rate, give it a vote weight alpha that is large when the error is small, then multiply up the weights of the rows it misclassified and multiply down the rest, and renormalize. Final prediction is the alpha-weighted vote. It was later shown to be gradient boosting on exponential loss, which is exactly the weakness: exponential loss grows exponentially in the margin, so a permanently misclassified row — a mislabeled one, or a genuine outlier — has its weight blown up every single round until it dominates the training signal and every later stump is fitted to a mistake. That is why AdaBoost is notably fragile to label noise, and why gradient boosting with a robust loss such as Huber, or a Random Forest, is the safer choice on dirty data.',
+        'Stacking combines models of different kinds — say a random forest, a boosted model and a linear model — by training one small extra model, the meta-model, whose inputs are the base models\' predictions and whose output is the final answer. Rather than averaging the base models with equal weight, the meta-model learns how much to trust each one and in which regions. The mistake that ruins it is training the meta-model on predictions the base models made about rows they were trained on. Those predictions are unrealistically accurate, because the base models partly memorised those rows, so the meta-model learns to trust a level of accuracy that will not exist at prediction time and typically leans hard on whichever base model memorised hardest. The fix is out-of-fold predictions: split the training data into k parts and, for each part, predict it with base models trained on the other k-1. It is the same reasoning as out-of-bag scoring, applied deliberately. Keep the meta-model simple — a linear model is usually enough — because it has very few effective inputs.',
       isCaseBased: false,
     },
   ],
   flashcards: [
-    { front: 'Why ensembles work', back: 'Averaging many unbiased, noisy models cancels their errors. Cuts VARIANCE, not bias — and only if the errors are decorrelated.' },
-    { front: 'Variance of an average of n predictors', back: 'rho*sigma^2 + (1-rho)/n * sigma^2. More models shrink only the second term; correlation rho sets the floor.' },
-    { front: 'Bagging + the 63% / 37% fact', back: 'Bootstrap n rows with replacement, train independently, vote. (1-1/n)^n -> 1/e: ~63% distinct rows, the ~37% left out are out-of-bag.' },
-    { front: 'OOB score', back: 'Score each row using only the trees whose sample excluded it. Free validation, no holdout — bagging only, never boosting.' },
-    { front: 'Random Forest, and why over one deep tree', back: 'Bagged deep trees PLUS a random feature subset per split (~sqrt(d)) — that second randomization decorrelates them. Same low bias as one tree, far less variance; pruning would cost bias, averaging is free. Cost: big, slow, no extrapolation.' },
-    { front: 'Boosting in one line', back: 'Train weak models sequentially, each fitting what the running ensemble still gets wrong. Reduces BIAS. Sensitive to noise.' },
-    { front: 'AdaBoost vs Gradient Boosting', back: 'AdaBoost reweights misclassified rows and takes a weighted stump vote: alpha = 0.5*ln((1-eps)/eps), wrong rows scale by e^(+alpha), right rows by e^(-alpha), then renormalize (misclassified always end at half the weight). GB drops weights and fits the residual (= negative gradient) directly, any differentiable loss.' },
-    { front: 'Learning rate nu', back: 'F := F + nu*h. Halve nu, roughly double the trees. Small nu + many trees + early stopping = the standard recipe.' },
-    { front: 'XGB / LGBM / CatBoost', back: 'Regularized objective + engineering / histogram bins + leaf-wise growth / ordered target encoding for categoricals.' },
-    { front: 'Stacking, and its trap', back: 'A meta-model learns to combine base predictions. Those inputs MUST be out-of-fold, or you leak and the offline score is fiction.' },
+    { front: 'The one-line reason ensembles work', back: 'Models that are wrong in different places outvote each other\'s mistakes. Six emails, three filters at 4/6 each, each wrong on a different pair: the majority vote scores 6/6. If all three were wrong on the same two, the vote scores 4/6 and nothing was gained.' },
+    { front: 'Bagging vs boosting', back: 'Bagging: models trained in parallel, each on its own bootstrap sample, combined by vote or average, base models deep, cuts variance. Boosting: models trained in sequence, each fitted to what the previous ones got wrong, combined by a shrunken sum, base models shallow, cuts bias.' },
+    { front: 'Bootstrap sample and the 63% fact', back: 'n rows drawn from n rows with replacement. A given row is missed with chance (1 - 1/n)^n, which converges to 1/e = 0.368. Measured over 500 trials on 1000 rows: 0.3669 missed. So each tree sees about 63% of the distinct rows.' },
+    { front: 'Out-of-bag score', back: 'Score each row using only the trees whose bootstrap sample left that row out. Gives an honest unseen-data estimate for free, no held-out set needed. Needs many trees: with only three, some rows are in every sample and go unscored.' },
+    { front: 'Random Forest, precisely', back: 'Bagged decision trees PLUS feature subsampling: each split may only consider a random handful of features (about sqrt(d) for classification, d/3 for regression). Each tree gets slightly worse; the trees get far less alike, and that is what the vote needs.' },
+    { front: 'One round of gradient boosting', back: 'y = 2, 4, 6, 9, 14. Start at the mean, 7.0. Residuals = -5, -3, -1, +2, +7. Fit a stump to THOSE: "x <= 3" gives -3.0 left, +4.5 right. Apply half (learning rate 0.5): predictions 5.5 and 9.25. New residuals -3.5, -1.5, 0.5, -0.25, 4.75; mean squared residual 17.6 -> 7.475.' },
+    { front: 'AdaBoost weight update, with numbers', back: '5 rows at 0.2, 2 wrong. epsilon = 0.4. alpha = 0.5 x ln(0.6/0.4) = 0.2027. Wrong rows x e^alpha = 1.2247 -> 0.24495; right rows x e^-alpha = 0.8165 -> 0.1633. Total 0.9798, so divide through: wrong rows 0.25, right rows 0.1667.' },
+    { front: 'Does more trees always help?', back: 'Bagging yes (it plateaus, never hurts). Boosting no. With one mislabelled row: training error fell 35.67 -> 1.23 over 30 rounds while true error bottomed at 6.50 in round 4 and rose to 17.00. Boosting chases the biggest residual and cannot tell a hard row from a wrong one. Use early stopping on held-out error.' },
   ],
-  mindmapMarkdown: `- Ensembles: Bagging, Random Forest & Gradient Boosting
-  - Why they work
-    - Averaging cancels error: variance down, bias same
-    - Var = rho*s^2 + (1-rho)/n*s^2
-    - Condition: DECORRELATED errors
+  mindmapMarkdown: `- Ensembles
+  - The six-email demonstration
+    - truth 1 1 1 0 0 0
+    - filters A, B, C each score 4/6 = 66.7%
+    - each wrong on a DIFFERENT pair
+    - majority vote scores 6/6
+    - same mistakes = vote also 4/6, no gain
+  - Vocabulary defined here
+    - ensemble = models combined into one answer
+    - weak learner = barely-better-than-guessing model
+    - stump = decision tree of depth 1
+    - variance = how much retraining changes the model
   - Bagging
-    - Bootstrap n rows with replacement
-    - ~63% unique, ~37% out-of-bag
-    - Parallel, then vote or average
-    - OOB score = free validation
+    - bootstrap sample = n rows from n, with replacement
+    - about 63% of rows present, 37% missed
+    - trained in parallel, combined by vote or average
+    - out-of-bag score = judge a row by trees that missed it
   - Random Forest
-    - Bagging + random features per split (sqrt d)
-    - Else every tree picks the dominant feature
-    - Defaults work, more trees always safe
-    - Limits: big, slow, cannot extrapolate
+    - bagging + feature subsampling at every split
+    - sqrt(d) features for classification, d/3 for regression
+    - each tree worse, the trees far less alike
   - Boosting
-    - Sequential, each fixes prior mistakes
-    - Weak learners, reduces BIAS
-    - AdaBoost: reweight wrong rows, weighted vote
-    - Fragile to label noise and outliers
-  - Gradient Boosting
-    - New tree fits residuals = negative gradient
-    - Gradient descent in FUNCTION space
-    - Small learning rate + many trees
-    - More trees CAN overfit: early stop
-  - XGBoost / LightGBM / CatBoost
-    - Regularized objective + engineering
-    - Histogram bins + leaf-wise growth
-    - Ordered target encoding for categoricals
-  - Bagging vs boosting
-    - parallel vs sequential
-    - variance vs bias
-    - noise-robust vs noise-chasing
+    - trained in sequence, each fixing the leftovers
+    - residual = truth minus current prediction
+    - gradient boosting fits the next tree to the residuals
+    - learning rate shrinks each correction, 0.5 in the example
+    - worked round: mse 17.6 -> 7.475
+  - AdaBoost
+    - reweights rows instead of fitting leftovers
+    - epsilon 0.4, alpha 0.2027
+    - multipliers 1.2247 and 0.8165
+    - renormalise to 0.25 wrong, 0.1667 right
   - Stacking
-    - Meta-model over base predictions
-    - MUST be out-of-fold, else leakage
-  - When one model wins
-    - Interpretability, latency, tiny data
-    - Extrapolation needed`,
+    - a meta-model learns how to weigh the base models
+    - must be fed out-of-fold predictions or it is ruined
+  - The classic mistake
+    - one mislabelled row, 30 boosting rounds
+    - training error 35.67 -> 1.23, always falling
+    - true error 6.50 at round 4 -> 17.00 at round 30
+    - fix: early stopping on held-out error
+  - Beyond the basics
+    - variance floor = rho x sigma squared
+    - residual = negative slope of squared-error loss
+    - XGBoost, LightGBM, CatBoost = speed and defaults`,
 }
 
 export default m

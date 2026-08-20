@@ -6,512 +6,517 @@ const m: Module = {
   level: 2,
   title: 'Logistic Regression: Sigmoid, Cross-Entropy & Decision Boundaries',
   whyItMatters:
-    'This is the model FAANG interviewers reach for when they want to see if you understand losses. "Why cross-entropy and not MSE?" has a real answer with a gradient in it, and most candidates only manage "because it works better". Logistic regression is also still shipped in production at banks, hospitals and ad servers — it is fast, calibrated, and it explains itself.',
-  estMinutes: 55,
+    'Linear regression answers questions like "how much rent?" with a number. A huge number of real questions are not like that. Will this student pass? Is this email spam? Does this patient have the disease? The honest answer to those is a chance between 0 and 1, and a straight line cannot produce one — it will cheerfully hand you 1.4 or minus 0.4. This module builds the fix from scratch: one function that squashes any number into a probability, one rule that turns a probability into a decision, and the arithmetic to see both working on six students you can count on your fingers.',
+  assumes: [
+    'You have read *Gradient Descent + Linear Regression* — you know that a model is w times x plus b, and that training means nudging w and b downhill',
+    'You have read *The Confusion Matrix: Precision, Recall & F1* — you know what a false positive and a false negative are',
+    'You have seen a Python for loop, a list, and a function definition',
+    'School maths: what a straight line is, and what a fraction is. No calculus is used or needed here.',
+  ],
+  estMinutes: 38,
   sections: [
     {
       type: 'intuition',
-      title: 'Regression gives a number. Classification gives a verdict.',
-      md: `Level 1 predicted rent: **14.2k**. A number on a continuous line. Now change the question.
+      title: 'Six students, one straight line, and an answer of 1.4',
+      md: `Six students. We know how many hours each one studied, and whether they passed. Pass is written as **1**, fail as **0**.
 
-- Is this email spam? Will this loan default? Is this tumour malignant?
-- The answer is a **class** — yes/no, or one of K options. Not a quantity.
-- But the honest answer isn't even a class. It's a **probability**: "83% likely spam".
-- Probability first, label second. The label appears only after you pick a cutoff.
-- The machinery barely changes: still **w·x + b**, with one function bolted onto the end.`,
+- Hours studied: **1, 2, 3, 4, 5, 6**. Passed: **0, 0, 0, 1, 1, 1**.
+- The obvious first idea: this is just linear regression. Fit a straight line through those six points, exactly as in the previous module, and read the height of the line as the answer.
+- Fitting it by hand is the same two sums as before. The average hours is 3.5 and the average pass value is 0.5. The top sum is 4.5 and the bottom sum is 17.5, so the **slope is 4.5 / 17.5 = 0.2571**, and the **intercept is 0.5 − 0.2571 × 3.5 = −0.4**.
+- So the line is **height = 0.2571 × hours − 0.4**. Now feed it a student who studied 7 hours: 0.2571 × 7 − 0.4 = **1.4**.
+- Feed it a student who studied 0 hours: **−0.4**.
+
+A pass value of 1.4 and a pass value of −0.4. Neither of those is a thing. You cannot pass 140% or fail 40% below zero. The line does not know 0 and 1 are the only two answers, so it walks straight past both of them.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'The straight line, walking off both ends',
+      code: `hours = [1, 2, 3, 4, 5, 6]
+passed = [0, 0, 0, 1, 1, 1]
+
+slope = 0.2571
+intercept = -0.4
+for h in [0, 1, 3, 4, 6, 7]:
+    line = slope * h + intercept
+    print(h, round(line, 3))
+
+# ---- real output ----
+# 0 -0.4
+# 1 -0.143
+# 3 0.371
+# 4 0.628
+# 6 1.143
+# 7 1.4`,
+      annotations: {
+        1: 'The six study-hour values, as a plain Python list of numbers.',
+        2: 'The matching six outcomes, in the same order: 0 means failed, 1 means passed. So hours[3] and passed[3] describe the same student.',
+        4: 'The slope we computed by hand above: the line rises 0.2571 for every extra hour studied.',
+        5: 'The intercept: where the line sits when hours is 0. It is negative, which is already the warning sign.',
+        6: 'Walk over six study-hour values. Two of them (0 and 7) are outside the range we fitted on, deliberately.',
+        7: 'The whole model: multiply by the slope, add the intercept. Nothing squashes the result.',
+        8: 'round(line, 3) trims the decimal to 3 places so the column is readable. Look at the first and last rows: -0.4 and 1.4.',
+      },
     },
     {
       type: 'intuition',
-      title: 'Why not just fit a line and threshold it?',
-      md: `Tempting: encode y as 0/1, run linear regression, call anything above 0.5 "spam". A ruler measuring temperature — it keeps going past boiling. It breaks three ways.
+      title: 'Three words: probability, odds, log-odds',
+      md: `Before we fix the line, three words. They all describe the same belief in three different scales, and the module uses all three.
 
-- **Unbounded output.** w·x + b happily returns 1.7 or −0.4. What is a −40% chance of spam?
-- **Outliers drag the fit.** One correctly-labelled point far out on the x-axis tilts the whole line, which shifts the 0.5 crossing, which *misclassifies points that were already fine*.
-- **No probability semantics.** Fitting MSE to 0/1 labels optimises nothing you can calibrate. A 0.6 from that model does not mean "60% of such cases are positive".
-- One function fixes all three: squash the line's output into the open interval (0, 1).`,
+- **Probability** is a number between 0 and 1 saying how likely something is. 0 means it will not happen, 1 means it certainly will, 0.75 means three times out of four.
+- **Odds** is the same belief written as a ratio: how likely it happens divided by how likely it does not. A probability of 0.75 gives odds of 0.75 / 0.25 = **3**, said out loud as "3 to 1 on". Probabilities live between 0 and 1; odds live between 0 and infinity.
+- **Log-odds** is the natural logarithm of the odds. For odds of 3, the log-odds is ln(3) = **1.0986**. This is the important one, because it has no ceiling and no floor: as the probability creeps toward 1 the log-odds runs off to plus infinity, and as it creeps toward 0 it runs off to minus infinity. A probability of exactly 0.5 gives odds of 1 and log-odds of ln(1) = **0**.
+- Log-odds has a shorter name that you will see everywhere: the **logit**.
+
+That last point is the whole trick. A straight line produces any number from minus infinity to plus infinity, and so does the log-odds. They live on the same scale. So we do not force the line to produce a probability. We let the line produce the **log-odds**, and then convert.`,
     },
     {
       type: 'intuition',
-      title: 'The sigmoid: a volume knob with hard stops',
-      md: `Turn a volume knob past maximum and it stays at maximum. Turn it below zero and it stays at zero. The sigmoid is that knob, applied to w·x + b.
+      title: 'Converting log-odds back to a probability: the sigmoid',
+      md: `We need the conversion that runs backwards: log-odds in, probability out. Do the algebra once, in three small steps, calling the log-odds **z** and the probability **p**.
 
-- Takes **any** real number, returns something strictly between 0 and 1.
-- Very negative z → near 0. Very positive z → near 1. z = 0 → exactly **0.5**.
-- The shape is an **S**: steep in the middle, flat at both ends.
-- We did not throw away linear regression. We *wrapped* it: **ŷ = σ(w·x + b)**.
-- The line still does all the thinking. The sigmoid only translates its verdict into a probability.`,
+- Start from the definition: **z = ln(p / (1 − p))**.
+- Undo the logarithm by raising e to both sides: **e^z = p / (1 − p)**.
+- Multiply out and collect the p terms: e^z − p·e^z = p, so e^z = p(1 + e^z), so **p = e^z / (1 + e^z)**.
+- Divide the top and bottom by e^z and you get the form everybody writes: **p = 1 / (1 + e^(−z))**.
+
+That function has a name: the **sigmoid**, written σ(z). It is not a rule someone invented because it looked nice. It is the exact inverse of "take the log-odds", which is why it lands on probabilities and never outside them.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Hand-computing the sigmoid on five values of z',
+      md: `Do it with a calculator before you let Python do it, so you know what the code is producing. Use e ≈ 2.71828.
+
+- **z = 0.** e^(−0) = 1. So p = 1 / (1 + 1) = **0.5** exactly. Zero log-odds means "no opinion", and it always comes out at one half.
+- **z = 1.** e^(−1) = 0.3679. So p = 1 / 1.3679 = **0.7311**.
+- **z = −1.** e^(1) = 2.7183. So p = 1 / 3.7183 = **0.2689**. Notice it is exactly 1 − 0.7311. The curve is symmetric about z = 0.
+- **z = 4.** e^(−4) = 0.0183. So p = 1 / 1.0183 = **0.9820**.
+- **z = −4.** e^(4) = 54.598. So p = 1 / 55.598 = **0.0180**.
+
+Read the five answers in order: 0.0180, 0.2689, 0.5, 0.7311, 0.9820. Every one is strictly between 0 and 1, and they never reach either end. Moving z from 0 to 1 changed the probability by 0.23; moving it from 1 to 4 changed it by only 0.25 across three times the distance. The curve is steep in the middle and flat at both ends. That shape is why it is called an **S-curve**.`,
     },
     {
       type: 'math',
-      intro: 'The sigmoid, its fixed point, and its derivative — the derivative is the one you must remember.',
+      intro: 'The two directions, written in symbols. The first line is the sigmoid you just computed by hand; the second is its inverse, the logit, which is what the straight line is allowed to produce.',
       latex: [
-        '\\sigma(z) = \\frac{1}{1 + e^{-z}}, \\qquad z = w \\cdot x + b, \\qquad \\hat{y} = \\sigma(z)',
-        '\\sigma(0) = \\tfrac{1}{2}, \\qquad \\sigma(z) \\to 0 \\text{ as } z \\to -\\infty, \\qquad \\sigma(z) \\to 1 \\text{ as } z \\to +\\infty',
-        '\\sigma^{\\prime}(z) = \\sigma(z)\\bigl(1 - \\sigma(z)\\bigr) \\;\\le\\; \\tfrac{1}{4} \\quad \\text{(max at } z = 0\\text{, } \\to 0 \\text{ at both tails)}',
+        '\\sigma(z) = \\frac{1}{1 + e^{-z}}, \\qquad z = w \\cdot x + b, \\qquad p = \\sigma(z)',
+        '\\ln\\!\\left(\\frac{p}{1-p}\\right) = z = w \\cdot x + b \\qquad \\text{(log-odds in, probability out, and back again)}',
       ],
     },
     {
       type: 'code',
       lang: 'python',
-      title: 'The S-curve and its slope — watch the tails go flat',
-      code: `import numpy as np
+      title: 'The same five values, in Python',
+      code: `import math
 
 def sigmoid(z):
-    return 1 / (1 + np.exp(-z))
+    return 1 / (1 + math.exp(-z))
 
-z = np.array([-8.0, -2.0, 0.0, 2.0, 8.0])
-p = sigmoid(z)                        # squashed into (0, 1)
-slope = p * (1 - p)                   # sigma'(z) = sigma(z)*(1 - sigma(z))
-for zi, pi, si in zip(z, p, slope):
-    print(f"z={zi:5.1f}  sigma={pi:.4f}  slope={si:.6f}")
+for z in [-4.0, -1.0, 0.0, 1.0, 4.0]:
+    p = sigmoid(z)
+    print(z, round(p, 4))
 
-# z= -8.0  sigma=0.0003  slope=0.000335
-# z= -2.0  sigma=0.1192  slope=0.104994
-# z=  0.0  sigma=0.5000  slope=0.250000
-# z=  2.0  sigma=0.8808  slope=0.104994
-# z=  8.0  sigma=0.9997  slope=0.000335`,
+# ---- real output ----
+# -4.0 0.018
+# -1.0 0.2689
+# 0.0 0.5
+# 1.0 0.7311
+# 4.0 0.982`,
       annotations: {
-        4: 'The whole model in one line. Everything else in logistic regression is loss and optimisation.',
-        8: 'Cheap derivative: you already computed p, so the slope costs one multiply. This is why sigmoid survived so long.',
-        12: 'Saturated: 99.97% sure of class 0, slope 0.000335. Almost no learning signal gets through here.',
-        14: 'Peak slope 0.25, at z = 0. The steepest the sigmoid ever gets is a quarter — remember that ceiling.',
+        1: 'math is part of Python itself, no install needed. It gives us math.exp, which raises e to a power.',
+        3: 'Defines a function named sigmoid that takes one number, z, and hands one number back.',
+        4: 'The formula, character for character: math.exp(-z) is e to the power minus z, and we divide 1 by one-plus-that.',
+        6: 'The same five z values you just did on paper, so the printed answers are checkable against your own working.',
+        7: 'Call the function and keep the answer in p.',
+        8: 'Print z and the probability, trimmed to 4 decimals. Compare row by row with the hand computation: 0.018, 0.2689, 0.5, 0.7311, 0.982. Python drops the trailing zero on 0.0180 and 0.9820.',
       },
     },
     {
-      type: 'note',
-      md: `Read the slope column again: at z = ±8 the slope is **0.000335**, roughly **750× smaller** than at z = 0. That flatness is **saturation**. Any learning signal that must pass through a saturated sigmoid gets multiplied by nearly zero, so the weight barely moves. With one sigmoid it is survivable. Stack ten of them in a deep network and the signal gets multiplied by ≤ 0.25 ten times over — that is the **vanishing gradient** problem, and it is exactly why ReLU replaced sigmoid in hidden layers. You will meet it again in the Deep Learning subject.`,
+      type: 'intuition',
+      title: 'The whole model, in one sentence',
+      md: `Logistic regression is linear regression with the sigmoid bolted onto the end.
+
+- The line computes **z = w · x + b**, exactly as before. Nothing about that changed.
+- The sigmoid converts z into a probability: **p = σ(z)**.
+- The name "regression" survives because the model really is doing a linear regression — just on the log-odds instead of on the label.
+- Training still means nudging w and b downhill, exactly the loop from *Gradient Descent + Linear Regression*. What changes is the number being pushed downhill, which is the next section.`,
     },
     {
       type: 'intuition',
-      title: 'The output is a probability. The threshold is a business decision.',
-      md: `The model says 0.62. That number *is* the model's entire output. It is not a class yet.
+      title: 'Which number do we push downhill? Not squared error.',
+      md: `In the previous module the training loop minimised squared error: take prediction minus truth, square it, average. That still computes here, but it is the wrong choice, and the reason is specific.
 
-- **0.5 is a default, not a law.** Nothing in the math blesses it. It is just "more likely than not".
-- Cancer screening: a miss is catastrophic, a false alarm costs one more test → threshold **0.2**.
-- Sending a ₹5,000 retention offer: acting wrongly is expensive → threshold **0.9**.
-- Fraud blocking at a bank: the threshold is literally set by the fraud team's budget, not by the data scientist.
-- Moving the threshold is **free** — one number, no retraining. Changing the loss is not.
-- Choosing it properly means precision, recall, F1 and ROC curves. That is the Metrics subject; this module just hands you the probability.`,
-    },
-    {
-      type: 'intuition',
-      title: 'The thing people get wrong: this is a LINEAR classifier',
-      md: `The sigmoid is curved, so people assume the decision boundary is curved. It is not. Trace the logic:
-
-- Predict class 1 when σ(z) ≥ 0.5.
-- σ(z) ≥ 0.5 happens **exactly when z ≥ 0**. The sigmoid is monotonic, so it never reorders anything.
-- So the boundary is **w·x + b = 0** — a line in 2D, a plane in 3D, a hyperplane above that.
-- The curvature lives in the *probability*, not in the *boundary*. The sigmoid only controls how fast confidence ramps up as you walk away from the line.
-- Consequence: XOR-shaped data is **impossible** for logistic regression, same as for a perceptron.
-- Fixes: engineer nonlinear features yourself (x₁·x₂, x², kernels) or switch to a model that bends (trees, SVM with an RBF kernel, a neural net).`,
+- The loss used instead is **cross-entropy**, also called **log loss**: for a true label of 1 the penalty is **−ln(p)**, and for a true label of 0 it is **−ln(1 − p)**. Only one of the two applies to any given sample, because a label is either 0 or 1.
+- Sanity-check it on numbers. True label 1 and the model says p = 0.9: the penalty is −ln(0.9) = **0.105**, small. True label 1 and the model says p = 0.01: the penalty is −ln(0.01) = **4.61**, forty times larger. Being confidently wrong is punished savagely, which is exactly what you want.
+- The reason it beats squared error is about the *size of the nudge*, not the size of the penalty. Here is the conclusion in one sentence: **with a sigmoid on the end, squared error produces an almost-zero nudge exactly when the model is confidently wrong, while cross-entropy produces its biggest nudge there.**
+- Numbers for that claim. Take a sample whose true label is 1 while z = −6, so p = σ(−6) = 0.00247 — the model is 99.75% sure of the wrong answer. Cross-entropy pushes w by an amount proportional to (p − y) = **0.9975**. Squared error pushes by (p − y) × p × (1 − p) = 0.9975 × 0.00247 × 0.99753 = **0.00246**, about **405 times weaker**. The worst mistake produces the smallest correction.
+- Where that extra p(1 − p) factor comes from is worked through in full, step by step, in the Metrics subject module *Classification Losses: Cross-Entropy, Focal & Hinge*. The numbers above are enough to use the result.`,
     },
     {
       type: 'math',
-      intro: 'The boundary, and the quantity that is actually linear in x.',
+      intro: 'Cross-entropy for one sample, and the nudge it produces for one weight. y is 0 or 1, so exactly one term of the first line survives per sample.',
       latex: [
-        '\\hat{y} \\ge 0.5 \\iff z \\ge 0 \\iff w \\cdot x + b \\ge 0 \\quad \\text{(a hyperplane: flat, always)}',
-        '\\log\\!\\frac{p}{1-p} = w \\cdot x + b \\qquad \\text{the \\textbf{logit} is linear in } x \\text{; the probability is not}',
+        'L = -\\bigl[\\, y \\ln p + (1-y) \\ln (1 - p) \\,\\bigr] \\qquad p = \\sigma(w \\cdot x + b)',
+        '\\text{cross-entropy nudge for } w: \\;(p - y)\\,x \\qquad \\text{squared-error nudge for } w: \\;(p - y)\\,p\\,(1-p)\\,x',
       ],
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Training the six students, one nudge at a time',
+      code: `import math
+
+hours = [1, 2, 3, 4, 5, 6]
+passed = [0, 0, 0, 1, 1, 1]
+
+w = 0.0
+b = 0.0
+for sweep in range(4000):
+    for h, y in zip(hours, passed):
+        p = 1 / (1 + math.exp(-(w * h + b)))
+        error = p - y
+        w = w - 0.05 * error * h
+        b = b - 0.05 * error
+
+print(round(w, 3), round(b, 3))
+
+# ---- real output ----
+# 4.496 -15.547`,
+      annotations: {
+        1: 'For math.exp again. This snippet uses no library beyond it.',
+        3: 'The same six study-hour values from the top of the module.',
+        4: 'The same six outcomes. Both lists stay unchanged for the whole run.',
+        6: 'Start the weight at zero. With w = 0 and b = 0, z is 0 for everybody, so the model starts by saying 0.5 to every student.',
+        7: 'Start the bias at zero too.',
+        8: 'Do 4000 full passes over the six students. sweep is never used inside; it is only a counter.',
+        9: 'zip(hours, passed) walks two lists side by side, handing back one pair at a time: h is the study hours, y is the true outcome for that same student.',
+        10: 'The current model prediction for this student: build z = w*h + b, then squash it through the sigmoid.',
+        11: 'Prediction minus truth. This single number is the entire cross-entropy nudge, as promised by the formula above.',
+        12: 'Move w against the error, scaled by the input h and by a step size of 0.05. A student who studied many hours moves w more, because their h is bigger.',
+        13: 'Move b the same way, without the h, because b is not multiplied by any input.',
+        15: 'The learned model: w = 4.496 per study hour, b = -15.547. Every number below in this module comes from these two.',
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'Threshold and boundary: turning a probability into a verdict',
+      md: `The model now says things like "0.547". That is the model's whole output. It is not yet a yes or a no.
+
+- A **decision threshold** is the cut-off you pick for calling the answer "yes". Threshold 0.5 means: say pass when p is 0.5 or more.
+- The **decision boundary** is the place in the input where the probability crosses that threshold. On one side you say yes, on the other you say no.
+- Find it with the numbers we have. At threshold 0.5, the probability is 0.5 exactly when the log-odds z is 0, which means 4.496 × hours − 15.547 = 0, which means **hours = 3.458**. Study 3.46 hours and up, you are predicted to pass.
+- Now move the threshold to 0.3. A probability of 0.3 means log-odds of ln(0.3 / 0.7) = **−0.8473**. Solve 4.496 × hours − 15.547 = −0.8473 and you get **hours = 3.270**.
+- Move it to 0.8 instead: ln(0.8 / 0.2) = **1.3863**, and 4.496 × hours − 15.547 = 1.3863 gives **hours = 3.766**.
+
+Three thresholds, three boundaries: 3.270, 3.458, 3.766. The model never changed — w and b are still 4.496 and −15.547. Only the cut-off moved, and the boundary slid with it. Moving a threshold costs one number and no retraining; changing the model costs a training run.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Where the boundary sits, for three thresholds',
+      code: `import math
+
+w = 4.496
+b = -15.547
+
+def boundary_hours(threshold):
+    logit = math.log(threshold / (1 - threshold))
+    return (logit - b) / w
+
+for t in [0.3, 0.5, 0.8]:
+    print(t, round(boundary_hours(t), 3))
+
+# ---- real output ----
+# 0.3 3.27
+# 0.5 3.458
+# 0.8 3.766`,
+      annotations: {
+        1: 'math.log is the natural logarithm, the same ln you used by hand a moment ago.',
+        3: 'The weight learned by the previous snippet, pasted in so this one runs on its own.',
+        4: 'The bias learned by the previous snippet.',
+        6: 'A function that takes a threshold, like 0.5, and returns the study-hours value where the model crosses it.',
+        7: 'Turn the threshold probability into its log-odds. For 0.5 this is ln(1) = 0; for 0.3 it is -0.8473.',
+        8: 'Solve w*hours + b = logit for hours: subtract b, divide by w. That is the entire boundary calculation.',
+        10: 'The same three thresholds you did on paper.',
+        11: 'Print the threshold and its boundary. Compare with the hand numbers: 3.27, 3.458, 3.766.',
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'Why the boundary is always straight',
+      md: `The sigmoid is a curve, so people expect the boundary to be a curve. It is not, and the reason takes three lines.
+
+- The sigmoid never reorders anything: if z goes up, p goes up, always. So "p is at least 0.5" happens exactly when "z is at least 0", with no exceptions.
+- Therefore the boundary is the set of inputs where **w · x + b equals some fixed number**. With one input that is a single point (our 3.458 hours). With two inputs it is a straight line. With three it is a flat plane.
+- Changing the threshold changes which fixed number, which slides the line sideways. It never bends it.
+- A dataset is called **linearly separable** when a single straight line can be drawn with all the yes examples on one side and all the no examples on the other. Our six students are: everyone at 3 hours or below failed, everyone at 4 hours or above passed.
+- When the data is not linearly separable, logistic regression cannot fit it, no matter how long you train. The standard example is four points where the yes cases sit at the two opposite corners of a square and the no cases at the other two — no single straight line separates them.
+- The fix is to hand the model a new input you compute yourself, such as the two original inputs multiplied together, or to switch to a model that is allowed to bend.`,
     },
     { type: 'visual', component: 'DecisionBoundaryPlayground', props: { model: 'logistic' } },
     {
       type: 'note',
-      md: `That straight line separating the two colours **is** w·x + b = 0 — the linear decision surface, drawn. The colour *fade* around it is the sigmoid: solid far from the line, washed out near it, because σ(z) → 0.5 as z → 0. Now switch the model selector to **kNN** or **Tree** on the same dataset: those boundaries are jagged and curved, because those models are not constrained to a hyperplane. Same points, same labels — the shape of the boundary is a property of the *model*, not of the data.`,
-    },
-    {
-      type: 'intuition',
-      title: 'Why cross-entropy and not MSE — the interview question',
-      md: `Imagine a coach who shouts loudest when you are already doing fine, and whispers when you are about to walk off a cliff. That is MSE paired with a sigmoid. Two problems, both fatal.
-
-- **It is non-convex.** MSE(σ(w·x + b)) is not convex in w — the bowl grows bumps and flat shelves, so gradient descent can park in a local minimum. Cross-entropy with a sigmoid **is** convex: one bottom, guaranteed.
-- **Its gradient vanishes exactly when you are wrong.** MSE's gradient carries a σ′(z) factor. "Confidently wrong" means |z| is large, which means σ′(z) ≈ 0, which means **no update**. Learning stalls at the precise moment it should be fastest.
-- Cross-entropy is built so that σ′ **cancels** in the chain rule. What survives is **(ŷ − y)·x** — the same "error × input" from Level 1, with no killer factor attached.
-- One-line answer to memorise: *"Cross-entropy's gradient is proportional to how wrong the model is; MSE's is proportional to how wrong it is times how unwilling the sigmoid is to move."*`,
-    },
-    {
-      type: 'math',
-      intro: 'Log loss for one sample, then the full objective. y is 0 or 1, so exactly one term survives per sample.',
-      latex: [
-        '\\mathcal{L}(\\hat{y}, y) = -\\bigl[\\, y \\log \\hat{y} + (1-y) \\log (1 - \\hat{y}) \\,\\bigr]',
-        'y = 1 \\;\\Rightarrow\\; \\mathcal{L} = -\\log \\hat{y} \\qquad \\bigl(\\, 0 \\text{ when } \\hat{y} = 1, \\quad \\to \\infty \\text{ when } \\hat{y} \\to 0 \\,\\bigr)',
-        'J(w, b) = -\\frac{1}{m} \\sum_{i=1}^{m} \\Bigl[\\, y^{(i)} \\log \\hat{y}^{(i)} + (1-y^{(i)}) \\log (1 - \\hat{y}^{(i)}) \\,\\Bigr]',
-      ],
-    },
-    {
-      type: 'math',
-      intro: 'The cancellation — the three lines an interviewer wants to see on the whiteboard. The denominator of the first factor is exactly the second factor, so they annihilate.',
-      latex: [
-        '\\frac{\\partial \\mathcal{L}}{\\partial \\hat{y}} = \\frac{\\hat{y} - y}{\\hat{y}(1 - \\hat{y})}, \\qquad \\frac{\\partial \\hat{y}}{\\partial z} = \\sigma^{\\prime}(z) = \\hat{y}(1 - \\hat{y})',
-        '\\frac{\\partial \\mathcal{L}}{\\partial z} = \\frac{\\hat{y} - y}{\\hat{y}(1-\\hat{y})} \\cdot \\hat{y}(1-\\hat{y}) = \\hat{y} - y \\;\\;\\Longrightarrow\\;\\; \\frac{\\partial \\mathcal{L}}{\\partial w} = (\\hat{y} - y)\\, x',
-        '\\text{MSE instead: } \\frac{\\partial}{\\partial w} \\tfrac{1}{2}(\\hat{y} - y)^2 = (\\hat{y} - y) \\cdot \\underbrace{\\hat{y}(1 - \\hat{y})}_{\\to\\; 0 \\text{ at the tails}} \\cdot\\, x',
-      ],
-    },
-    {
-      type: 'code',
-      lang: 'python',
-      title: 'The two gradients, side by side, for one confidently-wrong sample',
-      code: `import numpy as np
-
-def sigmoid(z):
-    return 1 / (1 + np.exp(-z))
-
-x, y = 1.0, 1.0                                # one sample, true label = 1
-for z in [-6.0, -2.0, 0.0, 2.0]:               # z = w*x + b
-    p = sigmoid(z)
-    g_ce = (p - y) * x                         # cross-entropy gradient
-    g_mse = (p - y) * p * (1 - p) * x          # MSE gradient: extra sigma'(z)
-    print(f"z={z:5.1f} p={p:.4f} |dCE|={abs(g_ce):.5f} |dMSE|={abs(g_mse):.5f}")
-
-# z= -6.0 p=0.0025 |dCE|=0.99753 |dMSE|=0.00246
-# z= -2.0 p=0.1192 |dCE|=0.88080 |dMSE|=0.09248
-# z=  0.0 p=0.5000 |dCE|=0.50000 |dMSE|=0.12500
-# z=  2.0 p=0.8808 |dCE|=0.11920 |dMSE|=0.01252`,
-      annotations: {
-        7: 'z goes from catastrophically wrong (−6, true label is 1) to right (+2). Watch which loss reacts.',
-        9: 'The whole cross-entropy gradient: prediction minus truth, times input. Nothing else.',
-        10: 'The same thing, throttled by sigma\'(z). That extra factor is the entire argument against MSE.',
-        13: 'The disaster row: model 99.75% sure of the WRONG answer. CE pushes with 0.998, MSE with 0.0025.',
-      },
-    },
-    {
-      type: 'note',
-      md: `Row one is the whole interview answer. The model is **99.75% confident of the wrong label** — the worst state it can be in. Cross-entropy pushes back with **0.998**; MSE pushes with **0.0025**, about **400× weaker**, at the exact moment correction matters most. Worse, MSE's *strongest* push (0.125) lands at z = 0, where the model has no opinion at all. That is the backwards coach: loud when you are fine, silent at the cliff edge.`,
-    },
-    {
-      type: 'note',
-      md: `**More than two classes.** Replace the sigmoid with **softmax**: K linear scores in, a proper probability distribution out (all positive, sums to 1), trained with **categorical cross-entropy** — same formula, summed over classes, and with one-hot labels only the true class's term survives. Two ways to get there: **one-vs-rest** trains K independent binary classifiers ("class k vs everything else") and takes the argmax — simple, parallel, but the K scores are calibrated separately and do not sum to 1. **Multinomial** trains a single model over all classes at once, which is what you want when the classes genuinely compete and you need comparable probabilities; it is scikit-learn's default. And softmax with K = 2 collapses algebraically back to the sigmoid — it is the same object, generalised.`,
-    },
-    {
-      type: 'math',
-      intro: 'Softmax and categorical cross-entropy. Note the gradient is still the same beautiful shape.',
-      latex: [
-        '\\text{softmax}(z)_k = \\frac{e^{z_k}}{\\sum_{j=1}^{K} e^{z_j}}, \\qquad J = -\\sum_{k=1}^{K} y_k \\log \\hat{y}_k',
-        '\\frac{\\partial J}{\\partial z_k} = \\hat{y}_k - y_k \\qquad \\text{(prediction minus one-hot truth — again)}',
-      ],
-    },
-    {
-      type: 'code',
-      lang: 'python',
-      title: 'scikit-learn: fit, predict_proba, coefficients — and the C gotcha',
-      code: `import numpy as np
-from sklearn.linear_model import LogisticRegression
-
-rng = np.random.default_rng(0)
-hours = rng.uniform(0, 10, 400)                  # hours studied
-attend = rng.uniform(0, 100, 400)                # attendance %
-z = 0.7 * hours + 0.03 * attend - 5.0            # the truth hidden in the data
-y = (rng.random(400) < 1 / (1 + np.exp(-z))).astype(int)
-X = np.c_[hours, attend]
-
-clf = LogisticRegression(C=1.0).fit(X, y)        # C = INVERSE regularization strength
-print("coef       :", clf.coef_.round(3), "intercept:", clf.intercept_.round(3))
-print("odds ratio :", np.exp(clf.coef_).round(3))
-print("accuracy   :", round(clf.score(X, y), 3))
-
-new = np.array([[2.0, 40.0], [5.0, 35.0], [8.0, 90.0]])
-proba = clf.predict_proba(new)[:, 1]
-print("P(pass)    :", proba.round(3))
-print("thr 0.5    :", (proba >= 0.5).astype(int))
-print("thr 0.3    :", (proba >= 0.3).astype(int))
-
-strong = LogisticRegression(C=0.01).fit(X, y)    # SMALL C = STRONG regularization
-print("C=0.01 coef:", strong.coef_.round(3))
-
-# coef       : [[0.707 0.028]] intercept: [-5.01]
-# odds ratio : [[2.028 1.029]]
-# accuracy   : 0.82
-# P(pass)    : [0.078 0.381 0.96 ]
-# thr 0.5    : [0 0 1]
-# thr 0.3    : [0 1 1]
-# C=0.01 coef: [[0.525 0.023]]`,
-      annotations: {
-        7: 'We plant a known truth: 0.7 per study hour, 0.03 per attendance point, −5.0 intercept. Now see if the fit finds it.',
-        11: 'Reads like "capacity" and behaves like it: C is 1/lambda. Bigger C = weaker penalty = larger coefficients.',
-        17: 'predict_proba returns both columns; [:, 1] is P(class 1). predict() is just this thresholded at 0.5.',
-        20: 'Same model, same coefficients, one different number — the borderline student flips to "pass". No retraining.',
-        25: 'Recovered 0.707 and 0.028 against the planted 0.7 and 0.03. Logistic regression is estimating the real log-odds.',
-        27: '82%, not 100% — the labels were generated with randomness, so this is the irreducible ceiling, not underfitting.',
-        31: 'C dropped 100x and the coefficients shrank 0.707 to 0.525. Small C, strong penalty. That is the gotcha.',
-      },
-    },
-    {
-      type: 'note',
-      md: `**C is inverse regularization strength** — the classic scikit-learn trap. Small C = strong penalty = shrunk coefficients (0.707 → 0.525 above, dragged toward zero). Large C = weak penalty = the model follows the data. Every *other* regularized sklearn model — Ridge, Lasso, ElasticNet — uses \`alpha\`, where **bigger means more** regularization. Opposite direction, same library, no warning. Two more things people miss: \`LogisticRegression\` applies **L2 by default at C=1.0**, so you are regularizing whether you meant to or not; and the penalty is scale-sensitive, so an unscaled column gets penalised differently from a scaled one — **standardize your features** before you trust any coefficient.`,
-    },
-    {
-      type: 'intuition',
-      title: 'Reading the coefficients: log-odds and odds ratios',
-      md: `The coefficient on *hours* was 0.707. That is **not** "+0.707 probability per hour" — probability is not linear here. The log-odds are.
-
-- One extra study hour adds **0.707 to the log-odds** of passing.
-- Exponentiate to get the **odds ratio**: e^0.707 ≈ **2.03**.
-- Plain English: *"one more study hour roughly doubles the odds of passing."* That sentence **is** the model.
-- Attendance: e^0.028 ≈ 1.029 → each attendance point adds ~2.9% to the odds. Small per unit, but the range is 0–100.
-- This is why banks, insurers and hospitals still ship logistic regression: a regulator can be handed the exact reason an application was rejected. A gradient-boosted forest cannot do that without extra machinery.
-- Honest caveat: coefficients only read cleanly if features are **scaled comparably and not collinear**. Two correlated features split the credit arbitrarily between themselves, and both coefficients then lie.`,
-    },
-    {
-      type: 'intuition',
-      title: 'When logistic regression is still the right answer',
-      md: `It is 70 years old and it is not going anywhere. Five situations where it wins outright:
-
-- **As the baseline, always.** Seconds to fit, gives you a number to beat. If XGBoost only beats it by 0.4% AUC, that *is* your result — ship the simple one.
-- **High-dimensional sparse text.** Bag-of-words or TF-IDF with 100k features plus L2/L1: competitive with anything, trains in seconds, no GPU.
-- **You need calibrated probabilities.** It optimises log loss directly, so its outputs usually mean what they say out of the box. Trees and forests do not — they need Platt scaling or isotonic regression bolted on.
-- **You must explain the decision.** Credit, insurance, medicine, anything a regulator reads.
-- **Tight latency or memory budget.** One dot product per prediction; the model is a vector of floats.
-- Walk away when the signal genuinely lives in **feature interactions and nonlinearity** and nobody will hand-engineer them. Then it is trees, boosting, or a network.`,
+      md: `Do two things in that panel. **First**, with the model set to Logistic, look at the single straight line splitting the two colours: that line is w · x + b = 0, exactly the boundary you just computed for the students, drawn for two inputs instead of one. Count the misclassified dots — a straight line cannot get all of them, and that is the honest limit of this model on this data, not a training bug. **Second**, click the model selector across to **kNN** and then **Tree**, on the identical points. Those boundaries come out jagged and curved, and the count of misclassified dots drops. Same data, same labels; only the model changed. The shape of a boundary is a property of the model you chose, never of the data.`,
     },
     {
       type: 'visual',
       component: 'PythonPlayground',
       props: {
-        code: `import numpy as np
+        code: `import math
 
-THRESHOLD = 0.5   # <-- change me: 0.3, 0.5, 0.8
+THRESHOLD = 0.5
+w = 4.496
+b = -15.547
 
-sigmoid = lambda z: 1 / (1 + np.exp(-z))
-
-X = np.array([[1., 1.], [2., 1.], [1., 2.], [4., 4.], [5., 4.], [4., 5.]])
-y = np.array([0., 0., 0., 1., 1., 1.])
-
-w, b = np.zeros(2), 0.0
-for _ in range(400):                       # plain gradient descent on log loss
-    g = sigmoid(X @ w + b) - y             # the whole gradient lives in this residual
-    w -= 0.3 * (X.T @ g) / len(y)
-    b -= 0.3 * g.mean()
-
-print('weights', w.round(3), ' bias', round(b, 3))
-p = sigmoid(X @ w + b)
-print('train p', p.round(3))
-print('train y', (p >= THRESHOLD).astype(int), ' true', y.astype(int))
-
-probe = np.array([[2.5, 2.5], [3.0, 2.8], [3.5, 3.0], [9., 9.]])
-pp = sigmoid(probe @ w + b)
-for pt, prob in zip(probe, pp):
-    print(f'  x={pt}  p={prob:.3f}  ->  label {int(prob >= THRESHOLD)}')
-print(f'saturation: z at [9,9] = {probe[3] @ w + b:.2f}  ->  p = {pp[3]:.8f} (never exactly 1)')`,
-        precomputedOutput: `weights [1.171 1.171]  bias -6.097
-train p [0.023 0.07  0.07  0.963 0.988 0.988]
-train y [0 0 0 1 1 1]  true [0 0 0 1 1 1]
-  x=[2.5 2.5]  p=0.440  ->  label 0
-  x=[3.  2.8]  p=0.667  ->  label 1
-  x=[3.5 3. ]  p=0.820  ->  label 1
-  x=[9. 9.]  p=1.000  ->  label 1
-saturation: z at [9,9] = 14.98  ->  p = 0.99999969 (never exactly 1)`,
-        caption: 'Weights and probabilities are fixed after training — only THRESHOLD moves. Watch the four probe labels: 0.3 gives [1 1 1 1], 0.5 gives [0 1 1 1], 0.8 gives [0 0 1 1]. Nothing was retrained. Then look at the last line: z = 14.98 is 15 units from the boundary and p is still 0.99999969, not 1 — that flatness is why the sigmoid gradient dies far from the boundary.',
+for h in [3.0, 3.3, 3.5, 3.9, 4.5]:
+    z = w * h + b
+    p = 1 / (1 + math.exp(-z))
+    label = 1 if p >= THRESHOLD else 0
+    print('hours', h, ' p', round(p, 3), ' label', label)`,
+        annotations: {
+          1: 'For math.exp, the same as in every snippet above.',
+          3: 'The cut-off. This is the only line you should edit: try 0.3, then try 0.8, and re-run each time.',
+          4: 'The weight the training loop learned. It does not change when you move the threshold.',
+          5: 'The bias the training loop learned. Also unchanged.',
+          7: 'Five students to score, chosen to sit close to the 3.458-hour boundary so small threshold moves flip them.',
+          8: 'The log-odds for this student: weight times hours, plus bias.',
+          9: 'The sigmoid, squashing z into a probability between 0 and 1.',
+          10: 'The verdict. "1 if p >= THRESHOLD else 0" is a Python if-expression: it checks the test and becomes 1 when it passes, 0 when it does not.',
+          11: 'Print the hours, the probability rounded to 3 places, and the verdict. The p column is what to watch: it is identical on all three runs.',
+        },
+        precomputedOutput: `hours 3.0  p 0.113  label 0
+hours 3.3  p 0.33  label 0
+hours 3.5  p 0.547  label 1
+hours 3.9  p 0.879  label 1
+hours 4.5  p 0.991  label 1`,
+        caption: 'Change only THRESHOLD, on line 3. At 0.5 the labels are 0 0 1 1 1. At 0.3 the 3.3-hour student flips up, giving 0 1 1 1 1. At 0.8 the 3.5-hour student flips down, giving 0 0 0 1 1. The five probabilities are exactly the same on every run, because nothing was retrained — only the line you drew through them moved.',
       },
+    },
+    {
+      type: 'intuition',
+      title: 'Worked case: a loan model, computed by hand',
+      md: `A bank has fitted a logistic regression that predicts whether a loan will be repaid. It has two inputs and three learned numbers, and here they are: **weight on annual income (in lakhs) = 0.8**, **weight on number of late payments = −1.1**, **bias = −1.0**. So z = 0.8 × income − 1.1 × late − 1.0.
+
+- **Applicant A**: income 4 lakh, 1 late payment. z = 3.2 − 1.1 − 1.0 = **1.1**. Then p = 1 / (1 + e^(−1.1)) = 1 / 1.3329 = **0.7503**.
+- Check that against the odds definition: p = 0.7503 gives odds of 0.7503 / 0.2497 = **3.004**, and ln(3.004) = **1.1**. The log-odds came back out as z, which is the whole design.
+- **Applicant B**: income 2 lakh, 3 late payments. z = 1.6 − 3.3 − 1.0 = **−2.7**. p = 1 / (1 + 14.880) = **0.0630**.
+- **Applicant C**: income 3 lakh, 2 late payments. z = 2.4 − 2.2 − 1.0 = **−0.8**. p = 1 / (1 + 2.2255) = **0.3100**.
+- At threshold 0.5, approvals are A only. B and C are rejected.
+- Now the boundary, for an applicant with exactly 2 late payments. At threshold 0.5 we need z = 0, so 0.8 × income = 1.1 × 2 + 1.0 = 3.2, giving **income = 4.0 lakh**. C earns 3, below the line, rejected. At threshold 0.3 we need z = −0.8473, so 0.8 × income = 3.2 − 0.8473 = 2.3527, giving **income = 2.94 lakh**. C earns 3, above the line, approved.
+
+Applicant C flipped from rejected to approved without one number in the model changing. Note also that C's probability of 0.3100 is just over 0.3 — the two ways of checking agree, as they must.`,
+    },
+    {
+      type: 'intuition',
+      title: 'The classic mistake: treating 0.5 as sacred on rare-event data',
+      md: `A hospital screens for a disease that 2 in 100 people have. A team trains a logistic regression, uses the default 0.5 threshold, reports accuracy, and ships it. Walk through their numbers on 1,000 patients — **20 sick, 980 healthy**.
+
+- At threshold 0.5 the model flags 8 patients. Six of them really are sick, two are not. So it catches 6 and misses 14.
+- Filling in the confusion matrix: true positives 6, false positives 2, false negatives 14, true negatives 978.
+- Accuracy = (6 + 978) / 1000 = **0.984**. The slide says 98.4% and the room is pleased.
+- Here is the diagnosis. A model that ignores every input and says "healthy" to all 1,000 people scores 980 / 1000 = **0.980**. Their 98.4% beats doing nothing by 0.4 of a percentage point, while missing 14 of the 20 sick people. Recall is 6 / 20 = **0.30**.
+- Now drop the threshold to 0.10 on the exact same model. It flags 60 patients: 17 sick, 43 healthy. True positives 17, false positives 43, false negatives 3, true negatives 937. Recall jumps to 17 / 20 = **0.85**.
+- Accuracy at that threshold is (17 + 937) / 1000 = **0.954** — it went **down**. The useful model scores worse on the number they were reporting.
+
+Two mistakes, stacked. The first is reading 0.5 as if the maths blessed it; 0.5 is only the right cut-off when a miss and a false alarm cost the same, and here a miss is a missed cancer while a false alarm is one more test. The second is reporting accuracy on data where 98% of rows are one class, so accuracy mostly measures how well you can say "healthy". The fix is not a better model. It is a threshold chosen from the cost of the two mistakes, and recall reported next to it.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Practice problems',
+      md: `Do these on paper before reading the solutions in the next section. Use e ≈ 2.71828 and ln(2) ≈ 0.693.
+
+1. A model has one input and gives z = 2 × x − 3. Compute the probability for x = 1 and for x = 2. Which side of 0.5 is each one on?
+2. For that same model, where is the decision boundary at threshold 0.5? Where is it at threshold 0.75? (Hint: ln(0.75 / 0.25) = ln(3) = 1.0986.)
+3. A model outputs p = 0.8 for a sample whose true label is 1, and p = 0.8 for a different sample whose true label is 0. Compute the cross-entropy penalty for each.
+4. A spam filter is tested on 500 emails, of which 25 are spam. At threshold 0.5 it flags 20 emails and 15 of them are really spam. Write out the four confusion-matrix counts, then compute accuracy and recall. Compare accuracy against a model that calls everything not-spam.
+5. Someone says "the sigmoid is curved, so logistic regression can fit a curved boundary". Say in two sentences why that is wrong.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Worked solutions',
+      md: `Check every intermediate number, not just the final one.
+
+1. At x = 1: z = 2 − 3 = **−1**, so p = 1 / (1 + e^1) = 1 / 3.7183 = **0.2689**, below 0.5. At x = 2: z = 4 − 3 = **1**, so p = 1 / (1 + e^(−1)) = 1 / 1.3679 = **0.7311**, above 0.5.
+2. Threshold 0.5 means log-odds 0, so 2x − 3 = 0 and **x = 1.5**. Threshold 0.75 means log-odds 1.0986, so 2x − 3 = 1.0986, giving 2x = 4.0986 and **x = 2.049**. Raising the threshold pushed the boundary to the right, so fewer inputs get called yes.
+3. True label 1 with p = 0.8: the penalty is −ln(0.8) = **0.223**. True label 0 with p = 0.8: the penalty is −ln(1 − 0.8) = −ln(0.2) = **1.609**. The same output, seven times the penalty, because the second one is wrong.
+4. It flagged 20 and 15 were really spam, so true positives 15 and false positives 5. There were 25 spam in total, so false negatives = 25 − 15 = 10. The rest are true negatives: 500 − 15 − 5 − 10 = 470. Accuracy = (15 + 470) / 500 = **0.97**. Recall = 15 / 25 = **0.60**. A model that calls everything not-spam scores 475 / 500 = **0.95**, so the 0.97 is two points above doing nothing while letting 40% of spam through.
+5. The sigmoid never reorders its inputs, so "p is at least the threshold" is exactly the same condition as "z is at least some fixed number", and that condition is a straight line in the inputs. The curve controls how fast confidence changes as you walk away from the boundary; it does not bend the boundary itself.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Beyond the basics - skip this on your first read',
+      md: `Everything above stands on its own. This section names four things you will meet later so the words are not new when you get there.
+
+- **More than two classes.** With K classes you replace the sigmoid with the **softmax**: compute K separate z values, raise e to each one, and divide each by the total of all K. The results are all positive and add up to 1, so they form a proper set of probabilities, and the loss becomes cross-entropy summed over the classes. The alternative, **one-vs-rest**, trains K separate yes-or-no models ("class 3 or not class 3") and picks the biggest score; it is simpler but the K scores come from K separately-fitted models, so they do not add up to 1. With K = 2 the softmax collapses algebraically back to the plain sigmoid.
+- **Saturation.** Far from the boundary the sigmoid is nearly flat, so the amount a weight moves per training step shrinks toward zero there. One sigmoid survives this. Stacking many of them, as a neural network does, multiplies many tiny numbers together and the training signal dies — the reason another function called ReLU replaced the sigmoid inside deep networks. You will meet it in the Deep Learning subject.
+- **Reading the weights out loud.** A weight is a change in **log-odds** per unit of input, not a change in probability. Raise e to it to get the **odds ratio**: our loan model's income weight of 0.8 gives e^0.8 = 2.23, so "one more lakh of income roughly doubles the odds of repayment". This one-sentence-per-input explainability is why banks, insurers and hospitals still ship logistic regression when a regulator has to be able to read the reason for a rejection. It only reads cleanly if the inputs are on comparable scales and are not near-duplicates of each other.
+- **The scikit-learn trap.** In scikit-learn the class is LogisticRegression and its regularisation setting is called **C**, which is the *inverse* of the penalty strength — small C means a strong penalty and shrunken weights. Every other regularised model in the same library uses alpha, where bigger means more penalty. Opposite directions, same library. It also applies an L2 penalty by default, so an unregularised fit is not what you get unless you ask for it.`,
     },
   ],
   quiz: [
     {
-      question: 'Why does logistic regression apply a sigmoid instead of using w·x + b directly as the answer?',
+      question: 'A straight line fitted to 0/1 labels gave height = 0.2571 × hours − 0.4. Why is this unusable as a probability model?',
       options: [
         {
-          text: 'To squash any real number into (0, 1) so the output can be read as a probability',
-          explanation: 'Correct. The raw line is unbounded — it returns 1.7 or −0.4, which are not probabilities. The sigmoid bounds it and gives calibratable output.',
+          text: 'It is unbounded — at 7 hours it returns 1.4 and at 0 hours it returns −0.4, and neither is a probability',
+          explanation: 'Correct. A line has no ceiling and no floor, so it walks past 1 and past 0. The sigmoid exists to stop exactly this.',
         },
-        { text: 'To make the decision boundary curved', explanation: 'It does not. σ is monotonic, so σ(z) ≥ 0.5 exactly when z ≥ 0 — the boundary stays a hyperplane.' },
-        { text: 'To speed up training', explanation: 'The sigmoid adds work, not speed. Its value is bounded, probabilistic output.' },
+        { text: 'The slope is too small to separate the classes', explanation: 'The slope size is not the issue. Any slope at all produces values outside 0 to 1 once the input goes far enough.' },
+        { text: 'Six data points is too few to fit a line', explanation: 'More data would not help. The problem is the shape of the function, not the amount of data.' },
       ],
       correct: 0,
     },
     {
-      question: 'A model outputs z = w·x + b = −3 for a sample whose true label is 1. Which loss produces the larger weight update?',
+      question: 'What is the log-odds (logit) of a probability of 0.5?',
       options: [
-        { text: 'MSE — squaring amplifies large errors', explanation: 'Squaring amplifies the LOSS value, not the gradient. MSE\'s gradient is multiplied by σ′(z), which is ~0.045 here, throttling it.' },
-        { text: 'Both are identical after the chain rule', explanation: 'They differ by exactly the σ′(z) factor. That factor is the whole point of the question.' },
+        { text: '0.5', explanation: 'That is the probability itself, not its log-odds. The two scales are different.' },
         {
-          text: 'Cross-entropy — its gradient is (ŷ − y)·x with no σ′(z) factor',
-          explanation: 'Correct. σ′ cancels in cross-entropy\'s chain rule. MSE keeps it, and at z = −3 it is tiny, so MSE barely moves the weights while the model is confidently wrong.',
+          text: '0, because the odds are 0.5 / 0.5 = 1 and ln(1) = 0',
+          explanation: 'Correct. Zero log-odds is the "no opinion" point, and it is exactly why the sigmoid passes through 0.5 at z = 0.',
         },
-      ],
-      correct: 2,
-    },
-    {
-      question: 'In scikit-learn, you change LogisticRegression(C=1.0) to LogisticRegression(C=0.01). What happens?',
-      options: [
-        { text: 'Regularization gets weaker; coefficients grow', explanation: 'Backwards. C is INVERSE strength — lowering C strengthens the penalty.' },
-        {
-          text: 'Regularization gets stronger; coefficients shrink toward zero',
-          explanation: 'Correct. C = 1/λ. This is the opposite convention from Ridge/Lasso\'s alpha, which is the classic API gotcha.',
-        },
-        { text: 'Nothing — C only affects the solver', explanation: 'C is the regularization hyperparameter, not a solver setting.' },
+        { text: '1, because the two outcomes are equally likely', explanation: 'The odds are 1, but the logit is the natural logarithm of the odds, and ln(1) = 0.' },
       ],
       correct: 1,
     },
     {
-      question: 'Your logistic regression gets ~50% accuracy on XOR-shaped data (two diagonal corner pairs). Why?',
+      question: 'The trained student model is w = 4.496, b = −15.547. You change the threshold from 0.5 to 0.8. What happens?',
       options: [
-        { text: 'The learning rate is too high', explanation: 'This is not an optimisation failure. Perfect optimisation still cannot solve it.' },
-        { text: 'The data needs more samples', explanation: 'Infinite XOR data would not help. The problem is representational, not statistical.' },
+        { text: 'The model retrains and the probabilities go up', explanation: 'Nothing retrains. The five probabilities in the playground are identical on every threshold setting.' },
+        { text: 'Nothing changes, because the threshold only affects reporting', explanation: 'It changes every verdict near the boundary. The 3.5-hour student flips from pass to fail.' },
         {
-          text: 'The decision boundary is a hyperplane, and no single line separates XOR',
-          explanation: 'Correct. Logistic regression is a linear classifier. Fix by engineering an interaction feature (x₁·x₂) or switching to a model that can bend.',
+          text: 'The probabilities stay the same and the boundary moves from 3.458 hours to 3.766 hours',
+          explanation: 'Correct. A higher threshold demands more evidence, so the boundary slides right and fewer inputs are called yes. One number, no retraining.',
         },
       ],
       correct: 2,
     },
     {
-      question: 'A fraud model outputs 0.62 for a transaction. What is the correct statement?',
+      question: 'A sample has true label 1 and the model outputs p = 0.002. Which loss pushes the weights harder, and why?',
       options: [
         {
-          text: 'That number is the model\'s full output; converting it to block/allow requires a threshold chosen from business cost',
-          explanation: 'Correct. 0.5 is a convention, not a result. Threshold moving is free and is where precision/recall tradeoffs get made.',
+          text: 'Cross-entropy — its nudge is (p − y)·x ≈ 0.998·x, while squared error multiplies that by p(1 − p) ≈ 0.002',
+          explanation: 'Correct. The extra p(1 − p) factor collapses to nearly zero when the model is confident, so squared error goes quiet at the worst possible moment.',
         },
-        { text: 'It is fraud, because 0.62 > 0.5', explanation: 'Only if you accepted 0.5 as the cutoff. For fraud, the cutoff is set by the cost of a false block vs a missed fraud.' },
-        { text: 'The model is 62% accurate on this sample', explanation: 'Confuses a per-sample probability with a dataset-level metric. Accuracy is not defined for one prediction.' },
+        { text: 'Squared error — squaring makes big mistakes count more', explanation: 'Squaring inflates the reported penalty, not the nudge. The nudge carries the p(1 − p) factor, which is about 0.002 here.' },
+        { text: 'They are identical once you work through the chain rule', explanation: 'They differ by exactly the p(1 − p) factor, which is the entire reason cross-entropy is used.' },
       ],
       correct: 0,
     },
     {
-      question: 'A coefficient on "number of late payments" is 0.9. What does that mean in plain language?',
+      question: 'A screening model scores 98.4% accuracy on 1,000 patients of whom 20 are sick, catching 6 of them. What should you say?',
       options: [
-        { text: 'Each late payment adds 0.9 to the predicted probability of default', explanation: 'Probability is not linear in x. Adding 0.9 would push probabilities past 1 immediately.' },
-        { text: 'Late payments explain 90% of defaults', explanation: 'Coefficients are not variance shares. That is a different quantity entirely.' },
+        { text: 'The model is excellent — under 2% error', explanation: 'A model that says "healthy" to everyone scores 98.0% on this data. The 98.4% is 0.4 points above learning nothing.' },
         {
-          text: 'Each late payment adds 0.9 to the log-odds; e^0.9 ≈ 2.46, so the odds of default roughly 2.5×',
-          explanation: 'Correct. Coefficients are log-odds; exponentiating gives the odds ratio. This is exactly how logistic regression is reported in regulated industries.',
+          text: 'Accuracy is nearly meaningless here — the always-healthy baseline is 98.0%, and recall is only 6/20 = 0.30',
+          explanation: 'Correct. When one class is 98% of the rows, accuracy mostly measures how well you can name that class. Report recall, and pick the threshold from the cost of a miss.',
+        },
+        { text: 'The model needs a lower learning rate', explanation: 'Nothing here points at the training run. The problem is the threshold and the metric being reported.' },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'Why can logistic regression never separate four points with the yes cases at opposite corners of a square?',
+      options: [
+        { text: 'The sigmoid saturates and training stalls', explanation: 'Saturation slows learning; it does not make a problem unsolvable. Even a perfectly trained model fails here.' },
+        { text: 'There is not enough data to estimate two weights', explanation: 'Infinitely many copies of those four points would not help. The limit is what shapes the model can express.' },
+        {
+          text: 'The boundary is always the flat surface w·x + b = constant, and no single straight line puts those two corners on one side',
+          explanation: 'Correct. The sigmoid is monotonic, so the boundary is always a straight line or flat plane. Fix it by adding a computed input such as the two inputs multiplied together.',
         },
       ],
       correct: 2,
-    },
-    {
-      question: 'Why is σ′(z) ≈ 0 at large |z| a problem beyond the MSE-vs-cross-entropy argument?',
-      options: [
-        { text: 'It makes predict_proba return exactly 0 or 1', explanation: 'Values get very close to 0/1 but the real issue is the learning signal, not the printed number.' },
-        {
-          text: 'Stacked sigmoids multiply these small factors together, so gradients vanish in deep networks',
-          explanation: 'Correct. σ′ ≤ 0.25, so ten layers multiply by ≤ 0.25^10. This vanishing-gradient problem is why ReLU replaced sigmoid in hidden layers.',
-        },
-        { text: 'It breaks convexity of the cross-entropy loss', explanation: 'Cross-entropy with a sigmoid stays convex regardless. Saturation affects gradient magnitude, not convexity.' },
-      ],
-      correct: 1,
-    },
-    {
-      question: 'You need probabilities from a 5-class classifier that sum to 1 and are comparable across classes. Which setup?',
-      options: [
-        { text: 'One-vs-rest: 5 independent binary logistic regressions', explanation: 'Works for picking a winner, but the 5 scores come from separately-calibrated models and do not form a proper distribution.' },
-        {
-          text: 'Multinomial: one model with softmax + categorical cross-entropy',
-          explanation: 'Correct. Softmax normalises across classes by construction, and the single joint fit makes the probabilities mutually comparable.',
-        },
-        { text: 'Five regressions with MSE, then normalise the outputs', explanation: 'Normalising after the fact does not make the numbers probabilities, and MSE reintroduces the vanishing-gradient problem.' },
-      ],
-      correct: 1,
     },
   ],
   interviewQuestions: [
     {
-      question: 'Why cross-entropy and not MSE for classification? Give the gradient argument.',
+      question: 'Why does logistic regression need a sigmoid at all? Motivate it rather than quoting the formula.',
       answer:
-        'Two reasons. (1) **Convexity**: MSE composed with a sigmoid is non-convex in w, so gradient descent can land in a local minimum; cross-entropy with a sigmoid is convex — one global bottom. (2) **The gradient**, which is the real answer. For MSE, ∂L/∂w = (ŷ−y)·σ′(z)·x, and σ′(z) = ŷ(1−ŷ) → 0 at both tails. So when the model is *confidently wrong* (large |z|, wrong side), σ′ ≈ 0 and the update is ~0 — learning stalls exactly when it should be fastest. For cross-entropy, ∂L/∂ŷ = (ŷ−y)/[ŷ(1−ŷ)] and ∂ŷ/∂z = ŷ(1−ŷ); the two cancel, leaving ∂L/∂z = ŷ−y, so ∂L/∂w = (ŷ−y)·x — the same "error × input" as linear regression, with no throttling factor. Concretely: at z = −6 with true label 1, |dCE/dw| = 0.998 while |dMSE/dw| = 0.0025 — 400× weaker. Third reason if they want it: cross-entropy is the negative log-likelihood of a Bernoulli model, so minimising it is maximum likelihood, which is why the outputs are calibrated probabilities.',
+        'Because the thing we want out is a probability, between 0 and 1, and w·x + b is unbounded — fit a line to 0/1 labels and it returns 1.4 or −0.4 as soon as the input leaves the fitted range. Rather than clipping, we change what the line is asked to produce. Odds are probability divided by one minus probability, so they run from 0 to infinity; take the natural log and the log-odds run from minus infinity to plus infinity, which is exactly the range a linear function produces. So we let the line produce the log-odds: ln(p/(1−p)) = w·x + b. Solving that back for p gives p = 1/(1 + e^(−z)), the sigmoid. It is not a squashing function chosen for its shape — it is the algebraic inverse of the logit, which is why its outputs are always valid probabilities.',
       isCaseBased: false,
     },
     {
-      question: 'Is logistic regression a linear or nonlinear model? Defend the answer.',
+      question: 'Is logistic regression a linear or a nonlinear model?',
       answer:
-        'Linear classifier, nonlinear link. The decision boundary is σ(z) = 0.5 ⟺ z = 0 ⟺ w·x + b = 0 — a hyperplane, always, because σ is monotonic and cannot reorder points. What is nonlinear is the map from z to probability. Precisely: the **log-odds** log(p/(1−p)) are linear in x; the probability is not. Practical consequence: XOR is unlearnable, and to fit curved boundaries you must supply the nonlinearity yourself as engineered features (products, powers, splines, kernel expansions). The name "regression" also survives for this reason — it is a linear regression on the logit.',
+        'It is a linear classifier with a nonlinear link. The decision boundary is p = threshold, and since the sigmoid is monotonic that is exactly z = some constant, which is w·x + b = constant — a point in one dimension, a straight line in two, a flat plane in three. The boundary is never curved. What is nonlinear is the map from z to probability: the log-odds are linear in x, the probability is not. Two practical consequences. First, data that no straight line can separate, like yes cases at opposite corners of a square, cannot be fitted no matter how long you train; you have to supply the nonlinearity yourself as a computed input such as x1 times x2, or move to a model that bends. Second, the name "regression" is honest — the model is a linear regression on the logit.',
       isCaseBased: false,
     },
     {
-      question: 'Derive the cross-entropy gradient on a whiteboard, starting from the loss.',
+      question: 'Why cross-entropy rather than squared error for a classifier?',
       answer:
-        'L = −[y log ŷ + (1−y) log(1−ŷ)], with ŷ = σ(z), z = w·x + b. Step 1: ∂L/∂ŷ = −y/ŷ + (1−y)/(1−ŷ) = (ŷ−y)/[ŷ(1−ŷ)]. Step 2: ∂ŷ/∂z = σ′(z) = ŷ(1−ŷ). Step 3: multiply — the denominators cancel — ∂L/∂z = ŷ − y. Step 4: ∂z/∂w = x, so ∂L/∂w = (ŷ−y)x and ∂L/∂b = (ŷ−y). Averaged over m samples for the full objective. Say the punchline out loud: "error times input, averaged" — identical in form to linear regression with MSE, which is not a coincidence; both are the natural-parameter gradient of a generalised linear model.',
+        'The argument is about the size of the weight update, not the size of the penalty. With a sigmoid on the output, the squared-error update for a weight is (p − y)·p·(1 − p)·x, while the cross-entropy update is just (p − y)·x. That extra p(1 − p) factor is the slope of the sigmoid, and it collapses toward zero whenever the model is confident. So take a sample whose true label is 1 while the model outputs p = 0.0025: cross-entropy pushes with 0.9975, squared error pushes with 0.9975 × 0.0025 × 0.9975 = 0.0025, about 400 times weaker. Learning goes quiet precisely when the model is most wrong. Cross-entropy also has a second justification: it is the negative log-likelihood of a Bernoulli model, so minimising it is maximum likelihood, which is why its outputs behave like real probabilities.',
       isCaseBased: false,
     },
     {
-      question: 'Case: a colleague trained a classifier with MSE on sigmoid outputs. Training loss drops for a few epochs then flatlines high, and the model predicts one class for almost everything. Diagnose.',
+      question: 'How do you choose the decision threshold, and why is 0.5 not automatically correct?',
       answer:
-        'Classic MSE-plus-sigmoid failure. The model has pushed z far to one side; for the misclassified minority, |z| is large and wrong-signed, so σ′(z) ≈ 0 and their gradient contribution is nearly zero — they cannot pull the boundary back. The majority class is already fine and contributes little too. Result: a plateau that looks like convergence but is a dead gradient. Order of fixes: (1) switch the loss to binary cross-entropy — this alone usually fixes it; (2) check for class imbalance, which makes the collapse-to-majority far easier, and add class weights or move the threshold; (3) reduce initial weight magnitude / scale features so the model does not start out saturated. Distinguish it from a genuine plateau by inspecting gradient norms per sample: if the *wrongest* samples have the *smallest* gradients, it is saturation, not underfitting.',
+        '0.5 is only right when a false positive and a false negative cost the same amount, and the classes are roughly balanced. Neither usually holds. The threshold is a cost decision: pick the cut-off that minimises expected cost, which is the cost of a false positive times how many you get, plus the cost of a false negative times how many you get. In practice, score a validation set, sweep the threshold, and read off precision and recall against the business constraint — "recall at least 95% for cancer screening", "precision at least 90% before we auto-block a card". The engineering point worth stating: moving a threshold is one config value and instantly reversible, while changing the loss or resampling the data means a training run. So exhaust threshold tuning first. The caveat is that this only works if the probabilities are trustworthy, so check calibration before you tune.',
+      isCaseBased: false,
+    },
+    {
+      question: 'A stakeholder asks what a coefficient of 0.8 on income means. Answer them.',
+      answer:
+        'Not "0.8 more probability" — probability is not linear in the input, and adding 0.8 would run past 1 immediately. The coefficient is a change in log-odds per unit of input. Raise e to it to get the odds ratio: e^0.8 = 2.23, so one extra lakh of income multiplies the odds of repayment by about 2.2, which in plain words is "roughly doubles the odds". The sign gives direction, the size gives strength. Three caveats to volunteer. Odds are not probability, and the same odds ratio moves the probability a lot near 0.5 and hardly at all near 0 or 1. Two inputs that are near-copies of each other split the credit between them arbitrarily, so both coefficients can look weak while the pair is strong. And these are associations in observed data, not causal effects.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Case: a colleague trained a classifier with squared error on sigmoid outputs. The loss falls for a few epochs, then flatlines high, and the model predicts one class for nearly everything. Diagnose it.',
+      answer:
+        'This is the squared-error-plus-sigmoid failure. The model has pushed z far to one side. For the misclassified minority, z is large and on the wrong side, so p is near 0 or 1, so the p(1 − p) factor in the squared-error update is nearly zero and those samples contribute almost no correction. The majority samples are already right and contribute little either. The result is a plateau that looks like convergence but is really a dead update. Fixes in order: switch the loss to cross-entropy, which alone usually fixes it; check for class imbalance, which makes collapsing to the majority far easier, and add class weights or move the threshold; and reduce the initial weight sizes or scale the inputs so the model does not start out already saturated. Distinguish it from genuine underfitting by looking at per-sample update sizes — if the most wrong samples produce the smallest updates, it is saturation.',
       isCaseBased: true,
     },
     {
-      question: 'What does the C parameter do in sklearn\'s LogisticRegression, and what mistake does everyone make with it?',
+      question: 'Case: your logistic model scores 0.94 AUC offline, but in production precision collapses. No code changed. Walk through it.',
       answer:
-        'C is **inverse** regularization strength: C = 1/λ. Small C → strong penalty → coefficients shrunk toward zero → higher bias, lower variance. Large C → weak penalty → the fit follows the data. The mistake is assuming it matches `alpha` in Ridge/Lasso, where bigger means more regularization — the two conventions run in opposite directions inside the same library, so people accidentally over-regularize when tuning a grid copied from Ridge. Two follow-ups worth volunteering: LogisticRegression applies **L2 by default at C=1.0**, so an unscaled, unregularized fit is not what you got; and because the penalty acts on raw coefficient magnitudes, features on wildly different scales are penalised unequally — standardize first, or the regularization is arbitrary.',
-      isCaseBased: false,
-    },
-    {
-      question: 'How do you decide the classification threshold? Why is 0.5 not automatically right?',
-      answer:
-        '0.5 is only optimal if false positives and false negatives cost the same and the classes are balanced — rarely both true. The threshold is a *decision-theoretic* choice: pick the t that minimises expected cost, C_FP·P(FP|t) + C_FN·P(FN|t). Practically: get probabilities on a validation set, sweep t, and read the precision/recall curve against the business constraint (e.g. "recall ≥ 95% for cancer screening", "precision ≥ 90% before we auto-block a card"). Key engineering point: threshold moving costs nothing — no retraining, one config value, instantly reversible — whereas changing the loss or resampling the data does. So exhaust threshold tuning before touching the model. Caveat: this only works if the probabilities are calibrated; check with a reliability diagram first.',
-      isCaseBased: false,
-    },
-    {
-      question: 'One-vs-rest versus multinomial softmax for multi-class. When does the choice matter?',
-      answer:
-        'OvR trains K independent binary models ("class k vs the rest") and takes the argmax. It is trivially parallel, works with any binary learner, and each model can be tuned separately — but the K scores come from K separately-calibrated sigmoids, so they do not sum to 1 and comparing them is only loosely justified. It also inherits an imbalance problem: each sub-problem is 1-vs-(K−1). Multinomial fits one model with softmax and categorical cross-entropy, producing a genuine distribution over classes and a single convex objective. Choose multinomial when classes are mutually exclusive and you need comparable/calibrated probabilities (ranking, thresholding, downstream expected-cost decisions); choose OvR for multi-*label* problems, where a sample really can belong to several classes at once, or when you need per-class models for operational reasons. Note softmax with K = 2 reduces algebraically to the sigmoid.',
-      isCaseBased: false,
-    },
-    {
-      question: 'Interpret a fitted logistic regression for a non-technical stakeholder.',
-      answer:
-        'Translate coefficients into odds ratios: exponentiate. A coefficient of 0.707 becomes e^0.707 ≈ 2.03 — "one extra unit roughly doubles the odds". The sign tells direction, the magnitude tells strength (only comparable across features if they were standardized). State it in the units the stakeholder uses, not in log-odds. Be honest about the three caveats: (1) odds ≠ probability, and the same odds ratio moves probability a lot near 0.5 and barely at all near 0 or 1; (2) collinear features split credit arbitrarily, so two correlated predictors can each look weak while their combination is strong; (3) these are associations from observational data — not causal effects. This interpretability, with those caveats stated, is precisely why credit and clinical models still use logistic regression.',
-      isCaseBased: false,
-    },
-    {
-      question: 'Case: your logistic model scores 0.94 AUC offline. In production, precision collapses. Nothing about the code changed. Walk through it.',
-      answer:
-        'AUC is threshold-free and prevalence-independent, so a high AUC is fully compatible with terrible production precision. Hypotheses in order: (1) **Prevalence shift** — offline the positive rate was 20%, in production it is 0.5%; precision at a fixed threshold falls with base rate even at identical AUC. Test: compare positive rates; switch to PR-AUC and precision@k as the offline metric. (2) **Threshold carried over blindly** from a balanced or resampled training set — if you used SMOTE or class weights, the output probabilities are shifted and 0.5 means something different. Test: reliability diagram on production scores; recalibrate. (3) **Leakage offline** — a feature available at training time but not at prediction time, or computed after the label. Test: rebuild the feature set with strict point-in-time cuts. (4) **Covariate/feature drift** — an upstream pipeline changed units or started emitting nulls that impute to a very different value. Test: compare feature distributions train vs prod. Order matters: check prevalence and calibration first, because they are cheap and they explain this exact symptom most often.',
+        'AUC is threshold-free and does not depend on how rare the positive class is, so a high AUC is fully compatible with terrible production precision. Check in this order, cheapest first. One, prevalence shift: offline the positive rate was 20%, in production it is 0.5%, and precision at a fixed threshold falls with the base rate even at identical AUC — compare the positive rates and switch the offline metric to precision-recall AUC or precision at k. Two, the threshold was carried over from a rebalanced or resampled training set, so the output probabilities are shifted and 0.5 no longer means what it did — plot a reliability diagram on production scores and recalibrate. Three, leakage offline: a feature that exists at training time but not at prediction time, or one computed after the label — rebuild the features with strict point-in-time cuts. Four, input drift: an upstream pipeline changed units or started sending nulls. Prevalence and calibration explain this exact symptom most often, so start there.',
       isCaseBased: true,
     },
     {
-      question: 'Case: two engineers fit logistic regression on the same data. One standardizes features, one does not. Coefficients differ wildly and so does accuracy. Explain and say who is right.',
+      question: 'Case: two engineers fit logistic regression on the same data, one standardising the inputs and one not. Coefficients differ wildly and so does accuracy. Explain, and say who is right.',
       answer:
-        'Two separate effects. (1) **Coefficients**: without scaling, a coefficient is "per raw unit", so a feature measured in rupees gets a tiny coefficient and one measured in 0/1 gets a large one — the *models* can still be equivalent, and unstandardized fits are actually easier to explain in domain units. (2) **Accuracy**, which means they are *not* equivalent: sklearn regularizes by default (L2, C=1.0), and the L2 penalty is applied to raw coefficient magnitudes, so unscaled features are penalised unequally — the large-scale feature is effectively over-shrunk. Solvers like lbfgs/saga also converge more slowly or hit max_iter on unscaled data, which can leave the fit unconverged. Verdict: the one who standardized is right for *fitting*; for *reporting*, back-transform to raw units or quote odds ratios per meaningful unit. If you genuinely want no scaling effect, set the penalty to none — then the fits agree up to a linear reparametrisation.',
+        'Two separate effects. The coefficients differ for a boring reason: without scaling a coefficient means "per raw unit", so an input measured in rupees gets a tiny coefficient and a 0/1 input gets a large one. That alone does not make the models different, and unscaled coefficients are often easier to explain in domain units. The accuracy differing means they genuinely are different models, and the cause is regularisation: scikit-learn applies an L2 penalty by default, and that penalty acts on raw coefficient sizes, so an input on a large scale is effectively shrunk more than one on a small scale. Solvers also converge more slowly on unscaled inputs and can stop at the iteration cap, leaving the fit incomplete. Verdict: the one who standardised is right for fitting. For reporting, convert back to raw units or quote odds ratios per meaningful unit. Turn the penalty off entirely and the two fits agree again.',
       isCaseBased: true,
-    },
-    {
-      question: 'Where does the cross-entropy loss actually come from? Do not just say "it works better".',
-      answer:
-        'Maximum likelihood on a Bernoulli model. Assume y | x ~ Bernoulli(p) with p = σ(w·x + b). The likelihood of one sample is p^y (1−p)^(1−y). Take logs: y log p + (1−y) log(1−p). Sum over the dataset, negate to turn maximisation into minimisation, divide by m — that is exactly binary cross-entropy. So minimising log loss *is* maximum likelihood estimation, and that is why the outputs behave like probabilities rather than arbitrary scores. It also explains the alternative name: log loss, cross-entropy and negative log-likelihood are the same object seen from information theory, ML practice and statistics respectively. Bonus link: minimising cross-entropy is equivalent to minimising the KL divergence between the empirical label distribution and the model\'s.',
-      isCaseBased: false,
-    },
-    {
-      question: 'When would you still pick logistic regression over gradient boosting in 2025?',
-      answer:
-        'Five concrete cases. (1) **Baseline** — always fit it first; if boosting gains only a fraction of a point of AUC, the simpler model wins on maintenance. (2) **High-dimensional sparse text** — TF-IDF with 10⁵–10⁶ features and L2/L1 is where linear models are genuinely state-of-the-art-adjacent and train in seconds. (3) **Calibrated probabilities needed** — it optimises log loss directly, so it is well-calibrated by default; trees need Platt/isotonic post-hoc. (4) **Regulatory explainability** — credit, insurance, clinical decisions, where "why was this rejected" must be answerable in one sentence per feature. (5) **Latency/memory** — one dot product, a vector of floats, trivially servable at the edge. The tradeoff to state honestly: on tabular data with real interactions and nonlinearity, gradient boosting usually wins on raw accuracy, and no amount of feature engineering fully closes that gap cheaply.',
-      isCaseBased: false,
     },
   ],
   flashcards: [
-    { front: 'Logistic regression hypothesis', back: 'ŷ = σ(w·x + b), σ(z) = 1/(1+e⁻ᶻ). A linear score squashed into (0, 1) and read as P(class = 1).' },
-    { front: 'Sigmoid key facts', back: 'Maps ℝ → (0,1). σ(0) = 0.5. S-shaped. σ′(z) = σ(z)(1−σ(z)), max 0.25 at z = 0, → 0 at both tails (saturation).' },
-    { front: 'Why not linear regression for classification?', back: 'Unbounded outputs (probabilities > 1 or < 0), outliers tilt the line and shift the boundary, and the outputs carry no probability meaning.' },
-    { front: 'Decision boundary of logistic regression', back: 'σ(z) = 0.5 ⟺ z = 0 ⟺ w·x + b = 0. A hyperplane — always LINEAR, despite the curved sigmoid. XOR is unlearnable.' },
-    { front: 'Binary cross-entropy (log loss)', back: 'L = −[y log ŷ + (1−y) log(1−ŷ)]. Only one term survives per sample. It is the negative log-likelihood of a Bernoulli model.' },
-    { front: 'Why cross-entropy over MSE (one line)', back: 'MSE with sigmoid is non-convex AND its gradient carries σ′(z), which vanishes when the model is confidently wrong. CE cancels σ′ → gradient is (ŷ−y)·x.' },
-    { front: 'Cross-entropy gradient', back: '∂L/∂z = ŷ − y, so ∂L/∂w = (ŷ−y)·x. "Error × input" — identical in form to linear regression, no vanishing factor.' },
-    { front: 'Multi-class logistic regression', back: 'Softmax: eᶻᵏ / Σⱼ eᶻʲ + categorical cross-entropy. Multinomial = one joint model, probabilities sum to 1. OvR = K independent binary fits, scores not comparable.' },
-    { front: 'The sklearn C gotcha', back: 'C = INVERSE regularization strength (C = 1/λ). Small C = strong penalty. Ridge/Lasso use alpha, where bigger = MORE regularization. Opposite convention.' },
-    { front: 'Interpreting a coefficient', back: 'It is the change in LOG-ODDS per unit. Exponentiate for the odds ratio: coef 0.7 → e⁰·⁷ ≈ 2.0 → "one unit roughly doubles the odds". Valid only if features are scaled and non-collinear.' },
+    { front: 'Why not fit a plain line to 0/1 labels?', back: 'A line is unbounded. Fitted to six students it gives 1.4 at 7 hours and −0.4 at 0 hours. Neither is a probability, and no amount of data fixes it.' },
+    { front: 'Probability, odds, log-odds', back: 'Probability p is between 0 and 1. Odds = p/(1−p), between 0 and infinity. Log-odds (the logit) = ln(p/(1−p)), from minus to plus infinity. p = 0.75 gives odds 3 and logit 1.0986.' },
+    { front: 'Where the sigmoid comes from', back: 'Let the line produce the log-odds: ln(p/(1−p)) = w·x + b. Solve for p and you get p = 1/(1+e^(−z)). The sigmoid is the inverse of the logit, not an arbitrary squashing function.' },
+    { front: 'Sigmoid values worth memorising', back: 'σ(0) = 0.5 exactly. σ(1) = 0.7311, σ(−1) = 0.2689. σ(4) = 0.9820, σ(−4) = 0.0180. Steep near 0, flat at both ends, never reaching 0 or 1.' },
+    { front: 'Decision threshold vs decision boundary', back: 'The threshold is the cut-off on p for saying yes. The boundary is where the input crosses it. For w = 4.496, b = −15.547: threshold 0.5 gives 3.458 hours, 0.3 gives 3.270, 0.8 gives 3.766.' },
+    { front: 'Why the boundary is always straight', back: 'The sigmoid is monotonic, so p at least t is exactly z at least some constant, which is w·x + b = constant: a line in 2D, a plane in 3D. Moving the threshold slides it, never bends it.' },
+    { front: 'Cross-entropy vs squared error, in one line', back: 'Cross-entropy update is (p−y)·x. Squared error update is (p−y)·p(1−p)·x, and p(1−p) goes to zero when the model is confidently wrong — a 400x weaker push at the worst moment.' },
+    { front: 'The 0.5-on-rare-events trap', back: '20 sick in 1,000: flagging 8 and catching 6 scores 98.4% accuracy, versus 98.0% for saying "healthy" to everyone. Recall is 0.30. Set the threshold from the cost of a miss and report recall.' },
   ],
   mindmapMarkdown: `- Logistic Regression: Sigmoid, Cross-Entropy & Decision Boundaries
-  - Classification vs regression
-    - Predict a class / probability, not a number
-    - Plain line fails: unbounded, outlier-dragged, no probability meaning
-  - Sigmoid
-    - σ(z) = 1/(1+e⁻ᶻ): any real number into (0,1), σ(0) = 0.5
-    - σ′ = σ(1−σ), max 0.25 at z = 0
-  - Saturation
-    - Flat tails kill the learning signal
-    - Stacked sigmoids → vanishing gradients (Deep Learning)
-  - Probability out, threshold in
-    - 0.5 is a default, not a law — set it from business cost
-    - Free to move, no retraining (Metrics subject)
-  - Linear decision boundary
-    - w·x + b = 0 is a hyperplane; curved sigmoid, straight boundary
-    - Log-odds linear in x; XOR unlearnable
-  - Why cross-entropy, not MSE
-    - MSE + sigmoid: non-convex, gradient throttled by σ′(z)
-    - CE cancels σ′ → gradient = (ŷ − y)·x, vanishes nowhere
-  - Multi-class
-    - Softmax + categorical cross-entropy
-    - Multinomial (probs sum to 1) vs one-vs-rest (K binary fits)
-  - sklearn: L2 by default, C is INVERSE strength, scale your features
-  - Coefficients are log-odds: exp(coef) = odds ratio, so it explains itself
-  - Still wins as: baseline, sparse text, calibration, low latency`,
+  - The problem with a straight line
+    - Six students, line = 0.2571 x hours - 0.4
+    - Returns 1.4 at 7 hours, -0.4 at 0 hours: not probabilities
+  - Three scales for one belief
+    - Probability p: 0 to 1
+    - Odds p/(1-p): 0 to infinity
+    - Log-odds (logit) ln(p/(1-p)): minus to plus infinity
+  - The sigmoid
+    - Let the line produce the log-odds, then invert
+    - p = 1/(1+e^-z); sigma(0)=0.5, sigma(1)=0.7311, sigma(4)=0.9820
+    - S-curve: steep in the middle, flat at both ends
+  - Training
+    - Loss is cross-entropy: -ln(p) if y=1, -ln(1-p) if y=0
+    - Update is (p - y) times x, no vanishing factor
+    - Squared error carries p(1-p), which dies when confidently wrong
+  - Threshold and boundary
+    - Threshold = cut-off on p; boundary = where the input crosses it
+    - w=4.496, b=-15.547: 0.5 -> 3.458 h, 0.3 -> 3.270 h, 0.8 -> 3.766 h
+    - Moving it costs one number, not a training run
+  - Always a straight boundary
+    - Sigmoid is monotonic, so p >= t means z >= constant
+    - Linear separability; opposite-corner data is unfittable
+  - The classic mistake
+    - 0.5 is not sacred, and accuracy hides rare-event failure
+  - Beyond the basics
+    - Softmax and one-vs-rest for K classes
+    - Saturation and why ReLU replaced sigmoid in deep nets
+    - Weights are log-odds; e^w is the odds ratio
+    - sklearn C is INVERSE penalty strength`,
 }
 
 export default m

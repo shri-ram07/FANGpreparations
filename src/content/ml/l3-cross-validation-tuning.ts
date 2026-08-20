@@ -6,532 +6,673 @@ const m: Module = {
   level: 3,
   title: 'Cross-Validation & Hyperparameter Tuning',
   whyItMatters:
-    'Every number you report about a model comes from a split you chose. Choose it badly and you ship a lie — a model that scored 0.82 on your lucky slice and 0.68 in production. This module is how you get an estimate you can defend, and how you tune without quietly overfitting the very set you tune on.',
-  estMinutes: 50,
+    'You train a model, you test it on some rows you held back, and you get a number. That number is what you tell people. This module is about how much you should trust it. The answer, on a small dataset, is: much less than you think. We will take 200 rows, split them five different ways, and watch the same model score anywhere from 0.825 to 0.925 without anything about the model changing. Then we build the standard fix, k-fold cross-validation, by hand out of plain Python lists so you can see there is no magic in it. Then we show what happens when you tune a model against the same rows you use to judge it: a configuration that scored 0.900 on the split it was chosen on drops to 0.725 on rows it never touched.',
+  assumes: [
+    'You have read *What "Learning From Data" Actually Means* — you know what training data and test data are, and why a model is judged on rows it has not seen',
+    'You know what an average is, and what it means for a set of numbers to be spread out',
+    'You have seen a Python list, a for loop, an if statement, and list slicing like myList[0:4]',
+    'Everything else used here, including every sklearn function call, is explained on the line where it appears',
+  ],
+  estMinutes: 55,
   sections: [
     {
       type: 'intuition',
-      title: 'One split is one measurement',
-      md: `You weigh yourself once and the scale says 71.4 kg. Is that your weight? Roughly. Step off and on again: 71.1. Again: 71.8. One reading was never the truth — it was the truth plus noise.
+      title: 'One split gives you one number, and that number moves',
+      md: `You have 200 rows of data. You do the normal thing: keep 80% for training and 20% for testing, train a model, score it on the 20%. You get 0.825. You write that down.
 
-- A single train/test split is exactly one reading. The test score you get depends on *which rows landed in the test set*.
-- With 150 rows and a 25% test set, your score rests on ~38 rows. A handful of hard ones shift it by points.
-- Same model, same data, different \`random_state\` → different score. Nothing about the model changed.
-- So a bare "accuracy 0.82" is not a result. It is a result *plus an unknown error bar*.
-- Cross-validation's whole job: take several readings and report the mean **and** the spread.`,
+- The 20% test set is **40 rows**. Your entire published number rests on how the model did on those 40 rows.
+- Which 40 rows? Whichever ones the random shuffle picked. Change the shuffle and you get a different 40 rows.
+- If that new set of 40 happens to contain a few more of the easy cases, the score goes up. A few more hard ones, it goes down.
+- Nothing about the model changed. Nothing about the data changed. Only the *cut* changed.
+
+That is not a hypothesis. Run it.`,
     },
     {
       type: 'code',
       lang: 'python',
-      title: 'The same model, scored five different ways — twice',
+      title: 'The same model, the same data, five different cuts',
+      code: `from sklearn.datasets import make_classification
+from sklearn.model_selection import train_test_split
+from sklearn.tree import DecisionTreeClassifier
+
+X, y = make_classification(n_samples=200, n_features=8, n_informative=3, random_state=0)
+
+for seed in [1, 2, 3, 4, 5]:
+    Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.2, random_state=seed)
+    model = DecisionTreeClassifier(max_depth=4, random_state=0)
+    model.fit(Xtr, ytr)
+    print(seed, round(model.score(Xte, yte), 4))
+
+# ---- real output ----
+# 1 0.825
+# 2 0.85
+# 3 0.875
+# 4 0.925
+# 5 0.825`,
+      annotations: {
+        1: 'make_classification is a sklearn function that invents a fake dataset for you. We use fake data so you can re-run every number on this page yourself.',
+        2: 'train_test_split cuts a dataset into two pieces: one to train on, one to test on.',
+        3: 'DecisionTreeClassifier is the model we will use throughout. What it does internally does not matter here — it is just something that learns from rows and then predicts.',
+        5: 'Builds 200 rows. Each row has 8 columns of numbers (n_features) of which only 3 actually carry a signal (n_informative); the other 5 are noise. random_state=0 fixes the invented data so it is the same every run. X holds the columns, y holds the true answer (0 or 1) for each row.',
+        7: 'Loop over five different shuffle settings. Everything below is identical on each pass except this number.',
+        8: 'Cut the 200 rows into 160 training rows and 40 test rows. test_size=0.2 means "20% goes to test". random_state=seed decides WHICH rows go where, so a different seed gives a different pair of piles. The four names on the left unpack the four returned pieces in order: train inputs, test inputs, train answers, test answers.',
+        9: 'Build a fresh, untrained model. max_depth=4 limits how many questions deep the tree may go. random_state=0 fixes the model\'s own internal randomness, so the model is NOT the thing changing between passes.',
+        10: '.fit() is sklearn\'s name for "train". It looks at the 160 training rows and their answers and adjusts itself.',
+        11: '.score() runs the trained model on the 40 test rows and returns the fraction it got right. round(x, 4) trims the printout to 4 decimal places.',
+      },
+    },
+    {
+      type: 'note',
+      md: `Read the five numbers again: **0.825, 0.850, 0.875, 0.925, 0.825**. The lowest and the highest are **10 percentage points apart**, and the only difference between them is which 40 rows landed in the test pile. If your colleague reports 0.925 and you report 0.825, you are not disagreeing about the model. You are each holding one draw from the same lottery.`,
+    },
+    {
+      type: 'intuition',
+      title: 'The fix: let every row take a turn as test data',
+      md: `The problem with one split is that 160 rows were used for training and never got to be judged on, while 40 rows were judged on and never got to teach. So do it several times, rotating the job around.
+
+- A **fold** is one of the equal-sized chunks you cut the data into. If you cut 20 rows into 5 chunks of 4, each chunk of 4 is a fold.
+- **k-fold cross-validation** is this procedure: cut the data into k folds; then run k separate experiments. In experiment number *i*, fold *i* is the test set and the other k−1 folds are joined together as the training set. You end up with k scores.
+- The letter **k** is just how many folds you chose. k=5 means five folds and five experiments; k=10 means ten of each.
+- Two things come out of it that a single split cannot give you: every row is tested exactly once, and you get k numbers instead of one, so you can see how much they disagree.
+
+It costs k model trainings instead of one. That is the whole price.
+
+Before touching any library, let us build the folds out of a plain Python list.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Part 1: cut 20 row numbers into 5 folds, by hand',
+      code: `rows = list(range(20))
+K = 5
+size = len(rows) // K
+
+folds = []
+for f in range(K):
+    folds.append(rows[f * size:(f + 1) * size])
+
+for f in range(K):
+    print('fold', f, '->', folds[f])
+
+# ---- real output ----
+# fold 0 -> [0, 1, 2, 3]
+# fold 1 -> [4, 5, 6, 7]
+# fold 2 -> [8, 9, 10, 11]
+# fold 3 -> [12, 13, 14, 15]
+# fold 4 -> [16, 17, 18, 19]`,
+      annotations: {
+        1: 'range(20) counts 0 to 19; list(...) turns that count into a real list. These are row NUMBERS, not the data itself — we are only deciding who goes where.',
+        2: 'How many folds we want. Five.',
+        3: 'How big each fold must be. len(rows) is 20, and // is integer division: it divides and throws away any remainder, so 20 // 5 is exactly 4.',
+        5: 'An empty list that will hold the five folds. Each item in it will itself be a list of row numbers.',
+        6: 'Run once per fold, with f taking the values 0, 1, 2, 3, 4.',
+        7: 'rows[a:b] is a slice: it means "the part of rows from position a up to but not including position b". For f=0 that is rows[0:4], for f=1 it is rows[4:8], and so on. .append adds that slice to folds as one item.',
+        9: 'Loop over the five folds again, this time only to look at them.',
+        10: 'Print the fold number and the row numbers it contains. Notice the five folds together contain all 20 rows, with no row appearing twice.',
+      },
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Part 2: rotate — each fold takes a turn as the test set',
+      code: `for f in range(K):
+    test = folds[f]
+    train = []
+    for g in range(K):
+        if g != f:
+            train = train + folds[g]
+    print('round', f, 'TEST ', test)
+    print('        TRAIN', train)
+
+# ---- real output ----
+# round 0 TEST  [0, 1, 2, 3]
+#         TRAIN [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+# round 1 TEST  [4, 5, 6, 7]
+#         TRAIN [0, 1, 2, 3, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+# round 2 TEST  [8, 9, 10, 11]
+#         TRAIN [0, 1, 2, 3, 4, 5, 6, 7, 12, 13, 14, 15, 16, 17, 18, 19]
+# round 3 TEST  [12, 13, 14, 15]
+#         TRAIN [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 16, 17, 18, 19]
+# round 4 TEST  [16, 17, 18, 19]
+#         TRAIN [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]`,
+      annotations: {
+        1: 'One pass per round. f is the number of the fold that is on test duty this round.',
+        2: 'The test set for this round is simply fold number f — 4 row numbers.',
+        3: 'Start an empty training list. We are about to fill it with everything that is not fold f.',
+        4: 'Walk over all five folds again, using a second counter g so we do not lose track of f.',
+        5: '!= means "is not equal to". So this skips the fold currently on test duty and lets all the others through.',
+        6: 'Adding two lists with + glues them end to end into a longer list. After this inner loop finishes, train holds the 16 row numbers from the other four folds.',
+        7: 'Print which rows are being tested on this round.',
+        8: 'Print which rows are being trained on. Check the output: TEST and TRAIN never share a row, and across the five rounds every row is in TEST exactly once.',
+      },
+    },
+    {
+      type: 'note',
+      md: `That is the entire algorithm. Sixteen rows train, four rows are judged, and the four judged rows rotate. sklearn's \`KFold\` does exactly this and nothing more — you have just written it. The only reason libraries exist for it is convenience, not difficulty.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Part 3: the same construction on the real 200 rows',
+      code: `from sklearn.datasets import make_classification
+from sklearn.tree import DecisionTreeClassifier
+
+X, y = make_classification(n_samples=200, n_features=8, n_informative=3, random_state=0)
+rows = list(range(200))
+folds = []
+for f in range(5):
+    folds.append(rows[f * 40:(f + 1) * 40])
+print('fold sizes:', [len(f) for f in folds])
+
+# ---- real output ----
+# fold sizes: [40, 40, 40, 40, 40]`,
+      annotations: {
+        1: 'The same fake-data generator as before.',
+        2: 'The same model type as before.',
+        4: 'The identical 200 rows we used for the five-split experiment, so the numbers stay comparable.',
+        5: 'Row numbers 0 to 199.',
+        6: 'The empty holder for our five folds.',
+        7: 'Five folds again.',
+        8: '200 rows divided by 5 folds is 40 rows each, so the slices are rows[0:40], rows[40:80], and so on. This is the Part 1 code with 20 replaced by 200 and 4 replaced by 40.',
+        9: 'A list comprehension: "len(f) for f in folds" builds a new list holding the length of each fold. Read it as "the size of every fold". It confirms all five came out at 40.',
+      },
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Part 4: five folds, five scores, one mean',
+      code: `scores = []
+for f in range(5):
+    test = folds[f]
+    train = []
+    for g in range(5):
+        if g != f:
+            train = train + folds[g]
+    model = DecisionTreeClassifier(max_depth=4, random_state=0)
+    model.fit(X[train], y[train])
+    scores.append(round(model.score(X[test], y[test]), 4))
+
+print('five fold scores:', scores)
+print('mean  ', round(sum(scores) / 5, 4))
+print('spread', round(max(scores) - min(scores), 4))
+
+# ---- real output ----
+# five fold scores: [0.9, 0.825, 0.9, 0.9, 0.8]
+# mean   0.865
+# spread 0.1`,
+      annotations: {
+        1: 'Somewhere to collect the five scores.',
+        2: 'Five rounds, exactly the rotation from Part 2.',
+        3: 'This round\'s test rows: fold f.',
+        4: 'Start this round\'s training list empty.',
+        5: 'Walk the folds with the second counter.',
+        6: 'Skip the fold on test duty.',
+        7: 'Glue every other fold onto the training list, giving 160 row numbers.',
+        8: 'A brand new untrained model for this round. This matters: reusing the previous round\'s trained model would let it remember rows it is about to be tested on.',
+        9: 'X[train] means "the rows of X at these row numbers". Handing a list of positions to X like this is a numpy feature called fancy indexing, and it is why we kept row numbers rather than rows all along. y[train] picks the matching answers.',
+        10: 'Score the trained model on this round\'s 40 test rows and store the result.',
+        12: 'The five scores, one per fold.',
+        13: 'sum(scores) adds all five, dividing by 5 gives the average.',
+        14: 'The gap between the best fold and the worst fold. This one number is what a single split can never tell you.',
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'The mean is not the whole story',
+      md: `The five fold scores are **0.900, 0.825, 0.900, 0.900, 0.800**. Their mean is 0.865. Reporting only 0.865 throws away the most useful half of what you just measured.
+
+- The **spread** here is 0.900 − 0.800 = **0.100**. On any given 40 rows, this model might land ten points either side of 0.865.
+- A tighter summary of the spread is the **standard deviation**: the typical distance of a fold score from the mean. Compute it by hand. The five gaps from the mean 0.865 are +0.035, −0.040, +0.035, +0.035, −0.065.
+- Square each gap so the minus signs stop cancelling the plus signs: 0.001225, 0.001600, 0.001225, 0.001225, 0.004225. They add up to 0.009500.
+- Divide by 5 to average them: 0.001900. Take the square root to undo the squaring: **0.0436**.
+- So the honest report is **0.865, give or take about 0.044**, not "0.865".
+
+Now the practical payoff. Suppose you try a second model and its cross-validation mean is 0.873. That is 0.008 better. Your fold-to-fold noise is 0.044 — five times larger than the difference. **You have not shown the second model is better.** You have shown the two are indistinguishable with 200 rows.
+
+A wide spread means one of two things, and both are worth knowing: either the dataset is small enough that 40 test rows are simply noisy, or the folds are genuinely different from each other because the data is not uniform — for example, one fold contains most of the rare class, or most of one customer's records. The next two sections are about that second case.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'The library version gives exactly the same numbers',
+      code: `from sklearn.model_selection import cross_val_score, KFold
+
+model = DecisionTreeClassifier(max_depth=4, random_state=0)
+scores = cross_val_score(model, X, y, cv=KFold(n_splits=5))
+print([round(float(s), 4) for s in scores])
+print('mean', round(float(scores.mean()), 4), 'std', round(float(scores.std()), 4))
+
+# ---- real output ----
+# [0.9, 0.825, 0.9, 0.9, 0.8]
+# mean 0.865 std 0.0436`,
+      annotations: {
+        1: 'cross_val_score runs the whole rotation for you. KFold is the fold-cutter — the Part 1 slicing code, packaged.',
+        3: 'One untrained model. cross_val_score never trains this object itself; it makes a fresh copy for each fold, the same discipline as line 8 of Part 4.',
+        4: 'Hand it the model, the data, and how to cut. cv=KFold(n_splits=5) says "five contiguous folds, no shuffling", which is precisely what we built by hand. It returns the five scores.',
+        5: 'float(s) converts numpy\'s number type to a plain Python float so it prints as 0.9 and not as np.float64(0.9). The rest is the list comprehension from Part 3.',
+        6: '.mean() averages the five scores and .std() is the standard deviation — the same 0.0436 we computed by hand above, which is how you know the hand calculation was right.',
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'Stratified k-fold: when the folds must all look alike',
+      md: `Cutting the rows into five contiguous blocks assumes the rows are in no particular order. Sometimes they are, and sometimes even random order is not enough.
+
+- **Stratified k-fold** is k-fold with one extra rule: each fold must contain roughly the same proportion of each class as the whole dataset does. If 10% of your rows are class 1, then about 10% of every fold is class 1.
+- Why classification needs it: the thing you are measuring is how well the model handles each class. If a fold contains **zero** rows of the rare class, that fold's score says nothing at all about the rare class — and yet it goes into your average with equal weight.
+- The smaller the dataset and the rarer the class, the more likely that is. It is not a corner case; it is the normal outcome.
+- Regression has no classes to balance, so plain k-fold is the default there. If the target is very skewed, people sometimes group it into bands and stratify on the bands.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Two folds with zero positives, and the fix',
       code: `import numpy as np
 from sklearn.datasets import make_classification
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import train_test_split, cross_val_score, StratifiedKFold
+from sklearn.model_selection import KFold, StratifiedKFold
 
-X, y = make_classification(n_samples=150, n_features=12, n_informative=4,
-                           class_sep=1.3, flip_y=0.05, random_state=0)
-clf = RandomForestClassifier(n_estimators=100, random_state=0)
+Xs, ys = make_classification(n_samples=60, n_features=8, n_informative=3, weights=[0.93], random_state=0)
+print('positives in the whole dataset:', int(ys.sum()), 'out of', len(ys))
+for name, splitter in [('KFold', KFold(5)), ('StratifiedKFold', StratifiedKFold(5))]:
+    counts = []
+    for train_idx, test_idx in splitter.split(Xs, ys):
+        counts.append(int(ys[test_idx].sum()))
+    print(name, 'positives per test fold:', counts)
 
-single = []
-for seed in range(5):                        # same model, same data, 5 different splits
-    Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.25, stratify=y, random_state=seed)
-    single.append(clf.fit(Xtr, ytr).score(Xte, yte))
-print('one split, 5 seeds :', np.round(single, 3), 'spread', round(max(single) - min(single), 3))
-
-cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=0)
-folds = cross_val_score(clf, X, y, cv=cv, scoring='accuracy')
-print('5-fold scores      :', np.round(folds, 3))
-print('5-fold mean +/- std:', round(folds.mean(), 3), '+/-', round(folds.std(), 3))
-
-# one split, 5 seeds : [0.711 0.684 0.816 0.684 0.789] spread 0.132
-# 5-fold scores      : [0.7   0.7   0.7   0.833 0.9  ]
-# 5-fold mean +/- std: 0.767 +/- 0.084`,
+# ---- real output ----
+# positives in the whole dataset: 5 out of 60
+# KFold positives per test fold: [2, 2, 0, 1, 0]
+# StratifiedKFold positives per test fold: [1, 1, 1, 1, 1]`,
       annotations: {
-        8: 'The model seed is FIXED. Every difference you are about to see comes from the split alone, not from the forest.',
-        11: 'Only random_state changes per loop. This is the honest version of "I reran it and got a different number".',
-        12: 'stratify=y keeps the class ratio identical in train and test — without it, small-data splits also swing on class balance.',
-        16: 'StratifiedKFold + shuffle + random_state: the three things you should type by reflex. No shuffle means fold 1 is just the first 30 rows, which is a disaster if the file is sorted by label.',
-        17: 'cross_val_score clones the estimator for every fold. Nothing leaks between folds, and your original clf stays unfitted.',
-        21: 'Read this line and stop trusting single splits: 0.684 to 0.816. Thirteen accuracy points, from luck alone.',
+        1: 'numpy is the array library sklearn returns its data in. We need it here only because ys is a numpy array.',
+        2: 'The dataset generator again.',
+        3: 'The two fold-cutters we are comparing.',
+        5: 'A deliberately small, deliberately lopsided dataset: 60 rows, and weights=[0.93] asks for about 93% of them to be class 0. So class 1 is rare.',
+        6: 'ys is a list of 0s and 1s, so ys.sum() adds them up and therefore counts the 1s. int(...) drops the numpy wrapper so it prints cleanly. Result: 5 positives out of 60.',
+        7: 'A list of two (name, cutter) pairs, unpacked into the two loop variables name and splitter on each pass — so the body below runs once for KFold and once for StratifiedKFold.',
+        8: 'Somewhere to record, for each fold, how many positives landed in it.',
+        9: '.split() hands back one (training row numbers, test row numbers) pair per fold — five pairs here. This is what our hand-written rotation loop produced, in library form.',
+        10: 'ys[test_idx] picks the true answers for this fold\'s test rows, and .sum() counts how many of them are 1.',
+        11: 'Print the per-fold counts. Plain KFold left two folds with zero positives; the stratified version put exactly one in each.',
       },
     },
     {
       type: 'note',
-      md: `Look at what happened. The single-split score ranged **0.684 to 0.816** — a 13-point swing that had nothing to do with the model. Cross-validation replaces that lottery ticket with **0.767 ± 0.084**. Note the std is *not* small: this data is genuinely hard to score on. That is the point. CV did not make the noise go away, it **made the noise visible**. A model that beats yours by 0.01 when your fold std is 0.08 has not beaten anything.`,
+      md: `Look at what plain KFold produced: **[2, 2, 0, 1, 0]**. Folds 2 and 4 contain no positive rows at all, so on those two rounds the model was graded entirely on class 0 — and a model that answers "class 0" to everything scores 100% there. Two of your five numbers were measuring nothing. Stratified k-fold gives **[1, 1, 1, 1, 1]** and every round tests what you meant to test. This is why stratification is the default for classification and not an option you switch on when things look odd.`,
     },
     {
       type: 'intuition',
-      title: 'k-fold: everybody gets a turn in the test set',
-      md: `Five friends split a restaurant bill, but each round one person judges the food while the others cook. Rotate until everyone has judged once.
+      title: 'Three more ways to cut, and the specific problem each one solves',
+      md: `Plain and stratified k-fold cover most tabular data. Three other cutters exist because three other things can go wrong.
 
-- Chop the data into **k equal folds** (k=5 → five slices of 20%).
-- Round 1: train on folds 2–5, validate on fold 1. Round 2: train on 1,3,4,5, validate on fold 2. Rotate.
-- After k rounds every row has been validated **exactly once**, and used for training k−1 times.
-- Report the **mean** of the k scores as your estimate, and the **std** as your error bar.
-- Cost: k model fits instead of 1. That is the entire price.`,
-    },
-    {
-      type: 'visual',
-      component: 'PointerBoxDiagram',
-      props: {
-        title: 'k-fold rotation, then what time-ordered data does to it',
-        notice:
-          'Right column = the 5 folds of the dataset. Left column = what this round does with them. The flagged fold is the one being held out. Scores are the real numbers from the code above.',
-        leftLabel: 'this round',
-        rightLabel: 'the dataset, in 5 folds',
-        frames: [
-          {
-            note: 'Round 1 of 5. Fold 1 is held out and never seen during training. Score on it: 0.700.',
-            stack: [
-              { name: 'train on', value: 'folds 2,3,4,5' },
-              { name: 'validate on', value: 'fold 1', to: 'f1' },
-              { name: 'score', value: '0.700' },
-            ],
-            heap: [
-              { id: 'f1', value: 'fold 1  (30 rows)', label: 'HELD OUT' },
-              { id: 'f2', value: 'fold 2  (30 rows)', label: 'train' },
-              { id: 'f3', value: 'fold 3  (30 rows)', label: 'train' },
-              { id: 'f4', value: 'fold 4  (30 rows)', label: 'train' },
-              { id: 'f5', value: 'fold 5  (30 rows)', label: 'train' },
-            ],
-          },
-          {
-            note: 'Round 2. Fold 1 rejoins training, fold 2 steps out. A FRESH model is fitted — nothing carries over from round 1.',
-            stack: [
-              { name: 'train on', value: 'folds 1,3,4,5' },
-              { name: 'validate on', value: 'fold 2', to: 'f2' },
-              { name: 'score', value: '0.700' },
-            ],
-            heap: [
-              { id: 'f1', value: 'fold 1  (30 rows)', label: 'train' },
-              { id: 'f2', value: 'fold 2  (30 rows)', label: 'HELD OUT' },
-              { id: 'f3', value: 'fold 3  (30 rows)', label: 'train' },
-              { id: 'f4', value: 'fold 4  (30 rows)', label: 'train' },
-              { id: 'f5', value: 'fold 5  (30 rows)', label: 'train' },
-            ],
-          },
-          {
-            note: 'Round 3. Same story. Every row is now guaranteed to be validated exactly once across the whole procedure.',
-            stack: [
-              { name: 'train on', value: 'folds 1,2,4,5' },
-              { name: 'validate on', value: 'fold 3', to: 'f3' },
-              { name: 'score', value: '0.700' },
-            ],
-            heap: [
-              { id: 'f1', value: 'fold 1  (30 rows)', label: 'train' },
-              { id: 'f2', value: 'fold 2  (30 rows)', label: 'train' },
-              { id: 'f3', value: 'fold 3  (30 rows)', label: 'HELD OUT' },
-              { id: 'f4', value: 'fold 4  (30 rows)', label: 'train' },
-              { id: 'f5', value: 'fold 5  (30 rows)', label: 'train' },
-            ],
-          },
-          {
-            note: 'Round 4 scores 0.833. Nothing improved — this fold simply happened to contain easier rows. This is the noise you were blind to with one split.',
-            stack: [
-              { name: 'train on', value: 'folds 1,2,3,5' },
-              { name: 'validate on', value: 'fold 4', to: 'f4' },
-              { name: 'score', value: '0.833' },
-            ],
-            heap: [
-              { id: 'f1', value: 'fold 1  (30 rows)', label: 'train' },
-              { id: 'f2', value: 'fold 2  (30 rows)', label: 'train' },
-              { id: 'f3', value: 'fold 3  (30 rows)', label: 'train' },
-              { id: 'f4', value: 'fold 4  (30 rows)', label: 'HELD OUT' },
-              { id: 'f5', value: 'fold 5  (30 rows)', label: 'train' },
-            ],
-          },
-          {
-            note: 'Round 5 scores 0.900. If THIS had been your one lucky train/test split, you would be reporting 0.90 to your team.',
-            stack: [
-              { name: 'train on', value: 'folds 1,2,3,4' },
-              { name: 'validate on', value: 'fold 5', to: 'f5' },
-              { name: 'score', value: '0.900' },
-            ],
-            heap: [
-              { id: 'f1', value: 'fold 1  (30 rows)', label: 'train' },
-              { id: 'f2', value: 'fold 2  (30 rows)', label: 'train' },
-              { id: 'f3', value: 'fold 3  (30 rows)', label: 'train' },
-              { id: 'f4', value: 'fold 4  (30 rows)', label: 'train' },
-              { id: 'f5', value: 'fold 5  (30 rows)', label: 'HELD OUT' },
-            ],
-          },
-          {
-            note: 'Average the five. 0.767 +/- 0.084 — one estimate WITH an error bar. Report both numbers, always.',
-            stack: [
-              { name: 'mean', value: '0.767' },
-              { name: 'std', value: '0.084' },
-              { name: 'report', value: '0.77 +/- 0.08' },
-            ],
-            heap: [
-              { id: 'f1', value: 'fold 1 -> 0.700', label: 'scored' },
-              { id: 'f2', value: 'fold 2 -> 0.700', label: 'scored' },
-              { id: 'f3', value: 'fold 3 -> 0.700', label: 'scored' },
-              { id: 'f4', value: 'fold 4 -> 0.833', label: 'scored' },
-              { id: 'f5', value: 'fold 5 -> 0.900', label: 'scored' },
-            ],
-          },
-          {
-            note: 'Now the SAME rotation on time-ordered data: 12 days of sales. A shuffled fold puts day 4 in validation while days 7-10 sit in training. The red arrow is training on the future.',
-            stack: [
-              { name: 'validate on', value: 'day 4', to: 'past' },
-              { name: 'train on', value: 'days 7-10', to: 'future', danger: true },
-              { name: 'CV score', value: '0.94  (fiction)' },
-            ],
-            heap: [
-              { id: 'past', value: 'day 4  (validated)', label: 'the past' },
-              { id: 'future', value: 'days 7-10  (trained)', label: 'THE FUTURE' },
-              { id: 'live', value: 'production: day 13', label: 'no future exists' },
-            ],
-          },
-          {
-            note: 'The fix: expanding window. Round 1 trains on days 0-3 only and validates on the days that come NEXT. Later days do not exist yet.',
-            stack: [
-              { name: 'train on', value: 'days 0-3', to: 'a' },
-              { name: 'validate on', value: 'days 4-5', to: 'b' },
-              { name: 'score', value: 'honest' },
-            ],
-            heap: [
-              { id: 'a', value: 'days 0-3', label: 'train' },
-              { id: 'b', value: 'days 4-5', label: 'HELD OUT' },
-              { id: 'c', value: 'days 6-11', label: 'not yet visible' },
-            ],
-          },
-          {
-            note: 'Round 2 expands: the validated days 4-5 join training, days 6-7 become the new validation. Training set grows, direction of time never reverses.',
-            stack: [
-              { name: 'train on', value: 'days 0-5', to: 'a' },
-              { name: 'validate on', value: 'days 6-7', to: 'b' },
-              { name: 'score', value: 'honest' },
-            ],
-            heap: [
-              { id: 'a', value: 'days 0-5', label: 'train (grown)' },
-              { id: 'b', value: 'days 6-7', label: 'HELD OUT' },
-              { id: 'c', value: 'days 8-11', label: 'not yet visible' },
-            ],
-          },
-        ],
-      },
+- **Leave-one-out cross-validation** is k-fold taken to its limit: k equals the number of rows, so each fold is a single row. With 200 rows that is 200 model trainings, each judged on exactly one row. It uses every scrap of data for training, which is attractive when you have very little. The costs are real: 200 trainings instead of 5, and 200 models that are nearly identical to each other (they differ by one row), so averaging their scores cancels less noise than you would hope.
+- **Group k-fold** is for data where rows come in clumps that belong to the same thing — 3 scans from one patient, 40 clicks from one user, 12 monthly rows for one shop. Group k-fold guarantees that all rows from one group land in the *same* fold. Without it, patient 17's scan number 1 is in the training set and their scan number 2 is in the test set, so the model can score well by recognising the patient rather than the disease. That is called **leakage**: information reaching the model at judging time that it will not have in real use. Group k-fold prevents exactly that leak, and it usually makes your score go *down*, because the inflated number was the wrong one.
+- **Time-series split** is for data with a time order — sales by day, transactions by hour. Instead of random folds it trains on the first stretch of time and tests on the stretch immediately after, then extends the training stretch and rolls forward. Fold 1 might train on days 1–40 and test on 41–80; fold 2 trains on days 1–80 and tests on 81–120; and so on. Shuffling this data is cheating in a very literal sense: it puts *future* days in the training set and asks the model to predict a day in the *past*. In real use the future has not happened yet. The last section of this module walks into that mistake on purpose and measures how big the lie is.`,
     },
     {
       type: 'intuition',
-      title: 'Choosing k: the one tradeoff',
-      md: `k controls how much data each model gets to train on, and how many models you pay for.
+      title: 'Hyperparameters: the settings you choose, not the ones the model learns',
+      md: `Everything so far measured *one* model. Tuning is about choosing between many. First, the vocabulary.
 
-- **k=5** → each model trains on 80% of the data, 5 fits. **k=10** → 90%, 10 fits. Both are fine defaults; 5 for slow models, 10 for small datasets.
-- Bigger k = more training data per fold = **less pessimistic bias** in the estimate (your fold models are closer to the final full-data model).
-- Bigger k also = training sets that overlap almost completely = the k scores are highly correlated, so **averaging them removes less noise than you think**.
-- **Leave-one-out (LOOCV, k=n)**: each model trains on n−1 rows — maximum data, minimum bias. But n fits (10,000 rows → 10,000 models) and a famously **high-variance** estimate.
-- Practical rule: k=5 unless the dataset is small; then k=10 or repeated 5-fold (\`RepeatedStratifiedKFold\`) to average over several shufflings.`,
+- When \`.fit()\` runs, the model works out numbers from the data — where each tree split goes, what each coefficient is. Those learned numbers are the model's **parameters**. You never set them by hand; that is what training is.
+- A **hyperparameter** is a setting you choose *before* \`.fit()\` runs, which controls how the fitting happens. \`max_depth=4\` in our tree is one. So is \`min_samples_leaf\`, the smallest number of rows a tree is allowed to leave in a final branch.
+- The simple test: if \`.fit()\` changes it, it is a parameter. If you had to type it before calling \`.fit()\`, it is a hyperparameter.
+- Parameters are *solved for*, because training has a direct method for finding them. Hyperparameters have no such method — changing \`max_depth\` changes the entire fitting procedure, so the only way to find out whether 4 beats 6 is to train both and compare.
+- That is why every tuning method in existence has the same shape: pick a setting, train, score, decide what to try next. They differ only in how they pick.`,
     },
     {
       type: 'intuition',
-      title: 'Stratified k-fold: keep the class ratio',
-      md: `Your data is 5% fraud. Random folds of 100 rows will contain 2, 5, 9, 4, 5 fraud cases by pure chance — and one fold might contain zero.
+      title: 'Tuning must not touch the set you report on',
+      md: `Here is the trap, and it is the single most common way a model looks better on a slide than in production.
 
-- **Stratified k-fold** makes each fold carry the same class proportions as the full dataset.
-- Fold with zero positives → recall is undefined and your score becomes garbage or NaN.
-- Even without that extreme, unequal positive counts inflate fold-to-fold variance for no reason.
-- Rule: for **classification, stratify by default**. Non-negotiable when classes are imbalanced or n is small.
-- scikit-learn quietly does this for you: passing \`cv=5\` to a classifier uses StratifiedKFold. Passing your own \`KFold\` object silently turns it off.
-- For regression there is no class to stratify on — but binning a skewed target and stratifying on the bins is a legitimate trick.`,
-    },
-    {
-      type: 'intuition',
-      title: 'Group k-fold: the same patient must not appear on both sides',
-      md: `One patient has 40 scans in your dataset. Random folds put 32 in training and 8 in validation. Your model now recognizes *that patient*, not the disease — and scores brilliantly.
+You try 40 different settings. You score each one on the same held-out rows. You pick the winner. You report the winner's score.
 
-- **GroupKFold** takes a \`groups\` array and guarantees every row of a group lands in the **same fold**.
-- Group = whatever unit repeats: patient, user, session, device, store, document, image-taken-on-the-same-day.
-- Ask the question out loud: *"at prediction time, will I already have seen other rows from this same entity?"* If no, you must group.
-- Skipping this is a **data leakage** bug, not a CV preference — the same family of mistake covered in the feature engineering and leakage module (scaling fitted before the split, target encoding computed on all rows).
-- The tell: CV score is excellent, production score collapses. Grouping usually drops CV by several points — that drop is you deleting a lie, not losing accuracy.
-- \`StratifiedGroupKFold\` exists for when you need both class balance and group integrity.`,
-    },
-    {
-      type: 'intuition',
-      title: 'Time-series split: the future must never train the past',
-      md: `Predicting tomorrow's sales with a model that saw next month is not a model, it is a time machine. And you cannot deploy a time machine.
+- Every one of those 40 scores is the true quality of that setting **plus some luck**, because it was measured on only 40 rows.
+- Picking the maximum of 40 noisy numbers does not pick the setting with the best true quality. It picks the setting with the best true quality *plus the best luck*, and mostly it is the luck doing the work.
+- So the winner's score is systematically too high. Not "sometimes too high" — too high on average, every time, by more the more settings you try. This has a name: the **winner's curse**.
+- The defence is a third pile of rows. Split the data three ways: a **training set** to fit on, a **validation set** to compare settings on, and a **test set** that nothing in the tuning process is ever allowed to look at. Score the winner on the test set once, at the end.
 
-- Time-ordered data must **never be shuffled**. Every fold's training rows must be strictly earlier than its validation rows.
-- **Expanding window** (sklearn's \`TimeSeriesSplit\`): train days 0–3 → validate 4–5; train 0–5 → validate 6–7; train 0–7 → validate 8–9. Training set grows, validation marches forward.
-- **Rolling window**: same march, but the training window is fixed-length and slides (train 0–3, then 2–5, then 4–7). Use it when old regimes stop being relevant.
-- Add a **gap** between train and validation if your label needs time to materialize (predicting 7-day churn → drop the 7 days adjacent to the boundary).
-- Same rule applies to any ordering that mirrors deployment: user cohorts, app versions, seasons.`,
+Watch it happen.`,
     },
     {
       type: 'code',
       lang: 'python',
-      title: 'The fold indices, printed — shuffling time data, seen',
-      code: `import numpy as np
-from sklearn.model_selection import KFold, TimeSeriesSplit
+      title: 'Step 1: three piles, not two',
+      code: `from sklearn.datasets import make_classification
+from sklearn.model_selection import train_test_split
 
-days = np.arange(12)                          # 12 days of data, in chronological order
+X, y = make_classification(n_samples=200, n_features=8, n_informative=3, flip_y=0.15, random_state=0)
+Xrest, Xte, yrest, yte = train_test_split(X, y, test_size=0.2, random_state=9)
+Xtr, Xva, ytr, yva = train_test_split(Xrest, yrest, test_size=0.25, random_state=9)
+print('train', len(Xtr), 'validation', len(Xva), 'test', len(Xte))
 
-print('TimeSeriesSplit (expanding window):')
-for tr, te in TimeSeriesSplit(n_splits=4).split(days):
-    print('  train', days[tr], '-> validate', days[te])
-
-print('Plain KFold(shuffle=True) fold 0 - look at the day numbers:')
-tr, te = next(iter(KFold(n_splits=4, shuffle=True, random_state=0).split(days)))
-print('  train', np.sort(days[tr]), '-> validate', np.sort(days[te]))
-
-# TimeSeriesSplit (expanding window):
-#   train [0 1 2 3] -> validate [4 5]
-#   train [0 1 2 3 4 5] -> validate [6 7]
-#   train [0 1 2 3 4 5 6 7] -> validate [8 9]
-#   train [0 1 2 3 4 5 6 7 8 9] -> validate [10 11]
-# Plain KFold(shuffle=True) fold 0 - look at the day numbers:
-#   train [ 0  1  2  3  5  7  8  9 10] -> validate [ 4  6 11]`,
+# ---- real output ----
+# train 120 validation 40 test 40`,
       annotations: {
-        7: 'TimeSeriesSplit never shuffles and never validates on anything earlier than the training set. Note the first 4 days are never validated — that is the cost of needing a history.',
-        11: 'next(iter(...)) just grabs the first fold so we can stare at it.',
-        18: 'Every training block is a prefix. Every validation block comes strictly after it. That is the whole rule.',
-        20: 'Here is the crime: validating on day 4 while training on days 5, 7, 8, 9 and 10. The model reads the future to predict the past, scores beautifully, and dies in production.',
+        1: 'The generator again.',
+        2: 'The splitter again.',
+        4: 'Same 200 rows as before with one addition: flip_y=0.15 flips the true answer on about 15% of rows, which makes the problem genuinely hard. Real data is noisy; a spotless dataset would hide the effect we are hunting.',
+        5: 'First cut: 20% goes to the test set (40 rows), the remaining 160 rows are called Xrest for now. The test rows are put away and not looked at again until the very last line of Step 3.',
+        6: 'Second cut, applied to those 160 rows only: 25% of 160 is 40 rows for validation, leaving 120 for training. Two cuts is how you get three piles.',
+        7: 'Confirm the sizes: 120 / 40 / 40.',
       },
-    },
-    {
-      type: 'note',
-      md: `**Nested CV, honestly.** If you tune hyperparameters using your CV score, that score is now optimistic — you picked the settings that flattered those folds. The correct fix is **nested CV**: an outer loop splits off a fold purely to *estimate*, and inside each outer training set a full inner CV *tunes*. Unbiased, and it costs outer × inner × trials fits — a 5×5 nested search over 50 trials is 1,250 model fits. Which is why in practice almost everyone does the cheap version: tune with CV, then report the score on a **final test set that was never touched**. Say that tradeoff out loud in an interview and you sound like someone who has shipped.`,
-    },
-    {
-      type: 'intuition',
-      title: 'Parameter vs hyperparameter — the distinction they will ask about',
-      md: `A **parameter** is learned from the data by fitting. A **hyperparameter** is set by you, before fitting, and controls *how* the fitting happens.
-
-- Linear model: the coefficients w and intercept b are parameters. The regularization strength alpha is a hyperparameter.
-- Decision tree: the split features and thresholds are parameters. \`max_depth\` and \`min_samples_leaf\` are hyperparameters.
-- k-NN has *no* parameters worth the name — k is a hyperparameter and the "training" is just storing the data.
-- Neural net: millions of weights are parameters. Learning rate, batch size, layer count, dropout rate are hyperparameters.
-- Sanity check: if \`.fit()\` changes it, it is a parameter. If you type it into the constructor, it is a hyperparameter.
-- Why it matters: parameters get gradients. Hyperparameters do not — you have to **search** for them, which is the rest of this module.`,
-    },
-    {
-      type: 'intuition',
-      title: 'Grid search, and why it dies',
-      md: `Grid search is the obvious idea: list the values you care about per knob, try every combination, keep the best.
-
-- Honest, exhaustive, trivially parallel, and reproducible. For 1–2 hyperparameters it is genuinely the right tool.
-- Then it hits the wall: the number of configurations is the **product** of the value counts. 4 knobs × 5 values each = 625 configs, × 5 folds = **3,125 model fits**.
-- Add one more knob and you multiply, not add. This is combinatorial death, and no amount of compute outruns a product.
-- The subtler flaw: a grid tests only 5 *distinct* values of each knob no matter how many configs you run — the other 620 fits are repeats along that axis.
-- Which is exactly the weakness random search exploits.`,
-    },
-    {
-      type: 'intuition',
-      title: 'Random search: same budget, better answers',
-      md: `Bergstra & Bengio's result (2012), and the reason nobody grids more than two knobs anymore: **most hyperparameters barely matter**. Usually two or three do, and you do not know in advance which.
-
-- Grid with 625 points over 4 knobs spends its whole budget testing 5 values of the knob that matters — while burning 620 fits on knobs that change nothing.
-- Random search samples every configuration from distributions, so **60 trials test 60 distinct values of every knob**, including the important ones.
-- Sample the important axis densely for free — that is the entire trick, and it gets *better* as the number of useless knobs grows.
-- It also handles unbounded and continuous ranges naturally: sample \`loguniform(1e-5, 1e-1)\` instead of guessing five round numbers.
-- And it is interruptible: stop after any number of trials and you still have a usable, unbiased sample. A half-finished grid is biased toward whatever it scanned first.`,
-    },
-    {
-      type: 'math',
-      intro: 'Why 60 random trials is the number people quote.',
-      latex: [
-        '\\text{grid fits} = \\left(\\prod_{j=1}^{d} |V_j|\\right) \\times k \\quad\\text{— a product, not a sum}',
-        'P(\\text{no trial lands in the top } 5\\% \\text{ region}) = (1 - 0.05)^{n} = 0.95^{n}',
-        'n = 60 \\;\\Longrightarrow\\; 1 - 0.95^{60} \\approx 0.95 \\quad \\text{(95\\% chance of hitting the top 5\\%)}',
-      ],
-    },
-    {
-      type: 'intuition',
-      title: 'Bayesian optimization: stop sampling blind',
-      md: `Random search has no memory — trial 50 is as ignorant as trial 1. Bayesian optimization remembers.
-
-- Fit a cheap **surrogate model** of "hyperparameters → score" using the trials you have already run.
-- Use an **acquisition function** (e.g. expected improvement) to pick the next point: where the surrogate predicts a good score, *or* where it is very uncertain. Exploit and explore.
-- Optuna's default is **TPE** (Tree-structured Parzen Estimator): it models the distribution of good trials vs bad trials and samples where good/bad is highest — cheap, handles conditional and categorical spaces well.
-- **Pruning** is the other half of the win: report intermediate scores (epoch 3 of 50, tree 40 of 500) and Optuna kills hopeless trials early instead of finishing them.
-- Where it wins: when one fit is **expensive** (minutes to hours). Then thinking hard before each trial pays for itself many times over.
-- Where it does not: cheap models, tiny budgets, or heavily parallel setups — random search parallelizes perfectly, Bayesian methods are inherently sequential.
-- One line on the third family: **successive halving / Hyperband** (\`HalvingRandomSearchCV\`) start many configs on a small budget, kill the worst half, double the budget for survivors — a race, not a search.`,
     },
     {
       type: 'code',
       lang: 'python',
-      title: 'RandomizedSearchCV — and the fold noise hiding inside "best"',
-      code: `import numpy as np
-from scipy.stats import loguniform, randint
-from sklearn.datasets import make_classification
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import RandomizedSearchCV, StratifiedKFold
+      title: 'Step 2: try 40 settings, keep the best',
+      code: `from sklearn.tree import DecisionTreeClassifier
 
-X, y = make_classification(n_samples=150, n_features=12, n_informative=4,
-                           class_sep=1.3, flip_y=0.05, random_state=0)
-space = {'max_depth': randint(2, 20), 'min_samples_leaf': randint(1, 20),
-         'max_features': loguniform(0.05, 1.0)}
-cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=0)
-search = RandomizedSearchCV(RandomForestClassifier(n_estimators=100, random_state=0),
-                            space, n_iter=20, cv=cv, scoring='accuracy',
-                            random_state=42, n_jobs=-1)
-search.fit(X, y)
-r, b = search.cv_results_, search.best_index_
-print('best params :', {k: (v if isinstance(v, int) else round(float(v), 3)) for k, v in search.best_params_.items()})
-print('best mean CV:', round(search.best_score_, 3), '+/- std', round(r['std_test_score'][b], 3))
-print('its 5 folds :', np.round([r[f'split{i}_test_score'][b] for i in range(5)], 3))
-print('worst trial :', round(r['mean_test_score'].min(), 3), '| trials run:', len(r['params']))
+results = []
+for depth in [2, 3, 4, 5, 6, 8, 10, None]:
+    for leaf in [1, 2, 3, 5, 8]:
+        mo = DecisionTreeClassifier(max_depth=depth, min_samples_leaf=leaf, random_state=0)
+        mo.fit(Xtr, ytr)
+        results.append((mo.score(Xva, yva), depth, leaf))
 
-# best params : {'max_depth': 13, 'max_features': 0.832, 'min_samples_leaf': 2}
-# best mean CV: 0.8 +/- std 0.084
-# its 5 folds : [0.767 0.733 0.7   0.9   0.9  ]
-# worst trial : 0.64 | trials run: 20`,
+best = results[0]
+for r in results:
+    if r[0] > best[0]:
+        best = r
+print('configs tried:', len(results))
+print('best on validation:', best)
+
+# ---- real output ----
+# configs tried: 40
+# best on validation: (0.9, 4, 3)`,
       annotations: {
-        9: 'Distributions, not lists. randint samples integers; loguniform samples so that 0.05-0.1 gets as much attention as 0.5-1.0 — the right prior for anything measured in orders of magnitude.',
-        11: 'The SAME cv object for every trial. Comparing configs scored on different folds compares noise, not models.',
-        13: 'n_iter=20 is the whole budget: 20 configs x 5 folds = 100 fits, and you can set it to whatever wall-clock you can afford. A grid cannot be dialled like this.',
-        14: 'random_state makes the 20 sampled configs reproducible; n_jobs=-1 uses all cores, which random search allows because trials are independent.',
-        18: 'Best is 0.800 with std 0.084 across its own folds. The error bar is wider than most of the gaps between trials.',
-        20: 'Best 0.800, worst 0.640. That 0.16 gap is barely twice the fold noise — with 20 trials on 150 rows, some of "best" is luck. Confirm on the untouched test set.',
+        1: 'The model type we are tuning.',
+        3: 'A list to collect one entry per setting we try.',
+        4: 'Eight values for max_depth. None means "no depth limit at all" — grow the tree until it cannot split further.',
+        5: 'Five values for min_samples_leaf. A loop inside a loop means every depth is paired with every leaf value: 8 times 5 gives 40 combinations.',
+        6: 'Build a model with this particular pair of settings. random_state=0 is fixed so any score difference comes from the settings, not from luck inside the model.',
+        7: 'Train it on the 120 training rows only.',
+        8: 'Score it on the 40 validation rows and store a three-item tuple: (score, depth, leaf). A tuple is just a fixed group of values written with commas; we keep the settings alongside the score so we can identify the winner later.',
+        10: 'Assume the first entry is the best so far, so we have something to compare against.',
+        11: 'Walk through every entry.',
+        12: 'r[0] is the score, position 0 of the tuple. If this entry scored higher than the current champion...',
+        13: '...it becomes the new champion. A plain loop, deliberately, instead of a sort with a key function.',
+        15: 'Print the winner. It scored 0.900 on validation, using max_depth=4 and min_samples_leaf=3.',
+      },
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Step 3: the same winner, on rows nothing has touched',
+      code: `winner = DecisionTreeClassifier(max_depth=best[1], min_samples_leaf=best[2], random_state=0)
+winner.fit(Xtr, ytr)
+print('validation score that won the search:', round(best[0], 4))
+print('same model on the untouched test set:', round(winner.score(Xte, yte), 4))
+
+# ---- real output ----
+# validation score that won the search: 0.9
+# same model on the untouched test set: 0.725`,
+      annotations: {
+        1: 'Rebuild the winning model from the settings stored in the tuple: best[1] is the depth, best[2] is the leaf size.',
+        2: 'Train it on the same 120 training rows. Nothing here is different from Step 2 — this is literally the winning model.',
+        3: 'The number the search reported: 0.900.',
+        4: 'The same trained model, scored on the 40 test rows that were sealed away in Step 1 and never influenced a single decision. It scores 0.725.',
       },
     },
     {
       type: 'note',
-      md: `**The multiple-comparisons trap.** Run 1,000 trials and the winner is partly the config that got lucky on your validation folds — the same reason the tallest of 1,000 random people is taller than the population mean. Your reported CV score for the winner is **biased upward**, and the bias grows with trial count. Three defenses: keep the trial count sane relative to your dataset size, prefer a config whose neighbours also score well (a broad plateau beats a lone spike), and always confirm the winner on a **final test set you never optimized against**.`,
+      md: `**0.900 on the set it was chosen on. 0.725 on rows it was not.** A drop of 17.5 points, and the model is identical in both lines — same settings, same training rows, same code. Only the rows being scored changed.
+
+Two more numbers make the mechanism obvious. The average validation score across all 40 settings was **0.848**. The winner's 0.900 sits five points above that average, and the test set says the truth is nearer 0.725. The search did not find a better model; it found the setting whose luck on those particular 40 validation rows was best. If you had reported 0.900, you would have been reporting luck.
+
+Honest caveat: these are the numbers for one particular split. Repeat the whole experiment on twelve different splits and the winner beats its own test score in most of them but not all — the average best-validation score across the twelve was 0.833 and the average test score was 0.783. The gap is about five points on average and 17.5 points on a bad day. The direction is always the same, and that is the part you can rely on.`,
     },
     {
       type: 'intuition',
-      title: 'The practical rules that survive contact with real projects',
-      md: `- **Log scale for anything spanning orders of magnitude**: learning rates, alpha/C/lambda, gamma. Sampling 0.0001–0.1 uniformly means 99.9% of your samples land above 0.0001 — useless. Use \`loguniform\`.
-- **Tune the few knobs that matter.** Trees/GBM: \`learning_rate\`, \`n_estimators\`, \`max_depth\` or \`num_leaves\`, \`min_samples_leaf\`/\`min_child_weight\`, subsample ratios. SVM (RBF): \`C\` and \`gamma\` — that is it. Linear: \`alpha\` (Ridge/Lasso) or \`C\` (logistic). k-NN: \`k\` and the distance metric.
-- **Coarse then fine**: one wide random search over a log range, then a narrow search around the winning region. Two cheap passes beat one huge grid.
-- **Put every preprocessing step inside a \`Pipeline\`** so scalers and encoders are fitted on fold-training data only. Fitting a scaler before the split leaks test statistics into training.
-- **Reproducibility**: \`random_state\` on the estimator, on the splitter, and on the search. Without all three you cannot tell an improvement from a reroll.
-- **Guard the test set**: split it off before you tune, look at it once, and never let a decision flow back from it. Every peek converts it into another validation set.`,
+      title: 'Grid search and random search',
+      md: `Two ways to choose which settings to try. Both are exactly the "try, measure, keep the best" loop from Step 2; they differ only in the list of things tried.
+
+- **Grid search** lists a few values for each hyperparameter and tries every combination. Step 2 was a grid search: 8 depths times 5 leaf sizes is 40 fits.
+- **Random search** picks each setting at random from a range you specify, and does that as many times as your budget allows. 40 fits means 40 random combinations.
+
+Now the part worth understanding, rather than memorising. In almost every real model, **one or two hyperparameters matter a lot and the rest barely matter at all** — and you do not know in advance which ones.
+
+- Say you have 2 hyperparameters and a budget of 9 fits. A grid uses 3 values of each: 3 × 3 = 9.
+- If only the first one matters, then across all 9 fits you tested it at **3 distinct values**. The other 6 fits re-tested those same 3 values with a knob that changes nothing.
+- Random search with the same 9 fits tries **9 distinct values** of the first hyperparameter, because every draw is a fresh value.
+- Three times the resolution on the axis that matters, for the same money. And it gets better as you add hyperparameters: with 4 knobs, a 3-value grid costs 81 fits and still tests each knob at only 3 values.`,
     },
     {
       type: 'visual',
       component: 'PythonPlayground',
       props: {
-        code: `import numpy as np
+        code: `grid = []
+for a in [0.01, 0.1, 1.0]:
+    for b in [1, 5, 10]:
+        grid.append((a, b))
+print('grid  : points tried', len(grid), '| distinct a values', len(set(g[0] for g in grid)))
 
-K = 5      # <-- change me: 2, 4, 5, 10, 20 (K=20 is LOOCV on 20 rows)
-
-n = 20
-rng = np.random.default_rng(7)
-x = rng.normal(size=n)
-y = 3 * x + rng.normal(0, 1.5, size=n)      # noisy line, so folds disagree
-
-folds = np.array_split(rng.permutation(n), K)
-scores = []
-for i, test in enumerate(folds):
-    train = np.concatenate([f for j, f in enumerate(folds) if j != i])
-    w = (x[train] @ y[train]) / (x[train] @ x[train])   # 1-parameter least squares
-    scores.append(np.abs(y[test] - w * x[test]).mean())  # mean absolute error
-    if K <= 5:
-        print(f'fold {i}: test={np.sort(test)}  n_train={len(train)}  w={w:.3f}  MAE={scores[-1]:.3f}')
-
-s = np.array(scores)
-print(f'K={K}  per-fold MAE {np.round(s, 3)}')
-print(f'mean {s.mean():.3f} +/- {s.std():.3f}   worst-vs-best fold gap {s.max() - s.min():.3f}')`,
-        precomputedOutput: `fold 0: test=[ 3  5 13 14]  n_train=16  w=2.807  MAE=0.921
-fold 1: test=[ 0  2 12 19]  n_train=16  w=2.857  MAE=1.627
-fold 2: test=[ 7  9 15 17]  n_train=16  w=3.142  MAE=0.990
-fold 3: test=[ 1  4 10 16]  n_train=16  w=3.014  MAE=0.733
-fold 4: test=[ 6  8 11 18]  n_train=16  w=2.757  MAE=1.480
-K=5  per-fold MAE [0.921 1.627 0.99  0.733 1.48 ]
-mean 1.150 +/- 0.343   worst-vs-best fold gap 0.894`,
-        caption: 'At K=5 read fold 3 (MAE 0.733) against fold 1 (1.627) — report either alone and you are off by 2x. Now change K. K=2 gives mean 1.089 +/- 0.097; K=5 gives 1.150 +/- 0.343; K=20 (LOOCV, one row per fold) gives 1.130 +/- 0.967 with a 3.66 gap between folds. The mean barely moves, the spread explodes: bigger K means more training data per fold but noisier individual fold scores, and LOOCV costs n fits to tell you roughly what 5 folds already said.',
+import random
+random.seed(0)
+rand = []
+for _ in range(9):
+    rand.append((round(random.uniform(0.01, 1.0), 3), random.randint(1, 10)))
+print('random: points tried', len(rand), '| distinct a values', len(set(r[0] for r in rand)))
+print(rand)`,
+        precomputedOutput: `grid  : points tried 9 | distinct a values 3
+random: points tried 9 | distinct a values 9
+[(0.846, 7), (0.05, 9), (0.491, 5), (0.968, 6), (0.588, 4), (0.51, 5), (0.148, 2), (0.622, 5), (0.987, 9)]`,
+        caption: 'Nine fits either way. The grid tests hyperparameter a at three values; random search tests it at nine.',
+        annotations: {
+          1: 'A list to hold the grid points. Each point will be a pair of settings.',
+          2: 'Three chosen values for hyperparameter a. Pretend a is the one that actually matters.',
+          3: 'Three chosen values for hyperparameter b. Pretend b barely affects anything.',
+          4: 'Store the pair. The loop inside a loop gives 3 times 3 = 9 pairs in total.',
+          5: 'g[0] for g in grid means "the a value of every pair". set(...) throws away duplicates, so len(set(...)) counts how many DISTINCT a values were ever tried. Answer: 3.',
+          7: 'Python\'s built-in random number module.',
+          8: 'Fix the random seed so this prints the same numbers for you as it did for me.',
+          9: 'A list to hold the random points.',
+          10: 'Nine draws, matching the grid\'s budget exactly. The underscore is the conventional name for a loop variable you never use.',
+          11: 'random.uniform(0.01, 1.0) picks any decimal in that range — so a fresh value nearly every time. random.randint(1, 10) picks a whole number from 1 to 10. round(x, 3) keeps the printout short.',
+          12: 'The same distinct-count as line 5, now on the random points. Answer: 9.',
+          13: 'Print the actual pairs so you can see that no a value repeats.',
+        },
       },
+    },
+    {
+      type: 'note',
+      md: `There is a second, blunter argument for random search. Suppose 5% of the possible settings are good enough for you. Each random draw has a 5% chance of landing in that region, so it misses with probability 0.95. Twenty independent draws all miss with probability 0.95 to the power of 20, which is 0.358 — so twenty draws find a good setting 64% of the time. Sixty draws miss with probability 0.95 to the power 60 = 0.046, so they succeed **95%** of the time. That is where the folklore "about 60 random trials is usually enough" comes from, and now you can derive it instead of quoting it.
+
+**Bayesian optimisation** is the next step up: instead of drawing blindly, it fits a cheap model of "settings in, score out" from the trials finished so far and uses it to choose where to look next, spending more of the budget near settings that already scored well. Optuna is the library most people use for it. It pays off when a single training run is expensive; when fits are cheap, random search finds the answer before the extra cleverness earns its keep.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Nested cross-validation, briefly',
+      md: `We fixed the winner's curse with three fixed piles. **Nested cross-validation** is the same fix expressed as two loops instead.
+
+- The **outer loop** is an ordinary k-fold. It exists only to *measure*. Each outer fold is set aside untouched.
+- Inside each outer training set, an **inner loop** runs its own complete k-fold to *tune* — trying settings, comparing them, picking a winner. That inner loop never sees the outer fold.
+- The chosen model is then scored once on the outer fold. Average those outer scores and you have an honest estimate of "my whole procedure, tuning included" rather than of one lucky setting.
+- The cost is multiplication: 5 outer folds times 5 inner folds times 40 settings is 1,000 model trainings for one number.
+- And it gives you a *number*, not a model to deploy. Most teams therefore use the cheap version — hold out a test set once, tune on the rest, report the test score — and simply know that it is a compromise.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Worked case: choosing between two models, by hand',
+      md: `A team has 200 labelled support tickets and two candidate models. They run 5-fold cross-validation on each and bring you the fold scores.
+
+- **Model A** folds: 0.900, 0.825, 0.900, 0.900, 0.800. **Model B** folds: 0.875, 0.900, 0.850, 0.875, 0.865.
+- Model A mean: 0.900 + 0.825 + 0.900 + 0.900 + 0.800 = 4.325, divided by 5 = **0.8650**.
+- Model B mean: 0.875 + 0.900 + 0.850 + 0.875 + 0.865 = 4.365, divided by 5 = **0.8730**. So B is ahead by 0.0080.
+- Model A standard deviation, from earlier: **0.0436**.
+- Model B standard deviation: gaps from its mean 0.873 are +0.002, +0.027, −0.023, +0.002, −0.008. Squared: 0.000004, 0.000729, 0.000529, 0.000004, 0.000064, adding to 0.001330. Divide by 5: 0.000266. Square root: **0.0163**.
+- The difference in means is 0.0080. Model A alone wobbles by 0.0436 from fold to fold. **The gap is one fifth of the noise.** On this evidence B is not better than A.
+
+What you can say, and it is worth saying: B is far more *consistent*. Its worst fold is 0.850 while A's worst is 0.800. If the ticket routing has to be reliable rather than occasionally brilliant, B's tighter spread is a genuine reason to prefer it — that is a decision about risk, not a claim that its mean is higher.
+
+What to do next, in order: (1) run repeated cross-validation — the same 5-fold done with several different shuffles — to get more than five numbers before deciding; (2) if the choice still cannot be called, pick the simpler or cheaper model, because a 0.008 difference will not survive contact with next month's data; (3) whatever you pick, confirm it once on a test set that neither model's tuning ever saw.`,
+    },
+    {
+      type: 'intuition',
+      title: 'The classic mistake: shuffling data that has a time order',
+      md: `A team has 240 days of a metric that drifts slowly upward. They build a model and cross-validate it with ordinary shuffled 5-fold, because that is what everyone does. The score comes back at 0.974 out of a possible 1.0. They deploy it. It is useless.
+
+Here is the setup, so you can see the trick the model is playing.
+
+- The data is one column: the day number, 0 to 239. The target is roughly 0.05 times the day number, plus a bit of random noise. So it climbs steadily.
+- The model is k-nearest-neighbours with k=5: to predict a day, it finds the 5 most similar days in its training data and averages their targets. "Similar" here means "closest day number".
+- Under shuffled 5-fold, day 137 goes into the test set while days 135, 136, 138 and 139 sit in the training set. The model is being asked about a day whose immediate neighbours it has already been told the answer for. That is not forecasting, it is looking it up.
+- In real use you predict day 240 having only seen days 0 to 239. There are no neighbours on the far side. The model must extrapolate, and k-nearest-neighbours cannot extrapolate at all — beyond the end of its training data it just keeps repeating the last average it knows.
+
+Run both ways of cutting and compare.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Shuffled folds versus forward-chaining folds',
+      code: `import numpy as np
+from sklearn.neighbors import KNeighborsRegressor
+from sklearn.model_selection import cross_val_score, KFold, TimeSeriesSplit
+
+t = np.arange(240).reshape(-1, 1)
+rng = np.random.default_rng(0)
+target = 0.05 * t.ravel() + rng.normal(0, 0.5, 240)
+
+knn = KNeighborsRegressor(n_neighbors=5)
+shuffled = cross_val_score(knn, t, target, cv=KFold(5, shuffle=True, random_state=0))
+forward = cross_val_score(knn, t, target, cv=TimeSeriesSplit(5))
+print('shuffled 5-fold :', [round(float(s), 3) for s in shuffled], 'mean', round(float(shuffled.mean()), 3))
+print('forward-chaining:', [round(float(s), 3) for s in forward], 'mean', round(float(forward.mean()), 3))
+
+# ---- real output ----
+# shuffled 5-fold : [0.974, 0.98, 0.97, 0.977, 0.97] mean 0.974
+# forward-chaining: [-2.074, -1.704, -1.081, -5.554, -2.017] mean -2.486`,
+      annotations: {
+        1: 'numpy, for building the day numbers.',
+        2: 'The nearest-neighbours model described above, in its regression form (it predicts a number, not a class).',
+        3: 'cross_val_score and the two fold-cutters we are comparing.',
+        5: 'np.arange(240) counts 0 to 239. .reshape(-1, 1) turns that flat list into a column, because sklearn always expects rows-by-columns input; the -1 means "work out this dimension yourself".',
+        6: 'A random number generator with a fixed seed, so the noise below is the same for you as for me.',
+        7: 't.ravel() flattens the column back to a flat list so the arithmetic is easy. The target is 0.05 per day of steady climb, plus rng.normal(0, 0.5, 240): 240 random wobbles centred on 0 with a typical size of 0.5.',
+        9: 'The model: predict a day by averaging the 5 nearest days it was trained on.',
+        10: 'shuffle=True mixes the days up before cutting the folds, so each test fold is scattered across the whole timeline. This is the mistake, written out.',
+        11: 'TimeSeriesSplit(5) instead cuts the timeline into blocks in order: train on the earliest block, test on the next, then extend the training block and roll forward. No future day is ever in a training set. This is what the deployed model will actually face.',
+        12: 'Print the five shuffled scores and their mean. For a regressor, cross_val_score reports R-squared: 1.0 is a perfect fit, 0.0 means "no better than always predicting the average", and negative means worse than that.',
+        13: 'The same for the forward-chaining scores.',
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'Diagnosing it',
+      md: `**Shuffled: 0.974. Forward-chaining: −2.486.** The same model and the same 240 rows produced a near-perfect score and a catastrophic one.
+
+- 0.974 is close to 1.0, so the shuffled setup says the model explains almost all the movement in the data. That is the number that went in the deck.
+- −2.486 is *negative*, which for R-squared means the model does worse than a rule that ignores the input and always predicts the average. That is the number that reflects real use.
+- The mechanism is not subtle once you see it: under shuffling, roughly four out of every five neighbouring days are in the training set, so every test day has its answer effectively surrounded. The model interpolates between two known points, which is easy. Forward-chaining asks it to continue past the end of everything it has seen, which for this model is impossible — it flattens out while the true series keeps climbing, and the error grows with every day.
+- The tell that this is leakage and not ordinary overfitting: the gap appears the moment you change *how the data is cut*, with the model untouched. Overfitting would show up as a poor score under both cutters.
+- The fix is the cutter, not the model. Use TimeSeriesSplit. If your label describes something 7 days ahead, also leave a 7-day gap between the end of each training block and the start of its test block, otherwise the last few training rows already contain the answer.
+
+The honest cost of doing it right: forward-chaining trains its first fold on very little history, so its early folds are pessimistic. Your reported number will be lower than the shuffled one. That is not a loss of accuracy. It is the deletion of a number that was never true.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Practice problems',
+      md: `Work these with pen and paper first. All the arithmetic is small.
+
+1. You have 12 rows numbered 0 to 11 and you want 4 folds of equal size, cut in contiguous blocks. Write out the four folds, and then write the training row numbers for round 2.
+2. A 5-fold cross-validation gives scores 0.70, 0.90, 0.80, 0.85, 0.75. Compute the mean and the standard deviation by hand. A second model scores a mean of 0.83. Is it better?
+3. A dataset has 50 rows of which 6 are class 1. You run plain 5-fold. What is the largest number of folds that could contain zero class-1 rows, and what does stratified k-fold guarantee instead?
+4. You have 3 hyperparameters and a budget of 27 model trainings. A grid uses 3 values of each. If only one hyperparameter actually affects the score, how many distinct values of it does the grid test, and how many would random search test?
+5. A teammate tunes 200 settings on a validation set, picks the best at 0.91, and reports 0.91 as the model's accuracy. Name what is wrong in one sentence, and say the one measurement that would settle it.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Worked solutions',
+      md: `Check each step against your own working, not only the final answer.
+
+1. 12 rows into 4 folds means 12 // 4 = 3 rows per fold. Fold 0 = [0, 1, 2], fold 1 = [3, 4, 5], fold 2 = [6, 7, 8], fold 3 = [9, 10, 11]. Round 2 tests on fold 2, so it trains on everything else: **[0, 1, 2, 3, 4, 5, 9, 10, 11]** — 9 training rows, 3 test rows, no overlap.
+2. Sum = 0.70 + 0.90 + 0.80 + 0.85 + 0.75 = 4.00, so the **mean is 0.8000**. Gaps from the mean: −0.10, +0.10, 0.00, +0.05, −0.05. Squared: 0.0100, 0.0100, 0.0000, 0.0025, 0.0025, adding to 0.0250. Divide by 5: 0.0050. Square root: **0.0707**. The second model is 0.03 ahead, which is well inside a fold-to-fold wobble of 0.0707, so **no, you cannot call it better** — you can only say the two are indistinguishable on this data.
+3. 50 rows into 5 folds gives 10 rows per fold, and there are only 6 class-1 rows to go round. In the worst case all 6 land inside a single fold, leaving **4 folds with zero class-1 rows**. Stratified k-fold instead spreads them: 6 positives over 5 folds gives one fold with 2 and four folds with 1, so **every fold contains at least one**, and every fold's score actually measures something about class 1.
+4. The grid tests each hyperparameter at exactly **3 distinct values**, no matter that it spent 27 trainings (3 × 3 × 3 = 27) doing it — the other 24 runs re-tested those same 3 values while wiggling knobs that do nothing. Random search with 27 draws tests **27 distinct values** of the one that matters. Nine times the resolution for the identical budget, which is the whole argument for random search.
+5. The wrong part: 0.91 is the maximum of 200 noisy measurements taken on the same rows, so it is inflated by whichever setting got the luckiest on that particular validation set — the winner\'s curse. The settling measurement: score that one chosen setting on a **test set that took no part in the search**, and report that number instead.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Beyond the basics - skip this on your first read',
+      md: `Everything above stands on its own. These are the ideas you will meet next, named here so the words are not new later.
+
+- **Repeated k-fold.** Run the whole 5-fold procedure several times with different shuffles and pool all the scores. Five folds give you five numbers, which is a thin basis for a standard deviation; five repeats give you twenty-five. It is the cheapest real improvement to the estimate you have, and it costs exactly as many extra fits as repeats.
+- **How Bayesian optimisation actually chooses.** It keeps a cheap model of the score surface and an *acquisition function* that scores each candidate setting by a blend of "the surface predicts this will be good" and "the surface is very unsure here, so trying it teaches us a lot". Optuna\'s default, TPE, does it by modelling the settings of the good trials and the bad trials separately and preferring settings that look far more like the good group. Optuna can also *prune*: a trial reporting weak intermediate scores is killed before finishing.
+- **Successive halving and Hyperband.** Race many settings against each other on a small budget — few trees, few epochs, a fraction of the data — throw away the worst half, double the budget for the survivors, repeat. It finds good settings with far less total compute than running everything to completion, at the risk of eliminating a setting that only shines when trained fully.
+- **Preprocessing must live inside the fold.** If you scale your features, or fill in missing values, or select features by their correlation with the target, and you do it *before* cutting the folds, then every fold's training data has been shaped by information from the rows it is about to be tested on. sklearn\'s \`Pipeline\` object exists to prevent this: it bundles the preprocessing and the model together so \`cross_val_score\` refits the preprocessing separately on each fold's training portion. Moving a step inside a Pipeline usually makes the score go *down*, and the smaller number is the true one.
+- **What sklearn does when you write cv=5.** Passing a plain integer with a classifier silently gives you StratifiedKFold; with a regressor it gives you KFold. Passing your own \`KFold(5)\` object turns stratification off without warning you. Worth knowing before you wonder why your scores changed.`,
     },
   ],
   quiz: [
     {
-      question: 'You report "accuracy 0.82" from one 80/20 split on 200 rows. Your colleague reruns with a different random_state and gets 0.74. What is the correct conclusion?',
+      question: 'The same model on the same 200 rows scored 0.825, 0.850, 0.875, 0.925 and 0.825 across five different 80/20 splits. What does that tell you?',
       options: [
         {
-          text: 'Both numbers are single noisy draws; you need k-fold CV to get a mean and a spread',
-          explanation: 'Correct. With ~40 test rows, a handful of hard examples moves the score by points. The disagreement IS the error bar you failed to report.',
+          text: 'A single test score on 40 rows carries a large uncertainty, so one number on its own is not a result',
+          explanation: 'Correct. Nothing changed except which rows landed in the test pile. Any one of those five numbers, reported alone, would look like a fact.',
         },
-        { text: 'Their run is wrong — the first number is the real one', explanation: 'Neither run is privileged. Both are samples from the same noisy distribution.' },
-        { text: 'The model is unstable and should be retrained with a different algorithm', explanation: 'Nothing about the model changed between runs. The evaluation changed.' },
+        { text: 'The model is unstable and should be replaced', explanation: 'The model was rebuilt identically each time with random_state fixed. The variation lives in the measurement, not in the model.' },
+        { text: 'The training set is too small', explanation: 'More training data would help in general, but it is the small TEST set of 40 rows that makes the score jump around this much.' },
       ],
       correct: 0,
     },
     {
-      question: 'You have 100,000 rows and a model that takes 20 minutes to fit. Which CV setup is sane?',
+      question: 'Five folds score 0.900, 0.825, 0.900, 0.900, 0.800 — mean 0.865, standard deviation 0.044. A rival model has a cross-validation mean of 0.873. What can you claim?',
       options: [
-        { text: 'Leave-one-out — it uses the most training data', explanation: 'LOOCV means 100,000 fits at 20 minutes each. That is roughly 3.8 years of compute.' },
-        { text: 'k=10 for the tighter estimate', explanation: 'Workable but 200 minutes per evaluation, and with 100k rows the extra 10% training data buys almost nothing.' },
+        { text: 'The rival is better by 0.008 and should be shipped', explanation: 'The gap of 0.008 is about a fifth of the 0.044 fold-to-fold wobble. That is reading noise as a result.' },
         {
-          text: 'k=5, or even a single large hold-out set — with 100k rows a 20% validation set is already 20,000 rows and low-variance',
-          explanation: 'Correct. CV matters most on small data. When the validation set is huge, a single split is already a precise measurement and k-fold is mostly wasted compute.',
+          text: 'Nothing yet — the difference is much smaller than the spread, so the two are indistinguishable on this data',
+          explanation: 'Correct. A difference only means something when it is large relative to how much the measurement itself moves. Repeated cross-validation would give you more numbers to decide with.',
+        },
+        { text: 'The rival is worse, because a higher mean with unknown folds is suspicious', explanation: 'There is no reason to call it worse either. The honest answer is that this evidence cannot separate them.' },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'On a 60-row dataset with 5 positives, plain KFold gave test-fold positive counts of [2, 2, 0, 1, 0]. Why does that ruin the average?',
+      options: [
+        { text: 'The folds are unequal in size', explanation: 'The folds were 12 rows each. The imbalance is in which CLASS landed where, not in fold size.' },
+        {
+          text: 'Two folds contained no positives at all, so those two scores measured performance on class 0 only, yet they count equally in the mean',
+          explanation: 'Correct. On those rounds a model that answers class 0 to everything scores perfectly, so two of your five numbers carry no information about the thing you care about.',
+        },
+        { text: 'Five positives is too few to model at all, so cross-validation cannot help', explanation: 'Five is very few, but stratified k-fold still puts one in each fold and gives you five scores that at least all measure the same thing.' },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'A search over 40 settings picked a winner scoring 0.900 on the validation set; the same model scored 0.725 on the untouched test set. What happened?',
+      options: [
+        { text: 'The test set is harder than the validation set, so the test number should be discarded', explanation: 'Both sets were cut at random from the same 200 rows. The asymmetry comes from the fact that one of them was used to choose the winner.' },
+        { text: 'The model overfitted the training rows', explanation: 'Overfitting the training rows would show up as a poor score on BOTH held-out sets. Here validation was fine and only the truly unseen set fell over.' },
+        {
+          text: 'Picking the maximum of 40 noisy validation scores selects for luck as well as quality, so the winner\'s validation score is inflated',
+          explanation: 'Correct — the winner\'s curse. The average validation score across all 40 settings was 0.848, and 0.725 on unseen rows is the honest reading.',
         },
       ],
       correct: 2,
     },
     {
-      question: 'Your dataset is 3% positive class. You pass a plain KFold(n_splits=10) object as cv. What is the specific danger?',
-      options: [
-        { text: 'The folds will be different sizes', explanation: 'KFold makes folds of equal size (±1 row). Size is not the problem.' },
-        {
-          text: 'Positive counts vary wildly per fold and a fold may contain zero positives, making recall/precision undefined and the estimate very noisy',
-          explanation: 'Correct — with 3% positives, small folds get 0, 2, 5, 1 positives by chance. StratifiedKFold fixes the class ratio per fold.',
-        },
-        { text: 'Nothing — sklearn always stratifies internally', explanation: 'It stratifies when you pass cv=10 (an integer) with a classifier. Passing your own KFold object explicitly overrides that.' },
-      ],
-      correct: 1,
-    },
-    {
-      question: 'A hospital dataset has multiple scans per patient. Your 5-fold CV gives 0.96 AUC; production gives 0.71. Most likely cause?',
+      question: 'With a budget of 9 fits and 2 hyperparameters, why does random search usually beat a 3-by-3 grid?',
       options: [
         {
-          text: 'Rows from the same patient appear in both training and validation folds — the model memorized patients, not disease. Use GroupKFold on patient id',
-          explanation: 'Correct. This is group leakage: an identity signal available at CV time but never at prediction time for a new patient.',
+          text: 'The grid tests each hyperparameter at only 3 distinct values however many fits it spends, while 9 random draws test 9 distinct values of each — so the one that matters gets far more resolution',
+          explanation: 'Correct. Since you do not know in advance which hyperparameter matters, spending resolution on all of them at once is the better bet.',
         },
-        { text: 'k=5 is too small — use k=10', explanation: 'Changing k changes the estimate slightly; it cannot explain a 25-point collapse.' },
-        { text: 'The production data is simply harder', explanation: 'Possible in general, but the classic 0.96-to-0.71 pattern with repeated entities per row is grouping, not drift. Check grouping first.' },
+        { text: 'Random search trains faster per fit', explanation: 'A fit costs the same either way. The difference is entirely in which settings get tried.' },
+        { text: 'Random search cannot get stuck in a local optimum', explanation: 'Neither method climbs anywhere, so neither can get stuck. Both just try points and keep the best.' },
       ],
       correct: 0,
     },
     {
-      question: 'You are forecasting next week\'s demand and use KFold(shuffle=True). Why is the resulting score meaningless?',
+      question: 'On 240 days of a steadily climbing series, shuffled 5-fold scored 0.974 while TimeSeriesSplit scored −2.486. What is the correct reading?',
       options: [
-        { text: 'Shuffling breaks the class balance', explanation: 'That is a stratification concern, and forecasting is usually regression anyway.' },
-        { text: 'It uses too little training data per fold', explanation: 'Each fold trains on 80% — data quantity is not the issue here.' },
+        { text: 'TimeSeriesSplit is broken — a negative score is impossible', explanation: 'R-squared is negative whenever a model does worse than always predicting the average, which is exactly what happens when this model is forced to extrapolate.' },
         {
-          text: 'Training folds contain rows from AFTER the validation rows, so the model learns the future to predict the past — an option it will never have in production',
-          explanation: 'Correct. Time-ordered data needs TimeSeriesSplit (expanding or rolling window), where every training row precedes every validation row.',
+          text: 'Shuffling puts future days in the training set, so the model interpolates between known neighbours instead of forecasting; the −2.486 is what real use looks like',
+          explanation: 'Correct. The model is unchanged between the two lines; only the way the data was cut changed, which is the signature of leakage rather than overfitting.',
         },
-      ],
-      correct: 2,
-    },
-    {
-      question: 'Grid search over 4 hyperparameters with 6 values each, 5-fold CV. Random search with the same wall-clock runs 60 trials. Which explores each individual hyperparameter better, and why?',
-      options: [
-        { text: 'Grid — it runs 6,480 fits versus 300', explanation: 'It runs far more fits, but still only ever tests SIX distinct values of each knob. The other fits are repeats along each axis.' },
-        {
-          text: 'Random — its 60 trials test 60 distinct values of every hyperparameter, so the two or three that actually matter get sampled densely',
-          explanation: 'Correct — this is Bergstra & Bengio\'s argument. Most hyperparameters barely matter; grid wastes its budget on the ones that do not.',
-        },
-        { text: 'They are equivalent given the same wall-clock', explanation: 'They are not: the coverage per axis differs by an order of magnitude, which is the entire point of the result.' },
-      ],
-      correct: 1,
-    },
-    {
-      question: 'Which is a hyperparameter, not a parameter?',
-      options: [
-        { text: 'The split threshold "age <= 37.5" chosen at a tree node', explanation: 'Learned from the data during fit — that is a parameter.' },
-        { text: 'The coefficient on the "income" feature in a Ridge model', explanation: 'Fitted from data. Parameter.' },
-        {
-          text: 'The alpha in Ridge regression',
-          explanation: 'Correct. You set it before fitting; it controls HOW the coefficients are fitted. Rule of thumb: if .fit() changes it, it is a parameter.',
-        },
-      ],
-      correct: 2,
-    },
-    {
-      question: 'After 2,000 Optuna trials, your best validation score is 0.913 versus 0.905 for the runner-up. Your CV fold std is 0.03. What should you do?',
-      options: [
-        { text: 'Ship the 0.913 config — it is measurably better', explanation: 'A 0.008 gap inside a 0.03 noise band is not measurable. You are reading noise as signal.' },
-        {
-          text: 'Treat the ranking near the top as noise, prefer a config sitting in a broad well-scoring region, and confirm on the untouched test set',
-          explanation: 'Correct. With thousands of trials the top score is biased upward by selection (the multiple-comparisons trap). A plateau generalizes better than a lone spike, and only a clean test set settles it.',
-        },
-        { text: 'Run 10,000 more trials to break the tie', explanation: 'More trials increase the optimistic bias — you search harder for a configuration that got lucky on your specific folds.' },
+        { text: 'The model needs more neighbours than k=5', explanation: 'Changing k moves both numbers a little but cannot fix the fact that the shuffled setup is answering a question the deployed model will never be asked.' },
       ],
       correct: 1,
     },
@@ -540,113 +681,107 @@ mean 1.150 +/- 0.343   worst-vs-best fold gap 0.894`,
     {
       question: 'Explain k-fold cross-validation to someone who only knows train/test split, and say what problem it actually solves.',
       answer:
-        'Split the data into k equal folds. Train on k−1, validate on the held-out one, rotate until every fold has been the validation set exactly once, then average the k scores. What it solves is not overfitting — it is **measurement noise**. A single split gives you one score with an unknown error bar; with a small test set that score can swing by many points on luck alone. k-fold gives you a mean AND a standard deviation, so you can say whether a 0.01 improvement means anything. Bonus: every row contributes to both training and validation across the procedure, which matters when data is scarce. Cost: k fits instead of one.',
+        'Cut the data into k equal folds. Run k experiments: in each one, a different fold is the test set and the other k−1 folds are joined as the training set. That gives you k scores. What it solves is measurement noise, not overfitting. A single split gives one score with an unknown error bar — on 200 rows I have measured the same model scoring anywhere from 0.825 to 0.925 depending only on which rows landed in the test pile. k-fold gives you a mean and a standard deviation, so you can tell whether a 0.01 improvement means anything. It also lets every row be tested exactly once, which matters when data is scarce. The cost is k trainings instead of one.',
       isCaseBased: false,
     },
     {
-      question: 'What does increasing k trade off? Why is leave-one-out not the obvious best choice?',
+      question: 'What does increasing k trade off, and why is leave-one-out not automatically the best choice?',
       answer:
-        'Bigger k → each fold model trains on more data → the estimate is less pessimistically biased relative to the final full-data model. But bigger k also means the k training sets overlap almost entirely, so the k scores are strongly correlated and averaging them cancels less noise — plus you pay k fits. LOOCV (k=n) is the extreme: minimum bias, but n model fits and a high-variance estimate, because each validation "set" is a single point and the n models are nearly identical. Practical answer: k=5 by default, k=10 or repeated stratified k-fold on small data, single large hold-out when data is plentiful and fits are expensive.',
+        'A larger k means each fold trains on more of the data, so each fold model is closer to the model you will finally ship on all the data, and the estimate is less pessimistic. But larger k also means the k training sets overlap almost entirely, so the k scores are highly correlated and averaging them cancels less noise than the count suggests — and you pay k trainings. Leave-one-out is the extreme case, k equal to the number of rows: 200 rows means 200 trainings, each judged on a single row, and 200 models that differ from each other by one row. Minimum pessimism, maximum cost, and a noisy estimate. In practice k=5 is the default, k=10 or repeated k-fold on small data, and a single large hold-out when data is plentiful and each fit is expensive.',
       isCaseBased: false,
     },
     {
-      question: 'When must you use stratified k-fold, and when is plain k-fold fine?',
+      question: 'Define parameter and hyperparameter, and explain why you find them by completely different methods.',
       answer:
-        'Stratify whenever the target distribution across folds could vary meaningfully: any classification with imbalance, and any small dataset even when roughly balanced. Without it, a rare class can be underrepresented or entirely absent from a fold, making metrics undefined or wildly noisy. Plain KFold is fine for large balanced classification and for regression — though for a skewed continuous target, binning it and stratifying on the bins is a legitimate improvement. Practical gotcha worth naming: sklearn stratifies automatically when you pass cv=<int> with a classifier, but passing your own KFold object silently turns stratification off.',
+        'Parameters are the numbers the fitting procedure works out from the data: the coefficients in a linear model, the split thresholds in a tree, the weights in a network. Hyperparameters are the settings you choose before fitting, which control how the fitting happens: regularisation strength, tree depth, k in k-nearest-neighbours, learning rate. The test is simple — if .fit() changes it, it is a parameter; if you had to type it before calling .fit(), it is a hyperparameter. They are found differently because training has a direct method for parameters, whereas changing a hyperparameter changes the whole fitting procedure, so there is no way to solve for it. The only way to compare max_depth=4 with max_depth=6 is to train both models and score them on held-out data. That is why every tuning method is some version of "try a setting, measure it, decide where to try next".',
       isCaseBased: false,
     },
     {
-      question: 'Case: a colleague reports 0.94 AUC in CV on a churn model. In production it does 0.72. Walk through your diagnosis.',
+      question: 'Grid search versus random search on an equal compute budget. Make the argument precisely.',
       answer:
-        'Assume leakage until proven otherwise; a 22-point gap is almost never plain overfitting. (1) **Group leakage** — are there multiple rows per user/account? If so, the same user is in train and validation; switch to GroupKFold on user id and watch the CV score drop to something honest. (2) **Temporal leakage** — was the data shuffled despite being time-ordered? Rebuild with TimeSeriesSplit and a gap matching the label horizon. (3) **Feature leakage** — is any feature computed using information unavailable at prediction time (post-churn events, target encoding fitted on all rows, a scaler fitted before the split)? Move all preprocessing inside a Pipeline. (4) Only after those: distribution shift between the training period and now, and the tuning bias from many trials. The tell that distinguishes them: leakage shows as a CV/production gap; drift shows as a score that decays over time in production.',
+        'The premise is that performance usually depends strongly on one or two hyperparameters and barely on the rest, and you do not know which in advance. A grid with v values across d hyperparameters spends v to the power d fits but tests each individual hyperparameter at only v distinct values — so along the axis that matters, its resolution is v no matter how large the budget grows. Random search with n trials tests n distinct values of every hyperparameter, because each draw is fresh. Concretely, nine fits: a 3-by-3 grid tests the important knob at 3 values, nine random draws test it at 9. There is a second argument too. If 5% of the search space is good enough, one draw misses with probability 0.95, so sixty draws all miss with probability 0.95 to the power 60, which is 0.046 — sixty random trials find a good setting about 95% of the time. Random search also handles continuous ranges, can be stopped at any point, and parallelises perfectly. Grid still wins when you have one or two genuinely discrete settings you must cover exhaustively.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Case: a colleague reports 0.94 AUC in cross-validation on a churn model. In production it does 0.72. Walk through your diagnosis.',
+      answer:
+        'A 22-point gap is almost never plain overfitting, so I assume leakage until shown otherwise, and I check the cheapest causes first. One, group leakage: are there several rows per customer? If so, the same customer appears in both the training and the test fold and the model can score well by recognising the customer instead of predicting churn. Switch to GroupKFold on customer id and expect the score to fall to something honest. Two, time leakage: was the data shuffled even though it is time-ordered? Rebuild with TimeSeriesSplit, and add a gap between train and test equal to the horizon the label describes. Three, feature leakage: is any feature computed from information that will not exist at prediction time — a post-churn event, a target encoding fitted on all rows, a scaler fitted before the split? Everything that learns from data must sit inside a Pipeline so it is refitted per fold. Four, only after those: distribution shift, and the inflation from tuning many settings on the same folds. The tell that separates the first three from the fourth is timing — leakage shows up as a fixed gap between cross-validation and production from day one, while drift shows up as a score that decays over the weeks.',
       isCaseBased: true,
     },
     {
-      question: 'Why is cross-validating time-series data with shuffled k-fold wrong, and what do you use instead?',
+      question: 'Case: your team ran 5,000 tuning trials on a 3,000-row dataset. The best validation score is 0.91, up from a 0.86 baseline. Do you believe it?',
       answer:
-        'Shuffling puts future rows in the training set for a validation row in the past. The model exploits information that will not exist at prediction time — seasonality it has already seen, an event it already knows about — and the score is fiction. Use TimeSeriesSplit: an expanding window (train on all history up to time t, validate on the next block, roll forward) or a rolling window with a fixed-length training period when older regimes are no longer relevant. Add a gap between train and validation equal to your label horizon, otherwise adjacent rows leak. Assumption to state: this makes the estimate slightly pessimistic early on, since the first folds train on very little history — that is the honest price.',
-      isCaseBased: false,
-    },
-    {
-      question: 'Define parameter vs hyperparameter, and explain why the distinction changes how you find each.',
-      answer:
-        'Parameters are learned from data by the fitting procedure: linear coefficients, tree split thresholds, neural network weights. Hyperparameters are set before fitting and govern the fitting itself: regularization strength, tree depth, k in k-NN, learning rate, number of estimators. The operational difference is differentiability — parameters have gradients with respect to the training loss, so optimization finds them directly. Hyperparameters generally do not (and are often discrete or categorical), so you can only **search**: evaluate a configuration by training a whole model and scoring it on held-out data. That is why every hyperparameter method is some flavor of "try, measure, decide where to try next".',
-      isCaseBased: false,
-    },
-    {
-      question: 'Grid search versus random search at an equal compute budget. Make the argument precisely.',
-      answer:
-        'Bergstra & Bengio (2012): performance usually depends strongly on a small subset of hyperparameters and barely on the rest, and you do not know which in advance. A grid with v values across d knobs spends v^d fits but tests only v distinct values of each individual knob — so along the axis that matters, its resolution is v regardless of budget. Random search with n trials tests n distinct values of every knob, so the important axis gets sampled n times instead of v times. Probabilistically: with any single trial having a 5% chance of landing in the top-5% region, 60 trials hit it with probability 1 − 0.95^60 ≈ 95%. Random search also handles continuous/unbounded ranges, is interruptible at any point, and parallelizes perfectly. Grid still wins for one or two knobs with genuinely discrete values you must cover exactly.',
-      isCaseBased: false,
-    },
-    {
-      question: 'How does Bayesian optimization (e.g. Optuna) beat random search, and when would you not bother?',
-      answer:
-        'It has memory. It fits a cheap surrogate model of hyperparameters → score from completed trials, then uses an acquisition function (expected improvement, or TPE\'s ratio of good-trial to bad-trial density) to pick the next configuration — balancing exploiting promising regions against exploring uncertain ones. Optuna adds pruning: report intermediate scores and hopeless trials are killed early instead of finished. It wins when a single fit is expensive, because the overhead of thinking is negligible relative to the training cost. Skip it when fits are cheap (random search finds the answer before the surrogate becomes useful), when the budget is tiny (too few points to model a surface), or when you have massive parallelism — random search is embarrassingly parallel while Bayesian methods are inherently sequential. Successive halving / Hyperband sit in between: race many configs on a small budget, kill the losers, promote survivors.',
-      isCaseBased: false,
-    },
-    {
-      question: 'Case: your team ran 5,000 Optuna trials on a 3,000-row dataset. The best validation score is 0.91, up from a 0.86 baseline. Do you believe it?',
-      answer:
-        'Not on that evidence. With 5,000 trials on 3,000 rows, the reported best is a maximum over 5,000 noisy estimates, so it is biased upward by selection — the multiple-comparisons trap. Checks I would run: (1) what is the fold std for the winner? If it is 0.04, a 0.05 gain is within noise. (2) Is the winner isolated or does it sit on a plateau of similar configs? A lone spike is usually luck. (3) Score the winner on a test set never used in the search — the only clean number in the room. (4) Compare the search\'s best against a reasonable-defaults model on that same test set; the honest gain is often a fraction of the CV gain. Fixes going forward: cap the trial budget relative to dataset size, use repeated CV so each trial is scored on more folds, and if the estimate genuinely has to be unbiased, use nested CV.',
+        'Not on that evidence. The reported 0.91 is the maximum of 5,000 noisy estimates, so it is inflated by selection — the winner\'s curse — and the inflation grows with the number of trials. I have measured this on a small dataset: forty settings, best validation 0.900, the same model on untouched rows 0.725. Four checks. One, what is the fold-to-fold standard deviation for the winner? If it is 0.04, then a 0.05 gain is inside the noise. Two, is the winner an isolated spike or does it sit on a plateau of similar settings? A lone spike is usually luck; a broad well-scoring region usually is not. Three, score the winner once on a test set that took no part in the search — that is the only clean number available. Four, score a sensible-defaults model on that same test set, because the honest gain over defaults is often a fraction of the gain the search claimed. Going forward: cap the trial budget relative to dataset size, use repeated cross-validation so each trial is judged on more folds, and if the estimate genuinely must be unbiased, use nested cross-validation and accept the cost.',
       isCaseBased: true,
     },
     {
-      question: 'What is nested cross-validation, and why does almost nobody run it?',
+      question: 'Case: your cross-validation score drops 4 points when you move feature scaling from before the split to inside a Pipeline. Which number do you trust?',
       answer:
-        'Nested CV separates tuning from estimation. The outer loop splits the data into folds used only to *estimate* generalization; inside each outer training set, a complete inner CV *selects* hyperparameters, and the chosen model is then scored once on the untouched outer fold. Averaging the outer scores gives an unbiased estimate of "my whole modeling pipeline, including its tuning", not of one lucky configuration. Nobody runs it because it costs outer × inner × trials fits — 5×5 with 50 trials is 1,250 fits — and it returns an estimate, not a single model to deploy. The standard compromise is: hold out a final test set first, tune with plain CV on the rest, report the test-set score. Interviewers want to hear that you know the cheap version is a compromise and can name what it costs.',
-      isCaseBased: false,
-    },
-    {
-      question: 'Case: your CV score jumps 4 points when you move feature scaling from before the split to inside a Pipeline — but it jumps DOWN. Explain what happened and which number to trust.',
-      answer:
-        'Fitting the scaler on the full dataset lets each validation fold\'s mean and variance influence the training transform — a small but real leak of held-out information, which inflated the original score. Inside a Pipeline, cross_val_score refits the scaler on each fold\'s training portion only, so the validation fold is genuinely unseen. The lower number is the trustworthy one; you did not lose accuracy, you deleted an illusion. Same argument applies with much bigger effect to target/mean encoding, imputation statistics, feature selection by correlation with the target, and SMOTE — all must live inside the pipeline so they are refitted per fold. Worth adding: the leak is usually small for a StandardScaler and large for target encoding, so the magnitude of the drop tells you how leaky the step was.',
+        'The lower one. Fitting the scaler on the full dataset lets every validation fold\'s mean and variance influence the transform applied to the training data — a small but real leak of information from rows the model is about to be judged on, and it inflated the original number. Inside a Pipeline, cross_val_score refits the scaler on each fold\'s training portion only, so the validation fold is genuinely unseen. You did not lose four points of accuracy; you deleted four points of illusion. The same argument applies with a much larger effect to target or mean encoding, imputation statistics, feature selection by correlation with the target, and resampling methods like SMOTE — all of them learn from data and so all of them must be refitted per fold. A useful side observation: the size of the drop tells you how leaky the step was. A StandardScaler usually leaks a fraction of a point; a target encoder can leak ten.',
       isCaseBased: true,
     },
     {
-      question: 'Which hyperparameters would you actually tune for a gradient boosting model, an RBF SVM, and a Ridge regression — and on what scale?',
+      question: 'Case: after thousands of trials your best score is 0.913 and the runner-up is 0.905, with a fold standard deviation of 0.03. What do you do?',
       answer:
-        'Gradient boosting (XGBoost/LightGBM): learning_rate and n_estimators together (they trade off — halve the rate, roughly double the trees), tree capacity via max_depth or num_leaves, a leaf-size floor like min_child_weight, and the subsample/colsample ratios. Learning rate on a log scale; capacity on a small integer range. RBF SVM: C and gamma, both on a log scale spanning several orders of magnitude — that is essentially the whole search, and both interact strongly, so search them jointly rather than one at a time. Ridge/Lasso: alpha alone, log scale (and sklearn\'s RidgeCV/LassoCV solve the whole path far cheaper than a generic search). General rule: anything that is a strength, rate, or scale gets sampled log-uniformly, because uniform sampling over 1e-5 to 1e-1 puts almost every sample in the top decade.',
-      isCaseBased: false,
+        'I do not treat the ranking at the top as meaningful. A gap of 0.008 inside a noise band of 0.03 is not a measurable difference, and with thousands of trials the top of the list is exactly where selection luck concentrates. Three concrete steps. First, look at the shape of the region rather than the single point: if a group of nearby settings all score around 0.905 to 0.913, prefer a setting from the middle of that group, because a broad plateau survives a change of data and a lone spike usually does not. Second, if the two finalists differ in cost or complexity, take the cheaper and simpler one — there is no evidence to pay for the other. Third, settle it on the test set that the search never touched, and report that number rather than either search score. What I would not do is run more trials to break the tie: more trials make the top score more inflated, not more reliable, because you are searching harder for a setting that got lucky on these particular folds.',
+      isCaseBased: true,
     },
   ],
   flashcards: [
-    { front: 'Why not just one train/test split?', back: 'It is one noisy measurement. On small data the score can swing 10+ points on which rows landed in test. CV gives a mean AND a spread.' },
-    { front: 'k-fold in one sentence', back: 'Split into k folds; train on k−1, validate on the held-out one, rotate k times, average. Every row validated exactly once. Cost: k fits.' },
-    { front: 'What does raising k trade off?', back: 'More training data per fold (less pessimistic bias) vs k fits and highly correlated, overlapping training sets. k=5 default, 10 for small data. LOOCV (k=n) is the extreme: minimum bias, n fits, high-variance estimate.' },
-    { front: 'Stratified k-fold — when', back: 'Every classification by default; mandatory when imbalanced or small. Keeps each fold at the full dataset class ratio so no fold has zero positives.' },
-    { front: 'Group k-fold — when', back: 'Whenever rows repeat an entity (patient, user, session). All rows of a group stay in ONE fold, or the model memorizes the entity. This is leakage, not preference.' },
-    { front: 'Time-series split', back: 'Never shuffle time data. Expanding or rolling window: every training row precedes every validation row. Add a gap equal to the label horizon.' },
-    { front: 'Parameter vs hyperparameter', back: 'Parameter = learned by .fit() (weights, split thresholds). Hyperparameter = set by you before fit (alpha, max_depth, learning rate). Parameters get gradients; hyperparameters get searched.' },
-    { front: 'Why random search beats grid', back: 'Most hyperparameters barely matter. Grid tests only v values per axis no matter the budget; n random trials test n distinct values of EVERY axis. 60 trials ≈ 95% chance of hitting the top 5%.' },
-    { front: 'Bayesian optimization / Optuna', back: 'Surrogate model of the score surface + acquisition function → sample where improvement is likely (TPE), and prune hopeless trials early. Wins when each fit is expensive; loses to random search when fits are cheap or parallelism is huge.' },
-    { front: 'The multiple-comparisons trap', back: 'The best of N trials is biased upward — you selected the config that got lucky on your folds. Defend with sane trial counts, broad plateaus over lone spikes, and an untouched final test set.' },
+    { front: 'Why one train/test split is not a result', back: 'The score depends on which rows landed in the test pile. Same model, same 200 rows, five different splits: 0.825, 0.850, 0.875, 0.925, 0.825 — a 10-point range with nothing about the model changed.' },
+    { front: 'Fold, and k-fold cross-validation', back: 'A fold is one equal chunk of the data. k-fold: cut into k folds, run k experiments where each fold is the test set once and the other k−1 are joined for training. Output: k scores, so you get a mean AND a spread. Cost: k trainings.' },
+    { front: 'The mean is not the whole story', back: 'Folds 0.900, 0.825, 0.900, 0.900, 0.800 give mean 0.865 and standard deviation 0.0436. A rival mean of 0.873 is only 0.008 better — one fifth of the noise, so it is not better at all.' },
+    { front: 'Stratified k-fold, and why classification needs it', back: 'Every fold keeps roughly the whole dataset\'s class proportions. On 60 rows with 5 positives, plain KFold gave positives per fold [2, 2, 0, 1, 0] — two folds measured nothing about the rare class. Stratified gave [1, 1, 1, 1, 1].' },
+    { front: 'Group k-fold and the leak it stops', back: 'All rows belonging to one patient, user or shop go into the same fold. Without it the model scores well by recognising the group across the train/test boundary rather than by predicting the outcome. Expect the honest score to be lower.' },
+    { front: 'The winner\'s curse', back: 'Pick the best of many noisy validation scores and you select for luck as well as quality. Measured: 40 settings, best validation 0.900 (average across all 40 was 0.848), same model on untouched test rows 0.725. Fix: a test set the tuning never sees.' },
+    { front: 'Grid vs random search', back: 'A v-value grid over d knobs costs v^d fits but tests each knob at only v values. n random draws test n distinct values of every knob. If 5% of settings are good enough, 60 draws find one with probability 1 − 0.95^60 = 0.954.' },
+    { front: 'Nested cross-validation, in one line', back: 'An inner k-fold loop tunes the hyperparameters; an outer k-fold loop measures the tuned result on folds the inner loop never saw. Honest estimate of the whole procedure. Cost: outer × inner × settings fits, and it returns a number, not a deployable model.' },
   ],
-  mindmapMarkdown: `- Cross-Validation & Hyperparameter Tuning
-  - Why CV exists
-    - One split = one noisy reading; report mean AND std
-  - k-fold
-    - Rotate the held-out fold, every row validated once
-    - k=5 or 10; big k = less bias, more fits, correlated folds
-    - LOOCV: n fits, high-variance estimate
-  - Split variants
-    - Stratified: keep the class ratio
-    - Group: one patient/user, one fold (leakage — Pipeline everything)
-    - Time-series: expanding or rolling, never shuffle, gap = label horizon
+  mindmapMarkdown: `- Cross-Validation & Tuning
+  - The problem with one split
+    - 200 rows, 40-row test set
+    - five splits: 0.825 0.850 0.875 0.925 0.825
+    - 10-point range, model unchanged
+  - k-fold, built by hand
+    - fold = one equal chunk of rows
+    - 20 rows, K=5, size=4 per fold
+    - rotate: each fold is test exactly once
+    - 200 rows: [0.9, 0.825, 0.9, 0.9, 0.8]
+    - mean 0.865, spread 0.100, std 0.0436
+  - The spread matters
+    - report mean give-or-take
+    - 0.008 gap inside 0.044 noise = no result
+    - wide spread = tiny data or uneven folds
+  - Choosing the cutter
+    - stratified: keeps class balance per fold
+    - plain KFold on 5 positives: [2,2,0,1,0]
+    - leave-one-out: k = n rows, costly, noisy
+    - group k-fold: all of one patient in one fold
+    - time-series split: train past, test future
+  - Tuning vocabulary
+    - parameter = learned by .fit()
+    - hyperparameter = set before .fit()
+    - grid search = every combination
+    - random search = n fresh draws
+    - Bayesian / Optuna = learns where to look
+  - The winner's curse
+    - 40 settings, best validation 0.900
+    - average across all 40: 0.848
+    - same model, untouched test: 0.725
+    - fix: train / validation / test, three piles
+  - Grid vs random
+    - 3x3 grid = 9 fits, 3 values per knob
+    - 9 random draws = 9 values per knob
+    - 1 - 0.95^60 = 0.954
   - Nested CV
-    - Outer loop estimates, inner loop tunes; expensive, so use a held-out test set
-  - Parameter vs hyperparameter
-    - .fit() learns parameters; you set hyperparameters, so they get searched
-  - Tuning strategies
-    - Grid: exhaustive, combinatorial death
-    - Random: n distinct values per axis, interruptible
-    - Bayesian / Optuna: surrogate + acquisition, TPE, pruning
-    - Successive halving / Hyperband: race and cull
-  - Practical rules
-    - Log scale for rates and strengths
-    - Tune the few knobs that matter, coarse then fine
-    - random_state everywhere
-    - Final test set untouched — the multiple-comparisons trap`,
+    - inner loop tunes
+    - outer loop measures
+    - cost outer x inner x settings
+  - The classic mistake
+    - shuffled 5-fold on 240 days: 0.974
+    - TimeSeriesSplit on the same data: -2.486
+    - shuffling puts the future in training
+    - fix the cutter, not the model`,
 }
 
 export default m

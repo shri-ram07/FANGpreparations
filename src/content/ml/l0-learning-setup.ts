@@ -4,447 +4,583 @@ const m: Module = {
   id: 'ml-l0-learning-setup',
   subjectId: 'ml',
   level: 0,
-  title: 'What "Learning" Actually Means: Fit, Generalize, Bias & Variance',
+  title: 'What "Learning From Data" Actually Means',
   whyItMatters:
-    'Every ML interview eventually lands on "your model does great offline and dies in prod — why?". The answer is always somewhere in this module: a broken split, a peeked-at test set, too much bias, too much variance. Get this mental model right once and every algorithm after it is just a different way to trade the same two errors.',
-  estMinutes: 55,
+    'This is the first module of machine learning, so it starts from nothing. By the end you will know exactly what a model is, what it means for one to "learn", why the data has to be cut into three piles before any learning happens, and how to tell — from two numbers — whether your model is too simple or too clever. Every algorithm you meet after this is a different way of doing the same three things, so the vocabulary here is the vocabulary for the whole subject.',
+  assumes: [
+    'You know what an average is and what a percentage means',
+    'You have seen a Python list, a dictionary, a for loop, and a function definition',
+    'You remember from school maths that y = w * x draws a straight line, and that w controls how steep it is',
+    'No machine learning background is needed. Every term is defined here, in the order you meet it.',
+  ],
+  estMinutes: 45,
   sections: [
     {
       type: 'intuition',
-      title: 'Learning is curve fitting with a bet attached',
-      md: `You have pairs: an input **x**, an answer **y**. Flat size to rent. Email text to spam-or-not. Pixels to "cat".
+      title: 'Six flats, and a rule with one number in it',
+      md: `Here is a small table. Six flats in one city. For each flat we know its floor area in square feet, and the monthly rent actually paid, in thousands of rupees.
 
-- Learning means exactly this: **find a function f such that f(x) is close to y** on the data you HAVE.
-- The machine understands nothing about rent or cats. It searches a space of candidate functions for one whose outputs land near the answers.
-- You choose the *shape* of the function — a line, a tree, a 175-billion-parameter network. The data chooses the *numbers* inside that shape.
-- That is the whole mechanism. Every algorithm in this subject is a variation on three questions: which shape, which numbers, how do we search.`,
+- 500 sq ft, rent 12
+- 750 sq ft, rent 17
+- 1000 sq ft, rent 21
+- 1200 sq ft, rent 26
+- 1500 sq ft, rent 31
+- 1800 sq ft, rent 37
+
+Now suppose I want to guess the rent of a flat I have not seen, knowing only its area. I need a rule. Let me pick the simplest rule that could work: **rent = w times area**, where w is one number I get to choose. Rent per square foot, basically.
+
+I do not know what w should be. So I try one and check. Take **w = 0.020**. The rule predicts 500 x 0.020 = 10, then 15, 20, 24, 30, 36. Compare each prediction to the real rent and write down how far off it was, ignoring the sign: 2, 2, 1, 2, 1, 1. The average of those six gaps is 9/6 = **1.5**.
+
+Now take **w = 0.021**. Predictions: 10.5, 15.75, 21, 25.2, 31.5, 37.8. Gaps: 1.5, 1.25, 0, 0.8, 0.5, 0.8. Average gap = 4.85/6 = **0.808**.
+
+0.808 is smaller than 1.5, so w = 0.021 is the better rule. That is it. That is learning from data: **I fixed the shape of the rule myself, and then let the six examples choose the number inside it.**`,
     },
     {
       type: 'intuition',
-      title: 'Generalization is the entire game',
-      md: `Here is the part that makes it hard: fitting the data you already have is trivially easy.
+      title: 'The words for what just happened',
+      md: `Every term below is standard, and every one of them refers to something in the table above. Nothing new is happening; we are only naming it.
 
-- Want zero error on your training data? Store every row in a lookup table and return the stored answer. Perfect score. Completely useless model.
-- What you actually want is performance on data you have **never seen** — and by definition you cannot measure that while training.
-- So every ML project is a **bet**: the pattern that held on my sample will hold on the next sample.
-- **Generalization** = that bet paying off. It is the only thing anyone is paid for.
-- The assumption underneath the bet: training data and future data come from the *same distribution*. When that breaks — seasonality, a new user segment, an upstream schema change — the model breaks, however good the math was.`,
-    },
-    {
-      type: 'note',
-      md: 'Three flavours of learning, one line each. **Supervised:** you have labelled pairs (x, y) and learn the mapping — regression when y is continuous, classification when y is a category. This is most of industry and most of this subject. **Unsupervised:** only x, no labels — find structure (clustering, PCA, anomaly detection). Harder to evaluate, because there is no answer key to check against. **Reinforcement:** no labels, only a delayed reward from an environment you act in — the agent learns a *policy* by trial and error (games, robotics, RLHF). The line that gets remembered: supervised learns from answers, unsupervised learns from structure, reinforcement learns from consequences.',
-    },
-    {
-      type: 'intuition',
-      title: 'The workflow: data to features to model to evaluate to iterate',
-      md: `Every ML project you will ever run is this loop. Learn the order — interviews test whether you know which step a problem *lives* in.
+- **Feature** — an input you are allowed to look at when predicting. Here there is exactly one feature: floor area. A real problem might have fifty.
+- **Label** — the answer you are trying to predict. Here the label is the rent. Also called the *target*.
+- **Sample** (or **row**, or **example**) — one feature-and-label pair. "500 sq ft, rent 12" is one sample. We have six.
+- **Dataset** — the collection of samples. Our dataset has six rows and one feature.
+- **Model** — the rule that turns features into a prediction, *including* the specific numbers inside it. "rent = 0.021 x area" is a model. "rent = w x area" with w not yet chosen is a *model family*: a whole shelf of models, one for each possible w.
+- **Parameters** (also called **weights**) — the numbers inside the model that get chosen by looking at the data. Here there is one parameter, w. A large neural network has billions, but they play exactly the role that w plays here.
+- **Training** — the process of choosing the parameters. What we did by trying 0.020 and 0.021 was training, done by hand.
 
-1. **Data** — collect, clean, split. Garbage here cannot be repaired downstream. Most of your actual wall-clock time lives in this step.
-2. **Features** — turn raw rows into numbers a model can use: scaling, encoding, ratios, date to day-of-week. On tabular problems this beats model choice almost every time.
-3. **Model** — pick the shape (linear, tree, ensemble, network) and fit it. The step beginners think is the whole job. It is maybe 10% of it.
-4. **Evaluate** — measure on data the model did not train on. Choose ONE metric that matches the real cost, and choose it *before* you see any result.
-5. **Iterate** — the evaluation tells you which direction to go back in: more data, better features, bigger model, different loss.
-
-Most of this module is about step 4, for one reason: a broken evaluation makes steps 1 to 3 unimprovable. You cannot climb a hill you are measuring wrong.`,
-    },
-    {
-      type: 'intuition',
-      title: 'Three datasets, three different jobs',
-      md: `One dataset, cut into three, because there are three separate questions to answer.
-
-- **Train (~70%)** — the model's parameters are fitted here. This is the only data the model learns labels from.
-- **Validation (~15%)** — *you* choose here: which model, which depth, which learning rate, when to stop. The model never trains on it, but your decisions do.
-- **Test (~15%)** — the one honest estimate of "how will this behave in production". Touched once, at the very end.
-- Why validation has to exist: the moment you use a set to *choose*, you start fitting to it. Comparing ten hyperparameter settings on the test set turns the test set into a training set for your decisions.
-- The sentence to carry: **train fits parameters, validation fits your choices, test fits nothing.**`,
+One more, because we used it without naming it: the number we minimised — the average gap between prediction and truth — is called the **training error**. It measures how badly the model does on the rows it was trained from.`,
     },
     {
       type: 'code',
       lang: 'python',
-      title: 'The split, and the one-line bug that silently ruins it',
-      code: `import numpy as np
+      title: 'The same thing in code: try five values of w, keep the best',
+      code: `size = [500, 750, 1000, 1200, 1500, 1800]
+rent = [12, 17, 21, 26, 31, 37]
 
-X = np.arange(1000)                      # 1000 rows, stored sorted by signup date
-y = (X > 700).astype(int)                # label that drifted: only late users converted
+def average_error(w):
+    total = 0.0
+    for i in range(len(size)):
+        predicted = w * size[i]
+        total = total + abs(predicted - rent[i])
+    return total / len(size)
 
-def split(X, y, seed=0):
-    idx = np.random.default_rng(seed).permutation(len(X))    # SHUFFLE, then cut
-    a, b = int(0.7 * len(X)), int(0.85 * len(X))             # 70 / 15 / 15
-    tr, va, te = idx[:a], idx[a:b], idx[b:]
-    return (X[tr], y[tr]), (X[va], y[va]), (X[te], y[te])
+for w in [0.018, 0.020, 0.021, 0.022, 0.024]:
+    print(w, round(average_error(w), 3))
 
-sets = split(X, y)
-print("sizes        ", *[len(s[0]) for s in sets])
-print("positive rate", *[f"{s[1].mean():.3f}" for s in sets])
-
-naive = (y[:700], y[700:850], y[850:])                       # cut without shuffling
-print("no shuffle   ", *[f"{s.mean():.3f}" for s in naive])
-
-# sizes         700 150 150
-# positive rate 0.303 0.267 0.313
-# no shuffle    0.000 0.993 1.000`,
+# ---- real output ----
+# 0.018 3.75
+# 0.02 1.5
+# 0.021 0.808
+# 0.022 1.25
+# 0.024 3.0`,
       annotations: {
-        4: 'A realistic label: behaviour changed over time. Any real table has some ordering baked into it — date, region, an ingestion job.',
-        7: 'The whole fix. Shuffle indices once, then slice. Skipping this line is one of the most common silent bugs in ML code.',
-        8: '70/15/15 is a default, not a law. Small data (<10k rows) leans on cross-validation instead; huge data can spare 1% and still have 100k test rows.',
-        16: 'The naive cut. It looks perfectly reasonable, and it is catastrophic.',
-        21: 'Compare the two output rows. Shuffled: all three splits carry ~30% positives, so they ask the same question. Unshuffled: the model trains on a world where NOBODY converts, then gets tested on one where everybody does. Its "accuracy" is meaningless.',
-      },
-    },
-    {
-      type: 'intuition',
-      title: 'Why the test set is touched exactly once',
-      md: `"I checked the test set a few times to see if I was improving." That sentence quietly destroys the number you are about to report.
-
-- Every time you look at the test set and change something because of what you saw, information flows from test into your model.
-- It does not need to be code. **Your brain is the leak channel.** No amount of careful splitting protects against a human who peeks.
-- The mechanism is the **winner's curse**: pick the best of many candidates scored on one small sample, and the winner's score is inflated by luck that will not repeat.
-- The nasty part is that the *estimate* keeps improving while the *model* does not improve at all. You ship believing 92% and watch 84% in production.
-- Proof, below: 300 completely random "models" scored against pure coin-flip labels. There is no signal to find — none, zero, by construction.`,
-    },
-    {
-      type: 'code',
-      lang: 'python',
-      title: 'The winner\'s curse, on data with no signal at all',
-      code: `import numpy as np
-
-rng = np.random.default_rng(0)
-y_val = rng.integers(0, 2, 100)      # labels are pure coin flips - no signal exists
-y_fresh = rng.integers(0, 2, 100)    # a second, untouched sample of the same coin
-
-best_acc, best_guess = 0.0, None
-for _ in range(300):                 # 300 "ideas", all scored on the SAME held-out set
-    guess = rng.integers(0, 2, 100)  # each idea is one random model
-    acc = (guess == y_val).mean()
-    if acc > best_acc:
-        best_acc, best_guess = acc, guess
-
-print("winner's score on the peeked set:", round(best_acc, 3))
-print("same model on fresh data:        ", round((best_guess == y_fresh).mean(), 3))
-
-# winner's score on the peeked set: 0.62
-# same model on fresh data:         0.53`,
-      annotations: {
-        4: 'Labels are coin flips. The best possible accuracy any model can achieve on fresh data is 0.5. Remember that ceiling.',
-        8: '300 candidates against ONE evaluation set. Swap "random guess" for "hyperparameter config" and this is a normal tuning run.',
-        11: 'This line is the leak: a decision made using the held-out set. Selecting on a set is a weak form of training on it.',
-        17: '0.62 on the peeked set. A 12-point "edge" that is 100% selection luck, from models that are literally noise.',
-        18: '0.53 on fresh data - back to the coin-flip ceiling, as physics demanded. The gap between line 17 and line 18 is the optimism you would have shipped.',
+        1: 'A plain Python list holding the six floor areas. Position 0 is the first flat, position 5 the last.',
+        2: 'The six rents, in the same order. So size[3] and rent[3] describe the same flat — the 1200 sq ft one.',
+        4: 'Defines a function that takes one candidate value of w and hands back how badly that model does. Everything the function needs beyond w (the two lists) it reads from outside itself.',
+        5: 'A running total, starting at zero. Written 0.0 rather than 0 to make clear it accumulates decimals.',
+        6: 'len(size) is 6, so range(len(size)) produces 0, 1, 2, 3, 4, 5 — one pass per flat.',
+        7: 'The model itself, in one line: multiply this flat\'s area by w. This is the prediction.',
+        8: 'abs() throws away the minus sign, so predicting 2 too high and 2 too low both count as 2. Add that gap to the total.',
+        9: 'Divide by 6 to get the average gap per flat. Dividing keeps the number comparable when the dataset size changes.',
+        11: 'Five candidate values of w. This list is my choice, not the data\'s — I picked a range that looked sensible and spaced it out.',
+        12: 'Print the candidate and its error, rounded to 3 decimals. Read the output column downward: the error falls to 0.808 at w = 0.021 and rises again after it. Python prints 0.020 as 0.02 because trailing zeros are not stored.',
       },
     },
     {
       type: 'note',
-      md: 'The practical discipline that follows: every comparison, every hyperparameter, every "let me try one more thing" goes through the **validation** set. The test set gets opened once, after the model is frozen. If you genuinely have to re-test — a real bug, a new requirement — say so out loud and treat the new number as optimistic. The larger the number of things you compared, the larger the optimism. This is the single most common reason a model that looked great offline disappoints in production.',
+      md: 'Two of my choices in that snippet were never touched by the data: the *shape* of the rule (a straight line through zero) and the *list of w values to try*. A setting like that — chosen by you before training, not fitted from the rows — is called a **hyperparameter**. The distinction runs through the entire subject: a **parameter** is fitted from data (w = 0.021), a **hyperparameter** is chosen by you (the shape of the rule, how many values to try, how long to train). Almost everything that goes wrong later goes wrong in how hyperparameters get chosen.',
+    },
+    {
+      type: 'note',
+      md: 'Our problem has labels, so it is called **supervised** learning: you have (features, label) pairs and learn the mapping. When the label is a number, like rent, that is **regression**; when it is a category, like spam-or-not, that is **classification**. Two other families exist and you will meet them much later: **unsupervised** learning has features but no labels and looks for structure instead, and **reinforcement** learning has no labels at all, only a delayed reward for actions taken. Everything in this module is supervised.',
     },
     {
       type: 'intuition',
-      title: 'Underfitting vs overfitting: the polynomial story',
-      md: `Same data, same code, one knob: how wiggly is the fitted function allowed to be? Polynomial degree.
+      title: 'Why scoring a model on the rows it learned from proves nothing',
+      md: `Our w = 0.021 model has a training error of 0.808. Is that good? Here is a model that beats it flat out.
 
-- **Degree 0** — a flat line at the average. Ignores x completely. Wrong on train, wrong on test. **Underfitting**.
-- **Degree 1** — a straight line through curved data. Better, still systematically off in the same places. Still underfitting.
-- **Degree 3** — follows the real curve, ignores the jitter. This is the model you want.
-- **Degree 9** — with only 15 training points, a degree-9 polynomial can pass through *every single one*. Training error near zero. Between the points it swings absurdly. **Overfitting**.
-- The tell that matters: overfitting is not "high error". It is a **large gap** — training error near zero, test error climbing. Underfitting is high error on *both*, with almost no gap.`,
+- Build a lookup table. Store all six rows: area 500 goes to rent 12, area 750 goes to rent 17, and so on.
+- To predict, look the area up in the table and return the stored rent. If the area is not in the table, return 24 — roughly the average rent, since there is nothing else to say.
+- Training error of this model: it returns the exact stored rent for all six training rows, so every gap is 0. **Training error = 0.000.** Perfect score.
+
+By training error, this beats every straight line ever fitted. And it is obviously useless: hand it a 900 sq ft flat and it says 24, because 900 is not in the table. It has learned nothing about how rent relates to area. It memorised.
+
+This is not a contrived edge case; it is the central problem of the whole field. Fitting the rows you already have is easy — you can always memorise them. What you actually want is a model that is right on rows it has **never seen**. Let us measure both models on rows they never saw.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'The memorizer: perfect on what it stored, hopeless on anything else',
+      code: `table = {}
+for i in range(len(size)):
+    table[size[i]] = rent[i]
+
+def predict(x):
+    return table.get(x, 24.0)
+
+def average_error(xs, ys):
+    total = 0.0
+    for i in range(len(xs)):
+        total = total + abs(predict(xs[i]) - ys[i])
+    return total / len(xs)
+
+print("memorizer on the 6 rows it stored:", average_error(size, rent))
+new_size = [600, 900, 1400]
+new_rent = [14, 19, 29]
+print("memorizer on 3 flats it never saw:", round(average_error(new_size, new_rent), 3))
+
+# ---- real output ----
+# memorizer on the 6 rows it stored: 0.0
+# memorizer on 3 flats it never saw: 6.667`,
+      annotations: {
+        1: 'An empty dictionary. A dictionary stores key-to-value pairs and can look a value up by its key instantly.',
+        2: 'Walk the six positions again. size and rent are the same two lists from the previous snippet.',
+        3: 'Store one pair: the key is this flat\'s area, the value is its rent. After the loop the dictionary holds all six.',
+        5: 'The whole model: given an area x, return what was stored for it.',
+        6: 'table.get(x, 24.0) means "give me the value stored under key x, or 24.0 if x is not in the dictionary at all". The 24.0 is the fallback for an area we never saw.',
+        8: 'A new version of average_error, this time taking the areas and rents to score on as arguments, so we can point it at different rows. It replaces the one-argument version from the previous snippet.',
+        9: 'The running total again, starting at zero.',
+        10: 'One pass per row of whatever lists were passed in.',
+        11: 'Gap between what predict() says and the true rent, sign thrown away, added to the total.',
+        12: 'Average gap per row.',
+        14: 'Score the memorizer on the exact six rows it stored. Every lookup hits, so every gap is 0 and the printed answer is 0.0.',
+        15: 'Three flats that are not in the table: 600, 900 and 1400 sq ft.',
+        16: 'Their true rents, so we can measure honestly.',
+        17: 'Score on those three. Every lookup misses, so the model returns 24.0 three times. Gaps are 10, 5 and 5, and 20/3 = 6.667.',
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'The comparison that justifies everything that follows',
+      md: `Now put the two models side by side on the same two questions. The straight-line model is rent = 0.021 x area, and its predictions on the three new flats are 0.021 x 600 = 12.6, 0.021 x 900 = 18.9, and 0.021 x 1400 = 29.4. The true rents are 14, 19 and 29, so the gaps are 1.4, 0.1 and 0.4, averaging 1.9/3 = **0.633**.
+
+- **Memorizer:** error on rows it trained from = **0.000**. Error on new rows = **6.667**.
+- **Straight line:** error on rows it trained from = **0.808**. Error on new rows = **0.633**.
+
+Read the first column on its own and the memorizer wins by a mile. Read the second column and it loses by a factor of ten. **The number you would have used to pick a model ranked the worse model first.** That is why training error is not a measure of quality — it is a measure of how hard the model tried to memorise.
+
+The property the straight line has and the memorizer does not is called **generalization**: performing well on data drawn from the same source but not used during training. Generalization is the actual goal. Training error cannot see it. So we need to measure on rows the model did not train on — which means deciding, before training, which rows the model is not allowed to have.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Three piles, three different jobs',
+      md: `So you take your dataset and cut it into three parts, at random, before anything else happens. A common split is 70 / 15 / 15.
+
+- **Training set** (about 70% of rows) — the only rows the model is allowed to fit its parameters on. This is where w = 0.021 comes from.
+- **Validation set** (about 15%) — rows used to *choose between* models: which shape of rule, which hyperparameter, when to stop training. The model never fits parameters on these rows, but your decisions are made using them.
+- **Test set** (about 15%) — rows opened exactly once, at the very end, after everything is decided, to produce the one honest estimate of how the chosen model will behave on new data.
+
+The obvious question is why validation and test are two separate piles when they are both "data the model did not train on". The answer is the whole of the next section, and it is worth the space, because collapsing them is the single most common way a good project produces a wrong number.
+
+One sentence to carry: **the training set fits the parameters, the validation set fits your choices, and the test set fits nothing.**`,
+    },
+    {
+      type: 'intuition',
+      title: 'Picking the best of many, on one set, inflates the winner',
+      md: `Here is the mechanism, stripped down until nothing else can explain the result.
+
+- Take 100 labels that are pure coin flips — genuinely random, 0 or 1, with nothing to predict. By construction, no model on earth can do better than 50% on this in the long run.
+- Now generate 200 "models". Each one is just 100 random guesses. None of them knows anything.
+- Score all 200 against the same 100 labels, and keep the best scorer.
+- The best of 200 will land somewhere around 60%, purely because with 200 tries, someone gets lucky. It looks like a model with a 10-point edge.
+- Take that exact winner and score it on 100 *fresh* coin flips. It falls straight back to about 50%, because there was never any edge to keep.
+
+The gap between those two numbers is not noise you can average away — it is the price of having *chosen* using that set. It has a name: the **winner's curse**. And it is why the test set is not a set you may select on.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Part 1: pure noise, and one model scored against it',
+      code: `import random
+
+random.seed(3)
+truth = [random.randint(0, 1) for _ in range(100)]
+fresh = [random.randint(0, 1) for _ in range(100)]
+
+def score(guesses, answers):
+    hits = 0
+    for i in range(100):
+        if guesses[i] == answers[i]:
+            hits = hits + 1
+    return hits / 100
+
+one_model = [random.randint(0, 1) for _ in range(100)]
+print("one random model, scored on truth:", score(one_model, truth))
+
+# ---- real output ----
+# one random model, scored on truth: 0.5`,
+      annotations: {
+        1: 'Python\'s built-in random number module. Nothing is installed for this.',
+        3: 'Fixes the random sequence so this run prints the same numbers on your machine as it did on mine.',
+        4: 'A list comprehension: "[expression for _ in range(100)]" builds a list by running the expression 100 times. random.randint(0, 1) returns 0 or 1 with equal chance. The underscore is a variable name we do not use. So truth is 100 coin flips — the labels, with no pattern in them at all.',
+        5: 'A second, independent set of 100 coin flips from the same source. We will not touch it until the very end. This stands in for "fresh data from production".',
+        7: 'A function that compares one list of guesses against one list of answers.',
+        8: 'Counter for how many positions matched.',
+        9: 'One pass per position, 0 to 99.',
+        10: 'Compare the guess at this position with the answer at the same position.',
+        11: 'If they matched, add one.',
+        12: 'Return the fraction correct — hits out of 100. This is accuracy.',
+        14: 'One "model": 100 random guesses. This is what a model with zero knowledge looks like.',
+        15: 'It scores 0.50 — exactly the coin-flip ceiling, as it must. Remember this number.',
+      },
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Part 2: now try 200 of them and keep the winner',
+      code: `best_score, best_model = 0.0, []
+for trial in range(200):
+    model = [random.randint(0, 1) for _ in range(100)]
+    if score(model, truth) > best_score:
+        best_score, best_model = score(model, truth), model
+
+print("best of 200, on the set we chose with:", best_score)
+print("that same model on a fresh sample:    ", score(best_model, fresh))
+
+# ---- real output ----
+# best of 200, on the set we chose with: 0.61
+# that same model on a fresh sample:     0.49`,
+      annotations: {
+        1: 'Two variables assigned on one line: the best score seen so far (0.0) and the model that achieved it (an empty list for now). Python lets you assign several names at once by separating both sides with commas.',
+        2: 'Do this 200 times. Each pass is one "idea we tried" — in a real project, one hyperparameter setting.',
+        3: 'Build another 100 random guesses. Same kind of nothing as before.',
+        4: 'Score this model on truth and check whether it beats the best so far. This one line is the leak: a decision is being made using the set we will later quote a number from.',
+        5: 'Record the new best score and the model that got it, again assigning both names at once.',
+        7: 'Prints 0.61. Sixty-one percent, from models that are literally noise, on labels that are literally noise.',
+        8: 'The same winning model on the untouched fresh sample: 0.49. The 11-point edge was entirely selection luck. If you had reported 0.61 as this model\'s performance, you would have been wrong by 11 points and had no way to know.',
+      },
+    },
+    {
+      type: 'note',
+      md: 'The practical rule that falls out: every comparison, every hyperparameter, every "let me try one more thing" is scored on the **validation** set, and the test set is opened once, after the model is frozen. Note that the leak does not require code — if you look at the test score and then change something because of what you saw, you have selected on it just as surely as the loop above did. The more things you compared, the more the winning number overstates reality.',
+    },
+    {
+      type: 'intuition',
+      title: 'One knob for how wiggly the model may be',
+      md: `Back to fitting. The straight line was one shape, but we can allow the rule to bend. The standard knob for this is **polynomial degree**.
+
+- **Degree 0**: prediction = a constant. A flat line at the average of the labels. It ignores the feature completely.
+- **Degree 1**: prediction = a + b*x. A straight line — it can tilt, but not bend.
+- **Degree 2**: prediction = a + b*x + c*x*x. One bend allowed.
+- **Degree 9**: nine powers of x. It can bend nine times. Given only 15 training points, a degree-9 curve can be steered through almost every single one of them.
+
+Higher degree means more parameters, which means more freedom to match the training rows. So training error can only fall as degree rises. The question is what happens to error on rows the model did not see. We have 15 training points and 10 validation points, both drawn from the same gently curving source with a little random jitter added. Let us print both errors for each degree and look.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Degree 0 to 9: training error and validation error, side by side',
+      code: `import numpy as np
+
+rng = np.random.default_rng(7)
+
+def sample(n):
+    x = rng.uniform(0, 1, n)
+    y = 0.8 * np.sin(2.2 * np.pi * x) + 0.18 * rng.standard_normal(n)
+    return x, y
+
+x_train, y_train = sample(15)
+x_val, y_val = sample(10)
+
+def error(coeffs, x, y):
+    return float(np.mean((np.polyval(coeffs, x) - y) ** 2))
+
+for degree in [0, 1, 2, 3, 5, 7, 9]:
+    coeffs = np.polyfit(x_train, y_train, degree)
+    print(degree, round(error(coeffs, x_train, y_train), 4), round(error(coeffs, x_val, y_val), 4))
+
+# ---- real output ----
+# 0 0.2276 0.36
+# 1 0.0829 0.1555
+# 2 0.076 0.137
+# 3 0.0109 0.0386
+# 5 0.01 0.0511
+# 7 0.0088 0.0593
+# 9 0.0087 0.0614`,
+      annotations: {
+        1: 'numpy is the standard Python library for arrays of numbers. It earns its place here for exactly one reason: fitting a degree-9 curve means solving a system of ten equations, which is a page of code by hand and one call in numpy. "as np" just gives it a short name.',
+        3: 'Creates a random number generator with a fixed starting point (7), so these numbers are reproducible.',
+        5: 'A function that manufactures n samples for us. We invent the data so that we know what the truth is.',
+        6: 'rng.uniform(0, 1, n) returns n numbers spread evenly at random between 0 and 1. These are the feature values.',
+        7: 'The label: a gentle S-shaped curve, 0.8 * sin(2.2 * pi * x), plus jitter. rng.standard_normal(n) draws n random numbers centred on zero, and multiplying by 0.18 keeps the jitter small. The jitter is the part no model can ever predict.',
+        8: 'Hand back both lists at once. Python returns them as a pair, and the caller can unpack that pair into two names.',
+        10: 'Call it for 15 training samples. "x_train, y_train =" is tuple unpacking: the two returned values are assigned to the two names in order.',
+        11: 'Ten more samples from the identical source. Same distribution, different rows — which is exactly what a validation set is.',
+        13: 'A function that measures how far a fitted curve sits from a set of labels. coeffs describes the curve.',
+        14: 'Read it inside out. np.polyval(coeffs, x) evaluates the fitted curve at every x at once. Subtracting y gives the gap at each point, ** 2 squares each gap so the signs cannot cancel, np.mean averages them, and float() turns the numpy result into an ordinary Python number for printing. This average of squared gaps is called mean squared error.',
+        16: 'Seven degrees to try — 0 through 9, skipping a few to keep the table short.',
+        17: 'np.polyfit(x_train, y_train, degree) finds the polynomial of that degree whose squared error on the training points is as small as possible, and returns its coefficients. This one call is the entire training step.',
+        18: 'Print the degree, then the error on the rows we trained on, then the error on the rows we did not. The two columns behave completely differently, which is the point of the whole snippet.',
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'Reading that table: underfitting and overfitting',
+      md: `Two columns, two different stories.
+
+- **Training error only falls**: 0.2276, 0.0829, 0.0760, 0.0109, 0.0100, 0.0088, 0.0087. Every extra degree buys more freedom to hug the training points, so this column can never turn back up. A falling training error is therefore not, on its own, evidence of anything at all.
+- **Validation error falls and then climbs**: 0.3600, 0.1555, 0.1370, **0.0386**, 0.0511, 0.0593, 0.0614. It bottoms out at degree 3 and gets steadily worse after it. That is the famous **U-curve**, and its lowest point is the model you ship.
+
+Now the two names, defined by the shape of those numbers rather than by feel.
+
+- **Underfitting** — the model is too restricted to express the pattern. Signature: **high error on both sets, with almost no gap between them**. Degree 0 is the example: 0.2276 and 0.3600 are both bad, and no amount of extra data would fix a flat line trying to follow a curve.
+- **Overfitting** — the model has enough freedom to fit the random jitter in the training rows, and it does. Signature: **low training error with a large gap to validation error**. Degree 9 is the example: 0.0087 on training against 0.0614 on validation, a gap of seven times.
+
+Overfitting is not "high error". Degree 9 has the *lowest* training error in the table and is one of the worst models in it. What identifies overfitting is the **gap**.`,
     },
     { type: 'visual', component: 'BiasVarianceDial', props: {} },
     {
       type: 'note',
-      md: 'Step the degree from 0 to 9 and watch the lower chart. The **train** curve only ever falls — more flexibility can always hug the training points harder, so a falling training loss is never by itself evidence of anything. The **test** curve falls, bottoms out, then climbs: the **U-curve**. The bottom of that U is the model you ship. Left of the bottom you are leaving real signal unused; right of it you are fitting noise and calling it learning. Note also what happens on the far right — the fitted curve does not just get slightly worse, it goes violently wrong between the data points. That is variance you can see.',
+      md: 'Use the step controls under that chart to walk the degree from 0 up to 9, and watch two things at once. In the **upper chart**, watch the solid fitted curve against the dashed true curve: at degree 0 it is a flat line that ignores the shape entirely, around degree 3 it tracks the dashed curve closely, and by degree 8 or 9 it stops being a curve and starts lurching between the training dots — that violent swinging in the gaps between points is what overfitting looks like when you can see it. In the **lower chart**, watch the two error lines: the blue train line only ever goes down, while the amber test line comes down, flattens, and then turns back up. Stop at the degree where the amber line is lowest. That is the model you would ship, and it is not the one with the best training score.',
     },
     {
       type: 'intuition',
-      title: 'Bias and variance, properly',
-      md: `Underfitting and overfitting are both prediction failures, but they fail for opposite reasons. Naming them precisely is what an interviewer is grading.
+      title: 'Bias and variance: two different ways to be wrong',
+      md: `Underfitting and overfitting both produce bad predictions, but for opposite reasons, and the standard names for those reasons are bias and variance. Both are defined by imagining something you cannot actually do: collecting a fresh training set many times over and refitting the model on each one.
 
-- **Bias** = error from **wrong assumptions**. You forced a straight line onto a curve. Even with infinite data the line stays wrong, and it is wrong in the *same direction every time*. Systematic.
-- **Variance** = error from **sensitivity to the particular training sample**. Hand the same algorithm a different 15 rows and it produces a wildly different function. Not wrong on average — wrong *differently* each time. Unstable.
-- Archery: high bias is a tight cluster 30cm left of the bullseye (you aimed wrong). High variance is centred on the bullseye but sprayed over the whole target (you cannot repeat yourself).
-- Flexibility trades one for the other: more flexible model to less bias but more variance. Less flexible to more bias but less variance.
-- The subtlety people miss: bias is about the **average** model over imaginary re-runs, variance is the **spread** around that average. Variance is invisible from a single training run — which is exactly why it goes undiagnosed.`,
+- **Bias** is error from the model being unable to represent the truth. Force a flat line onto a curved pattern and it is wrong in the *same places, in the same direction*, every single time — even with a million rows. Averaged over all those imaginary refits, the model still sits away from the truth. That distance is the bias.
+- **Variance** is error from being too sensitive to *which particular rows* you happened to get. Refit the degree-9 curve on 15 different points and you get a wildly different curve. Averaged over the imaginary refits it might sit right on the truth, but any single one of them is far from that average. That spread is the variance.
+
+An archery picture helps: high bias is a tight group 30 cm left of the bullseye — repeatable, and repeatably wrong. High variance is arrows scattered all over the target but centred on the bullseye — right on average, and useless in practice.
+
+Turning the flexibility knob trades one for the other. More degrees means less bias and more variance; fewer degrees means more bias and less variance. The U-curve in the table is those two moving in opposite directions and their total having a minimum somewhere in the middle.
+
+The reason variance goes undiagnosed so often: you only ever train once, so you never see the spread. What you *can* see is the train-validation gap, and that is the practical signal for it.`,
     },
     {
       type: 'hinglish',
       md: `Do type ke kharab students socho. Pehla wala **high bias** hai: usne ek hi formula ratt liya hai aur har question mein wahi thok deta hai. Kitna bhi padha lo, uski **soch hi galat** hai — aur har baar *ek jaisi* galat, consistently. Doosra wala **high variance** hai: ye har baar apna answer badal deta hai. Jo notes aaj mile, wahi ratt liye; kal doosre notes mile to poora jawab hi badal gaya. Average nikaalo to shayad theek baithe, par bharosa zero — **har baar mood badalta hai**, kabhi 95 kabhi 30. Ilaaj alag-alag hai: bias wale ko **bada dimaag** chahiye (bigger model, better features), variance wale ko **discipline** chahiye (zyada data, regularization, simple model, ensembling). Aur pehle diagnose karo, phir dawai do — high-bias model ko aur data pilane se kuch nahi hota.`,
     },
     {
+      type: 'intuition',
+      title: 'Diagnose from two numbers, then fix',
+      md: `You need exactly two numbers: error on the training set and error on the validation set. Four cases cover everything.
+
+- **Both high, gap small** to underfitting, too much bias. The model cannot even do the rows it was given.
+- **Training low, validation much higher** to overfitting, too much variance.
+- **Both low** to done. Stop tinkering; further tuning is now just fitting the validation set.
+- **Training error higher than validation error** to suspect a bug. Usually a bad split, or a validation set that is accidentally easier.
+
+To fix **bias**, give the model more ability to express the pattern: a more flexible model family (higher degree, deeper tree, more layers), better features, less restriction, longer training. To fix **variance**, make the model steadier across samples: more training data, a simpler model, fewer features, or averaging many models together.
+
+The reason to diagnose before fixing: more data reduces variance and does nothing for bias. Pouring rows into an underfitting model changes nothing at all, which is an expensive way to learn this lesson.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Worked case: choosing a model for a loan approval task, by hand',
+      md: `2,000 labelled applications. Each row has features about the applicant and a label saying whether the loan was repaid. Work it through in order.
+
+- **Split first.** 70 / 15 / 15 of 2,000 gives **1,400 training rows, 300 validation rows, 300 test rows**. Do this before looking at anything, and never move a row between piles again.
+- **Fit three candidates on the 1,400 training rows** and score each on the 300 validation rows. Error here means the fraction of applications classified wrongly. Candidate A: train 0.28, validation 0.29. Candidate B: train 0.11, validation 0.14. Candidate C: train 0.01, validation 0.22.
+- **Diagnose A.** Both errors high, gap 0.01. Underfitting — too much bias. Giving A more data will not help; A needs to be a more flexible model or get better features.
+- **Diagnose C.** Training error 0.01 with a gap of 0.21. Overfitting — too much variance. It has memorised 1,400 rows including their noise. C is not the best model, despite having by far the best training score.
+- **Diagnose B.** Errors 0.11 and 0.14, gap 0.03, and the lowest validation error of the three. B wins. Note that B did not win on training error — C did.
+- **Now open the test set, once.** B scores **0.147** on the 300 test rows, which is 44 wrong out of 300. Report that number, not the 0.14.
+- **Why report the larger one.** 0.14 was the score B got on the set we used to *choose* B, so it carries a little winner\'s curse from the three-way comparison. 0.147 came from rows that took part in no decision. The small gap between them, 0.007, is roughly the size of that optimism — small here because we only compared three candidates, and it would be much larger after comparing three hundred.
+- **What it costs to skip this.** Suppose the team had picked by training error and shipped C. On 1,000 applications a day, C makes about 0.22 x 1,000 = **220 wrong decisions**, against B\'s 0.147 x 1,000 = **147**. Same data, same day, 73 extra bad decisions, caused entirely by ranking models with the wrong number.`,
+    },
+    {
+      type: 'intuition',
+      title: 'The classic mistake, walked into on purpose',
+      md: `A team has a dataset and skips the validation split, on the reasonable-sounding argument that two held-out sets is one more than necessary. Their process: train a model, score it on the test set, adjust, repeat. They do this 40 times over three weeks, keep the best one, and report its **test accuracy of 91%**.
+
+Three months later the model runs at 84% in production, and nobody can find a bug. There is no bug. Here is the diagnosis.
+
+- Every one of those 40 rounds used the test score to decide what to change. That is selection, and selection on a set is a weak form of training on it. After round one, the set was no longer held out from anything.
+- The size of the damage is what part 2 of the noise experiment measured. There, 200 candidates scored against one set produced a winner at **0.61** on that set and **0.49** on fresh data — an 11-point gap manufactured entirely by choosing, on data where no real signal existed at all.
+- The nastiest part is that the reported number keeps improving while the model does not. The team genuinely watched 86%, 88%, 91% appear over three weeks. Every one of those increments was partly real improvement and partly a better-fitting piece of luck, and nothing in the process could separate the two.
+- **The 91% was never a prediction of production performance.** It was the maximum of 40 noisy measurements, and the maximum of many noisy measurements is biased upward, always. Reporting it as a performance estimate is the mistake.
+
+The fix is procedural, not mathematical. Split three ways up front. Run all 40 rounds against the validation set. Freeze the model. Then score the test set once and report that. If the test set has already been used for selection, it is spent — treat it as a second validation set and carve a genuinely fresh holdout, ideally from a later time period, before quoting any number to anyone.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Practice problems',
+      md: `Work them on paper before reading the solutions in the next section.
+
+1. A model scores 0.05 error on training and 0.27 on validation. Name the condition, say which of bias and variance is large, and give two fixes that would plausibly help.
+2. A different model scores 0.34 on training and 0.35 on validation. A human expert does the same task at 0.05 error. Name the condition, and say why buying 10x more labelled rows would be a waste of money here.
+3. You have 4,000 rows. Write the three pile sizes for a 70/15/15 split. Your teammate then tells you they compared 20 hyperparameter settings on the test set and got 88%. What exactly is wrong with 88%, and what do you do now?
+4. From the degree table in this module: degree 9 has training error 0.0087, the lowest in the table, and validation error 0.0614. Degree 3 has 0.0109 and 0.0386. Which do you ship, and why is degree 9\'s better training score not an argument for it?
+5. The memorizer scored exactly 0.000 training error. Explain in two sentences why that is not a bug in the code, and what it tells you about training error as a way of ranking models.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Worked solutions',
+      md: `Check your reasoning against each step, not only the final label.
+
+1. **Overfitting; variance is large.** The signature is a low training error with a big gap to validation — here the gap is 0.22, more than four times the training error itself. The model is fitting noise in the training rows. Fixes that attack variance: collect more training data, use a simpler or more restricted model, drop weak features, or average several models together. A fix that would *not* help: making the model more flexible, which enlarges the gap.
+2. **Underfitting; bias is large.** Both errors are high and the gap is 0.01, so the model is not sensitive to which rows it saw — it is simply unable to express the pattern. The expert\'s 0.05 proves the pattern exists and is learnable, so this is not a floor imposed by noisy data. More rows only reduce variance, and there is essentially no variance here to reduce, so 10x data buys close to nothing. Spend on a more flexible model family or better features instead.
+3. **2,800 training, 600 validation, 600 test.** The 88% is wrong as a performance estimate because it is the maximum of 20 measurements taken on the very set being quoted — the winner\'s curse inflates it by an unknown amount that grows with the number of settings compared. What to do: stop using that set for decisions, since it is now spent; re-run the comparison against a proper validation split; and get a genuinely untouched holdout — ideally a later time period — to score the frozen model once. Report that number instead.
+4. **Ship degree 3**, validation error 0.0386 against degree 9\'s 0.0614. Degree 9\'s training score is not an argument because training error is guaranteed to be non-increasing as degree rises — a degree-9 curve can be steered through more of the 15 training points than a degree-3 curve can, whether or not those points carry any real signal. A number that can only go down as you add freedom cannot be used to compare amounts of freedom.
+5. It is not a bug: the memorizer stores each training row\'s exact label and returns it on lookup, so its prediction on every training row is exactly right by construction, and zero is the correct output. What it tells you is that training error can be driven to zero without learning anything transferable at all, so it can rank a useless model above a good one — which is precisely why the comparison has to be made on rows the model has never seen.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Beyond the basics - skip this on your first read',
+      md: `Everything above stands on its own. This section names ideas you will meet later, so the words are not new when you get there.
+
+- **The bias-variance decomposition.** For squared error, the expected error splits exactly into three pieces, written out in the math block below. The third piece is **irreducible error**: variability in the label that your features simply cannot explain — two identical flats renting for different amounts because one landlord was in a hurry, two doctors disagreeing on the same scan. No model reduces it, so it sets a hard floor on achievable error. A practical way to estimate that floor is to have two humans label the same 200 examples and measure how often they disagree.
+- **Near-perfect scores are a bug report.** If you score 99.9% on the first honest attempt, look for **leakage** — a feature computed after the label existed, an ID that encodes the answer, or duplicate rows landing in both training and test — before celebrating.
+- **k-fold cross-validation.** When the dataset is small, a single 15% validation split is itself so noisy that you may be choosing between models on luck. Instead, cut the training data into k parts, train k times leaving one part out each time, and average the k validation scores. It costs k times the compute and gives a far steadier comparison. The test set stays sealed regardless.
+- **Double descent.** The clean U-curve is a statement about one axis, flexibility, with everything else held fixed. With very large modern models the picture changes: test error falls, rises to a peak, and then falls *again* as the model grows past the point where it can fit the training data exactly. This is why enormous networks can memorise their training set and still generalize, and it is why "bigger always overfits" is not a law.`,
+    },
+    {
       type: 'math',
-      intro: 'The decomposition. It is exact for squared-error loss, and it is the reason the U-curve exists.',
+      intro: 'The decomposition named above. The expectation E runs over training sets: imagine collecting your data again and again and refitting each time. f is the truth, f-hat is your fitted model.',
       latex: [
         '\\mathbb{E}\\big[(y - \\hat{f}(x))^2\\big] \\;=\\; \\underbrace{\\big(\\mathbb{E}[\\hat{f}(x)] - f(x)\\big)^2}_{\\text{bias}^2} \\;+\\; \\underbrace{\\mathbb{E}\\big[(\\hat{f}(x) - \\mathbb{E}[\\hat{f}(x)])^2\\big]}_{\\text{variance}} \\;+\\; \\underbrace{\\sigma^2}_{\\text{irreducible noise}}',
-        '\\text{The expectation } \\mathbb{E} \\text{ runs over training sets: imagine re-collecting your data many times and refitting.}',
-        '\\textbf{bias}^2: \\text{ take the AVERAGE model over all those runs. How far is it from the truth } f(x)? \\text{ Wrong assumptions.}',
-        '\\textbf{variance}: \\text{ how far does ONE run sit from that average? Sensitivity to which rows you happened to get.}',
+        '\\textbf{bias}^2: \\text{ take the AVERAGE model over all those refits. How far is it from the truth?}',
+        '\\textbf{variance}: \\text{ how far does ONE refit sit from that average?}',
         '\\sigma^2: \\text{ label noise. Nothing you build can touch it. It is the floor of your error.}',
       ],
-    },
-    {
-      type: 'code',
-      lang: 'python',
-      title: 'Measuring bias and variance for real: 400 parallel universes',
-      code: `import numpy as np
-
-rng = np.random.default_rng(42)
-f = lambda x: 0.8 * np.sin(2.2 * np.pi * x)    # the truth we never get to see
-SIGMA, N, RUNS = 0.18, 15, 400
-grid = np.linspace(0, 1, 50)                   # where we measure test error
-
-print(f"{'deg':>4}{'bias^2':>9}{'var':>8}{'noise':>8}{'total':>9}")
-for deg in (0, 1, 3, 5):
-    preds = np.empty((RUNS, grid.size))
-    for r in range(RUNS):                      # RUNS parallel universes, one dataset each
-        x = rng.uniform(0, 1, N)
-        y = f(x) + SIGMA * rng.standard_normal(N)
-        preds[r] = np.polyval(np.polyfit(x, y, deg), grid)
-    avg = preds.mean(axis=0)                   # the "average model" across universes
-    bias2 = ((avg - f(grid)) ** 2).mean()      # how far the average model sits from truth
-    var = preds.var(axis=0).mean()             # how much one model wobbles around that average
-    print(f"{deg:>4}{bias2:>9.3f}{var:>8.3f}{SIGMA**2:>8.3f}{bias2 + var + SIGMA**2:>9.3f}")
-
-#  deg   bias^2     var   noise    total
-#    0    0.294   0.025   0.032    0.351
-#    1    0.202   0.039   0.032    0.273
-#    3    0.017   0.140   0.032    0.190
-#    5    0.009   2.252   0.032    2.293`,
-      annotations: {
-        4: 'This is the cheat only a simulation gets: we KNOW f. On real data you can never separate these three terms - which is why the decomposition is a thinking tool, not a metric you compute at work.',
-        11: 'The expectation from the math block, made literal: 400 fresh training sets, 400 fitted models.',
-        16: 'bias-squared: distance from the AVERAGE model to the truth. Falls monotonically as degree rises - 0.294 to 0.009.',
-        17: 'variance: spread of individual models around their own average. Explodes as degree rises - 0.025 to 2.252.',
-        23: 'Read the total column down: 0.351, 0.273, 0.190, 2.293. That is the U-curve, in numbers - and degree 3 is the bottom of it.',
-        24: 'Degree 5 has the LOWEST bias of the four and by far the worst total error. Low bias is not the goal; low total is.',
-      },
-    },
-    {
-      type: 'intuition',
-      title: 'Diagnose first, then fix',
-      md: `The diagnosis needs exactly two numbers: training error and validation error. Everything follows from their values and the gap between them.
-
-- **High train, high val, small gap** to **underfitting / high bias**. The model cannot even do the training set.
-- **Low train, much higher val, big gap** to **overfitting / high variance**.
-- **Low train, low val** to done. Ship it and stop tinkering.
-- **Train error HIGHER than val error** to suspicious. Usually a split bug, a val set that is accidentally easier, or dropout and augmentation being active only during training.
-
-Fixing **bias** — make the model *able* to express the pattern:
-
-- A bigger or more flexible model: more depth, higher polynomial degree, more trees, a nonlinear model instead of a linear one.
-- Better features. On tabular data this is the highest-leverage fix that exists.
-- Less regularization, and train longer — sometimes it is just not converged yet.
-
-Fixing **variance** — make the model *steadier* across samples:
-
-- More training data. The only fix with no downside, and usually the most expensive one.
-- Regularization: L1/L2, dropout, tree pruning, early stopping. All of them deliberately restrict what the model is allowed to say.
-- A simpler model, or fewer features.
-- Ensembling. Average many high-variance models and the spread cancels — Random Forest is exactly this idea, industrialized.
-
-The line that scores points: *diagnose with the train/val gap first, then apply the matching fix — pouring more data into a high-bias model changes nothing at all.*`,
-    },
-    {
-      type: 'intuition',
-      title: 'The noise floor, and why 100% is a bug report',
-      md: `The third term in the decomposition is the one everybody forgets: **irreducible error**.
-
-- Two flats, identical size, identical location, different rent — one landlord was in a hurry. No feature you collect will ever explain that.
-- Labels are noisy too: two doctors disagree on the same scan, an annotator misclicks, "is this spam" is genuinely ambiguous for some emails.
-- That variability belongs to the **data**, not to your model. No architecture reduces it. It is a hard ceiling on any achievable score.
-- So the honest target is never 100% — it is "close to the noise floor". Estimate the floor the practical way: give the same 200 examples to two human labellers and measure how often they agree.
-- The corollary every senior engineer has learned painfully: **near-perfect test accuracy is a bug report, not a trophy.** Go hunting for leakage — a feature computed *after* the label exists, an ID that encodes the target, duplicate rows landing in both train and test, or a scaler fitted on the full dataset before the split.`,
     },
   ],
   quiz: [
     {
       question: 'You store every training row in a lookup table and return the stored answer. Training error is exactly zero. What have you built?',
       options: [
-        { text: 'A model with zero bias and zero variance', explanation: 'Variance is enormous — change one training row and the table changes with it. Zero training error says nothing about either term.' },
-        { text: 'The best possible model, since error cannot go below zero', explanation: 'Training error is not the objective. The objective is error on data you have never seen, where the table is useless.' },
-        { text: 'A memorizer — zero training error is trivially achievable and carries no information about unseen data', explanation: 'Correct. This is the reason train/val/test exists at all: fitting known data is easy, generalizing is the actual problem.' },
+        { text: 'A model with no bias and no variance', explanation: 'Variance is enormous: change one training row and the table changes with it. Zero training error says nothing about either term.' },
+        { text: 'The best possible model, since error cannot go below zero', explanation: 'Training error is not the goal. The goal is error on rows never seen, where the table returns its fallback value and fails.' },
+        { text: 'A memorizer — zero training error is trivially achievable and says nothing about unseen rows', explanation: 'Correct. This is the reason the three-way split exists: fitting rows you already have is easy, generalizing is the real problem.' },
       ],
       correct: 2,
     },
     {
       question: 'What is the validation set for, precisely?',
       options: [
-        { text: 'Extra training data, once the model has converged', explanation: 'Training on it destroys its purpose — you would then have no clean set for choosing between models.' },
-        { text: 'Choosing between models and hyperparameters, so the test set stays untouched', explanation: 'Correct. Train fits parameters, validation fits YOUR choices, test fits nothing.' },
-        { text: 'The final number reported to stakeholders', explanation: 'That is the test set. The validation number is optimistic by construction, because you selected on it.' },
+        { text: 'Extra training data, once the model has converged', explanation: 'Fitting parameters on it destroys its purpose — you would then have no clean set for choosing between models.' },
+        { text: 'Choosing between models and hyperparameters, so the test set stays untouched', explanation: 'Correct. Training fits parameters, validation fits your choices, test fits nothing.' },
+        { text: 'The final number reported to stakeholders', explanation: 'That is the test set. A validation number is optimistic by construction, because you selected using it.' },
       ],
       correct: 1,
     },
     {
-      question: 'A teammate compared 300 hyperparameter configurations on the test set and reports the best score. What is wrong with that number?',
+      question: 'A teammate compared 200 configurations on the test set and reports the best score. What is wrong with that number?',
       options: [
-        { text: 'It is optimistically biased — taking the max over many noisy scores captures luck that will not repeat', explanation: 'Correct. The winner\'s curse. The more candidates compared on one set, the more the winning score overstates true performance.' },
-        { text: 'Nothing — the test set was held out from training, so the number is valid', explanation: 'Held out from *fitting*, but not from *selection*. Selecting on a set is a weak form of training on it.' },
-        { text: 'It is pessimistic — comparing many models spreads the error around', explanation: 'The bias runs the other way. Selecting the maximum can only inflate, never deflate.' },
+        { text: 'It is inflated — the maximum over many noisy scores captures luck that will not repeat', explanation: 'Correct. The winner\'s curse. In the noise experiment, 200 meaningless models produced a 0.61 winner on the chosen set and 0.49 on fresh data.' },
+        { text: 'Nothing — the test set was never trained on, so the number is valid', explanation: 'It was held out from fitting parameters, but not from selection. Selecting on a set is a weak form of training on it.' },
+        { text: 'It is pessimistic — comparing many models spreads the error around', explanation: 'The bias runs the other way. Taking a maximum can only inflate, never deflate.' },
       ],
       correct: 0,
     },
     {
       question: 'Training error 0.02, validation error 0.31. Diagnosis?',
       options: [
-        { text: 'High bias — the model is too simple', explanation: 'High bias shows as high error on BOTH sets with a small gap. Here training error is near zero.' },
-        { text: 'Irreducible noise dominates', explanation: 'Noise raises both errors together; it cannot create a gap, since the training set carries the same noise.' },
-        { text: 'High variance — the model is overfitting', explanation: 'Correct. Near-zero training error plus a large gap is the textbook overfitting signature. Fix with more data, regularization, a simpler model, or ensembling.' },
+        { text: 'Too much bias — the model is too simple', explanation: 'High bias shows as high error on BOTH sets with a small gap. Here training error is near zero.' },
+        { text: 'Irreducible noise dominates', explanation: 'Noise raises both errors together and cannot create a gap, since the training rows carry the same noise.' },
+        { text: 'Too much variance — the model is overfitting', explanation: 'Correct. Near-zero training error plus a large gap is the overfitting signature. Fix with more data, a simpler model, fewer features, or averaging models.' },
       ],
       correct: 2,
     },
     {
       question: 'Which of these is the definition of bias?',
       options: [
-        { text: 'How much the fitted model changes when you retrain on a different sample', explanation: 'That is variance — sensitivity to which rows you happened to draw.' },
-        { text: 'Error from wrong assumptions: the average model over many re-runs is systematically off from the truth', explanation: 'Correct. Note the word *average* — bias is a property of the average model, not of any single fit.' },
-        { text: 'Noise in the labels that no model can remove', explanation: 'That is the irreducible term. It is a property of the data, not of the model class you chose.' },
+        { text: 'How much the fitted model changes when you refit on a different sample', explanation: 'That is variance — sensitivity to which rows you happened to draw.' },
+        { text: 'Error from the model being unable to represent the truth: averaged over many refits it is still systematically off', explanation: 'Correct. Note the word average — bias is a property of the average model, not of any single fit.' },
+        { text: 'Noise in the labels that no model can remove', explanation: 'That is the irreducible term. It belongs to the data, not to the model family you chose.' },
       ],
       correct: 1,
     },
     {
-      question: 'Your model underfits badly: 40% error on train and 42% on validation. You collect 10x more data. What happens?',
+      question: 'A model underfits badly: 40% error on training and 42% on validation. You collect 10x more rows. What happens?',
       options: [
-        { text: 'Test error drops sharply — more data always helps', explanation: 'More data attacks variance. This model has almost no variance (the gap is 2 points); there is nothing for the data to fix.' },
-        { text: 'The model starts overfitting', explanation: 'More data makes overfitting less likely, not more. And a model that cannot fit 1x data will not suddenly memorize 10x.' },
-        { text: 'Variance falls a little, but the model still cannot express the pattern — error stays roughly where it was', explanation: 'Correct, and this is the practical value of diagnosing first. High bias needs a bigger model or better features; data spend is wasted here.' },
+        { text: 'Error drops sharply — more data always helps', explanation: 'More data attacks variance. This model has almost none (the gap is 2 points), so there is nothing for the extra rows to fix.' },
+        { text: 'The model starts overfitting', explanation: 'More data makes overfitting less likely, not more. A model that cannot fit the original rows will not suddenly memorise ten times as many.' },
+        { text: 'Variance falls a little, but the model still cannot express the pattern, so error stays roughly where it was', explanation: 'Correct, and this is the practical value of diagnosing first. Too much bias needs a more flexible model or better features.' },
       ],
       correct: 2,
-    },
-    {
-      question: 'Test error makes a U-shape as model flexibility grows. Why does training error never show that U?',
-      options: [
-        { text: 'Because training error is computed with a different metric', explanation: 'Same metric, different data. The shape difference comes from what the model was optimized against.' },
-        { text: 'Because more flexibility can always hug the training points harder, so training error is monotonically non-increasing', explanation: 'Correct — and the consequence matters: a falling training loss is never, on its own, evidence that the model is getting better.' },
-        { text: 'Because the training set is larger, and larger sets have lower error', explanation: 'Set size does not force error downward, and the monotone shape holds at any training-set size.' },
-      ],
-      correct: 1,
-    },
-    {
-      question: 'Your fraud classifier scores 99.9% test accuracy on the first attempt. Best next move?',
-      options: [
-        { text: 'Check for leakage and check the class balance before believing the number', explanation: 'Correct. Fraud is typically <1% of rows, so 99.9% may be "predict not-fraud always". And near-perfect scores usually mean a feature that encodes the label. Suspicion first, celebration later.' },
-        { text: 'Ship it — the test set was held out correctly', explanation: 'A correct split does not protect against a leaked feature or a metric that flatters an imbalanced dataset.' },
-        { text: 'Add regularization to reduce the overfitting', explanation: 'Nothing here indicates overfitting — the score is high on the *test* set. The problem is that the number itself is not trustworthy.' },
-      ],
-      correct: 0,
     },
   ],
   interviewQuestions: [
     {
       question: 'In thirty seconds: what does it actually mean for a model to "learn"?',
       answer:
-        'Learning is fitting a function: given pairs (x, y), search a chosen family of functions for one whose outputs f(x) land close to y on the data I have. I pick the shape — line, tree, network — and the data picks the numbers inside it via a loss and an optimizer. But fitting the data I have is the easy half; the point is generalization: the bet that the pattern holding on my sample also holds on the next sample, which requires that both come from the same distribution. That is why the work is mostly about honest evaluation, not about fitting.',
+        'Learning is choosing the numbers inside a rule by looking at examples. I fix the shape of the rule — a line, a tree, a network — and the training rows choose its parameters by making some measure of error as small as possible. But fitting the rows I already have is the easy half, and I can always drive that error to zero by memorising. The point is generalization: doing well on rows drawn from the same source that the model never saw. That is why the data is split before anything else happens, and why most of the discipline in this work is about honest measurement rather than about fitting.',
       isCaseBased: false,
     },
     {
       question: 'Case: a tabular classifier hits 98% training accuracy and 71% validation accuracy on 5,000 rows. Diagnose it and give me your ordered plan.',
       answer:
-        'A 27-point gap with near-perfect training accuracy is high variance — classic overfitting. The model memorized 5,000 rows including their noise. Ordered plan: (1) Regularize what I already have — for a tree ensemble that is max_depth down, min_samples_leaf up, fewer estimators or stronger subsampling; for a linear model, raise the L2 penalty; for a net, dropout plus early stopping. Cheapest, fastest signal. (2) Reduce the feature count — with 5,000 rows and, say, 200 features, many are pure noise the model latched onto; drop by importance or by a stability check across folds. (3) Move to k-fold cross-validation rather than one 15% validation split, because at this data size a single split is itself noisy and I may be chasing a mirage. (4) Ensemble/bag, which averages the instability away. (5) Only then buy more data — it is the strongest fix but the slowest and most expensive. And one check I would do first, before any of it: confirm no duplicate or near-duplicate rows straddle the split, because that produces exactly this signature and is a bug, not a bias-variance problem.',
+        'A 27-point gap with near-perfect training accuracy is high variance — overfitting. The model has memorised 5,000 rows including their noise. Ordered plan. (1) Before anything else, check for duplicate or near-duplicate rows straddling the split, because that produces exactly this signature and is a bug rather than a modelling problem. (2) Restrict what I already have — for a tree ensemble, less depth and larger leaves; for a linear model, a stronger penalty on the weights; for a network, dropout plus stopping early. Cheapest and fastest signal. (3) Cut features — with 5,000 rows and a couple of hundred columns, many are noise the model latched onto. (4) Switch from one 15% validation split to k-fold cross-validation, because at this data size a single split is noisy enough that I may be chasing a mirage. (5) Average several models, which cancels some of the instability. (6) Only then buy more rows: the strongest fix, and the slowest and most expensive one.',
       isCaseBased: true,
     },
     {
-      question: 'Case: a different team on the same task gets 62% training accuracy and 61% validation accuracy, while a domain expert gets about 90%. Diagnose and plan.',
+      question: 'Case: another team on the same task gets 62% training accuracy and 61% validation accuracy, while a domain expert reaches about 90%. Diagnose and plan.',
       answer:
-        'Almost no gap and high error on both sets: high bias, underfitting. The model class cannot express the pattern, and the human baseline of 90% proves the pattern exists and is learnable — so this is not the noise floor. Plan, in order: (1) Features first — on tabular data this is the biggest lever; add interactions, ratios, domain-derived fields, proper encodings for high-cardinality categoricals. (2) A more expressive model — logistic regression to gradient boosting is usually the single biggest jump available. (3) Reduce regularization and train longer; verify it has actually converged rather than assuming. (4) Check the features actually contain the information the expert uses — if the expert reads a free-text note the model never sees, no model can close the gap and the real fix is a data-collection change. What I would NOT do is collect more rows: more data reduces variance, and there is no variance here to reduce.',
+        'Almost no gap and high error on both sets: too much bias, underfitting. The model family cannot express the pattern, and the human at 90% proves the pattern exists and is learnable, so this is not the noise floor. Plan, in order. (1) Features first — on tabular data this is usually the biggest lever: ratios, interactions, domain-derived fields, sensible encodings for high-cardinality categories. (2) A more expressive model family; plain linear to gradient boosting is often the single largest jump available. (3) Remove restrictions and train longer, and verify it has actually converged rather than assuming it. (4) Check the features even contain what the expert uses — if the expert reads a free-text note the model never sees, no model can close that gap and the real fix is a data-collection change. What I would not do is buy more rows: more data reduces variance, and there is no variance here to reduce.',
       isCaseBased: true,
     },
     {
-      question: 'Why do we need a validation set when we already have a test set? Argue it precisely.',
+      question: 'Why do we need a validation set when we already have a test set?',
       answer:
-        'Because they answer different questions and one of them corrupts a dataset by being asked. Validation answers "which of my candidates is best" — and answering it repeatedly fits my decisions to that set, so its score becomes optimistic. Test answers "what will the chosen model do on new data" — an unbiased estimate, which only stays unbiased while nothing has been selected using it. Collapse them into one set and you lose the unbiased estimate entirely: your reported number now includes the winner\'s curse from every comparison you ran. The size of the inflation scales with how many candidates you compared, which is why heavily tuned models suffer worst. In small-data regimes I replace the fixed validation split with k-fold CV, but the test set stays sealed either way.',
+        'Because they answer different questions, and asking one of them repeatedly corrupts the set it is asked of. Validation answers "which of my candidates is best", and answering it many times fits my decisions to that set, so its score becomes optimistic. Test answers "what will the chosen model do on new rows", which stays honest only while nothing has been selected using it. Merge them and I lose the honest estimate entirely: the number I report now carries the winner\'s curse from every comparison I ran, and the inflation grows with how many candidates I compared. On small datasets I replace the fixed validation split with k-fold cross-validation, but the test set stays sealed either way.',
       isCaseBased: false,
     },
     {
-      question: 'Write down the bias-variance decomposition and read each term in plain English.',
+      question: 'Define bias and variance, and say how you tell them apart in practice.',
       answer:
-        'For squared error: E[(y - f_hat(x))^2] = (E[f_hat(x)] - f(x))^2 + E[(f_hat(x) - E[f_hat(x)])^2] + sigma^2, where the expectation is over training sets — imagine re-collecting the data many times and refitting each time. Term 1, bias-squared: take the AVERAGE model over all those re-runs and ask how far it is from the truth. That is the error from wrong assumptions, and it does not shrink with more data. Term 2, variance: how far a single run sits from that average — the error from being sensitive to which rows you happened to draw. Term 3, sigma-squared: label and measurement noise, a property of the data that no model can touch, and the floor on your achievable error. The key caveat to volunteer: you cannot compute these three terms on real data, because you never know f. It is a diagnostic frame, not a metric.',
+        'Both are defined by imagining refitting the model on many freshly collected training sets. Bias is how far the average of those refits sits from the truth — error from the model being unable to represent the pattern, which does not shrink with more data. Variance is how far a single refit sits from that average — error from sensitivity to which rows you happened to draw. In practice you only ever train once, so you never observe the spread directly. What you use instead is two numbers: high error on training and validation with a small gap means bias dominates; low training error with a large gap means variance dominates. The reason to make the call before acting is that more data attacks only variance, so spending it on a high-bias model buys nothing.',
       isCaseBased: false,
     },
     {
-      question: 'Case: a colleague reports 94% test accuracy. You learn they ran roughly 40 experiments, checking the test set each time. How much do you trust it and what do you do?',
+      question: 'Case: a colleague reports 94% test accuracy. You learn they ran about 40 experiments, checking the test set each time. How much do you trust it and what do you do?',
       answer:
-        'I trust the direction, not the number — 94% is an upper bound on true performance, inflated by selection. Forty comparisons against one set means the winner captured some sampling luck; with a 1,000-row test set, the standard error on accuracy is already about 1.5 points, and taking a max over 40 noisy draws pushes the expected inflation to several points. What I do: (1) Do not re-run experiments on that set — it is burned; treat it as a validation set from now on. (2) Carve out a genuinely fresh holdout, ideally a later time period, and evaluate the frozen model once. (3) If no fresh data exists, use nested cross-validation so model selection happens strictly inside the inner loop. (4) Report the finding without blame — this is the single most common mistake in applied ML, and the process fix (validation for all choices, test sealed until the model is frozen) is what actually prevents it.',
+        'I trust the direction, not the number. 94% is an upper bound, inflated by selection: 40 comparisons against one set means the winner captured some sampling luck, and on a 1,000-row test set the ordinary run-to-run wobble in accuracy is already about 1.5 points, so taking the maximum of 40 such draws can easily add several. What I would do. (1) Stop running experiments against that set — it is spent; from now on it is a validation set. (2) Carve out a genuinely fresh holdout, ideally a later time period, freeze the model, and score it once. (3) If no fresh data exists, use nested cross-validation so that all selection happens strictly inside an inner loop. (4) Report it without blame: this is the most common mistake in applied ML, and the durable fix is procedural — all choices go through validation, the test set opens once.',
       isCaseBased: true,
-    },
-    {
-      question: 'Is bias-variance always a tradeoff? Where does the classic story break down?',
-      answer:
-        'It is a tradeoff along the *flexibility* axis, holding everything else fixed — that is the U-curve. It is not a tradeoff along every axis. More training data reduces variance without adding bias, which is why it is the one strictly good fix. Better features can reduce bias without adding variance. Bagging reduces variance at essentially no bias cost. And the classic U itself breaks in the modern over-parameterized regime: with very large models, test error falls, rises to a peak near the interpolation threshold, then falls again — double descent — which is why enormous neural networks can memorize the training set and still generalize. So the honest interview answer is: the tradeoff is a real and useful frame for choosing model complexity, but it is a statement about one axis, not a law of nature.',
-      isCaseBased: false,
     },
     {
       question: 'You are handed only two numbers, training error and validation error. Walk me through every diagnosis you can make.',
       answer:
-        'Four cases. High train, high val, small gap: high bias, underfitting — the model cannot express the pattern; fix with a bigger model or better features. Low train, high val, large gap: high variance, overfitting — fix with more data, regularization, a simpler model, or ensembling. Low train, low val: done; further tuning is likely just fitting the validation set. Train error HIGHER than val error: treat as a bug signal — usually a leaky or accidentally easier validation split, or regularization such as dropout being active during training but not evaluation. One more judgement layer that separates a senior answer: compare the errors against a human or simple-baseline benchmark, because "high error" is meaningless in isolation — 30% error can be underfitting on one task and near the noise floor on another.',
+        'Four cases. Both high with a small gap: too much bias, underfitting — the model cannot express the pattern, so make it more flexible or improve the features. Training low, validation much higher: too much variance, overfitting — more data, a simpler model, fewer features, or averaging models. Both low: done, and further tuning is now mostly fitting the validation set. Training error higher than validation error: treat it as a bug signal, usually a leaky or accidentally easier validation split. One judgement layer on top: compare both numbers against a human or a trivial baseline, because "high error" means nothing in isolation — 30% error can be underfitting on one task and near the achievable floor on another.',
       isCaseBased: false,
     },
     {
       question: 'Case: the model looks excellent offline and performs far worse in production. Debug it.',
       answer:
-        'I work from cheapest cause to most expensive. (1) Evaluation was never honest: the test set was peeked at across many experiments, or duplicate rows straddled the split — check experiment history and run a duplicate check. (2) Leakage: a feature that is unavailable, or has a different value, at prediction time — the classic being a field populated after the outcome occurs. Test by rebuilding the feature strictly from data available at decision time and re-scoring. (3) Train/serve skew: preprocessing differs between the training pipeline and the serving path — a scaler fitted on the full dataset, a different encoding of an unseen category, a different imputation default. (4) Distribution shift: production traffic is not the offline sample — new segment, seasonality, a changed upstream source. Compare feature distributions offline vs live. (5) Only last, genuine overfitting. The ordering is the answer: in practice the first three cause far more production failures than model quality does.',
+        'I work from cheapest cause to most expensive. (1) The evaluation was never honest: the test set was peeked at across many experiments, or duplicate rows straddled the split. Check the experiment history and run a duplicate check first, because these cost nothing to rule out. (2) Leakage: a feature that is unavailable, or holds a different value, at prediction time — classically a field populated after the outcome is known. Rebuild the features strictly from what exists at decision time and re-score. (3) Train-serve skew: the preprocessing differs between the training pipeline and the serving path — a different encoding for an unseen category, a different default for missing values. (4) Distribution shift: production traffic is not the offline sample, because of a new segment, seasonality, or a changed upstream source; compare feature distributions offline against live. (5) Only last, genuine overfitting. The ordering is the answer — in practice the first three cause far more production failures than model quality does.',
       isCaseBased: true,
-    },
-    {
-      question: 'Supervised, unsupervised, reinforcement — define each in one line, and tell me which trap candidates fall into.',
-      answer:
-        'Supervised: labelled pairs (x, y), learn the mapping — regression for continuous y, classification for categorical. Unsupervised: only x, find structure — clustering, dimensionality reduction, anomaly detection — and evaluation is hard because there is no answer key. Reinforcement: no labels, only a delayed reward from an environment the agent acts in; it learns a policy through trial and error, and the hard part is credit assignment across time. The trap: candidates describe a supervised problem as unsupervised because the labels came from a rule or a heuristic rather than a human. If you are fitting toward a target column, it is supervised regardless of where that column came from — and if that column was generated by a rule, the real question becomes why you need a model to reproduce a rule you already have.',
-      isCaseBased: false,
-    },
-    {
-      question: 'What is irreducible error, and how would you estimate it for a real dataset?',
-      answer:
-        'It is the variability in y that your features simply do not explain — measurement noise, label disagreement, genuine randomness in the outcome. It is a property of the data and the feature set, so no model or amount of tuning reduces it; it sets a hard floor on achievable error. Estimating it: (1) inter-annotator agreement — have two labellers independently label the same few hundred examples; their disagreement rate is a practical floor for label noise. (2) Duplicate or near-duplicate inputs with different labels — measure the outcome spread among rows that are identical in features. (3) A strong-model ceiling — if several very different model families all plateau at the same error, you are probably near the floor rather than under-modelling. Why it matters in practice: it tells you when to stop spending. If human agreement is 92% and your model is at 90%, the remaining work is in better data or better features, not a bigger model — and a score meaningfully above the floor is a leakage alarm, not a win.',
-      isCaseBased: false,
     },
   ],
   flashcards: [
-    { front: 'What "learning" means, and the bet inside it', back: 'Find f such that f(x) is close to y on data you HAVE — hoping it holds on data you do not. You choose the shape, the data chooses the numbers. Generalization is that bet paying off, and it assumes train and future data share a distribution.' },
-    { front: 'Supervised / unsupervised / reinforcement', back: 'Learn from answers (labelled x,y) / learn from structure (only x) / learn from consequences (delayed reward).' },
-    { front: 'The ML workflow', back: 'Data to features to model to evaluate to iterate. Time goes mostly into data and features; model choice is ~10%.' },
-    { front: 'Train vs validation vs test', back: 'Train fits parameters. Validation fits YOUR choices (models, hyperparameters, early stopping). Test fits nothing — opened once, after the model is frozen.' },
-    { front: 'Test-set peeking / winner\'s curse', back: 'Selecting the best of many candidates on one set inflates its score by luck that will not repeat. Estimate improves, model does not. Your brain is the leak channel.' },
-    { front: 'Underfitting vs overfitting signature', back: 'Underfit: high error on train AND val, small gap. Overfit: near-zero train error, large train/val gap.' },
-    { front: 'Bias vs variance in one line each', back: 'Bias = wrong assumptions, systematically off in the same direction. Variance = sensitivity to the particular training sample, unstable across re-runs.' },
-    { front: 'The decomposition', back: 'E[(y - f_hat)^2] = bias^2 + variance + sigma^2. Average model vs truth, spread around that average, and label noise you cannot touch.' },
-    { front: 'Fix bias vs fix variance', back: 'Bias: bigger model, better features, less regularization, train longer. Variance: more data, regularization, simpler model, ensembling. Diagnose with the gap BEFORE choosing.' },
-    { front: 'Irreducible error / noise floor', back: 'Variability your features cannot explain (label noise, ambiguity). Sets the error floor. Estimate via inter-annotator agreement. Near-100% accuracy = look for leakage.' },
+    { front: 'What "learning from data" means', back: 'You fix the shape of a rule; the training rows choose the numbers inside it (the parameters). Fitting known rows is easy — the goal is generalization, doing well on rows never seen.' },
+    { front: 'Parameter vs hyperparameter', back: 'Parameter: a number fitted from the data, like w = 0.021. Hyperparameter: a setting you choose before training, like the shape of the rule or the polynomial degree.' },
+    { front: 'Feature / label / sample', back: 'Feature = an input you may look at. Label = the answer you predict. Sample (row) = one feature-and-label pair. Supervised learning = learning the mapping from labelled pairs.' },
+    { front: 'Train vs validation vs test', back: 'Training fits parameters (~70%). Validation fits YOUR choices — model, hyperparameters, when to stop (~15%). Test fits nothing: opened once, after the model is frozen (~15%).' },
+    { front: 'Winner\'s curse', back: 'Picking the best of many candidates scored on one set inflates that score with luck that will not repeat. 200 noise models on noise labels: 0.61 on the chosen set, 0.49 on fresh data.' },
+    { front: 'Underfitting vs overfitting signature', back: 'Underfit: high error on training AND validation, small gap. Overfit: low training error with a large gap. Overfitting is identified by the gap, not by high error.' },
+    { front: 'Bias vs variance', back: 'Bias = the average model over many refits is systematically off, because the model cannot represent the truth. Variance = one refit sits far from that average, because it is sensitive to which rows it got.' },
+    { front: 'Fix bias vs fix variance', back: 'Bias: more flexible model, better features, less restriction, train longer. Variance: more data, simpler model, fewer features, average several models. More data does nothing for bias.' },
   ],
-  mindmapMarkdown: `- Learning, Generalization, Bias & Variance
-  - What learning is
-    - Find f with f(x) ~ y on data you HAVE
-    - You pick the shape, data picks the numbers
-    - Generalization = the bet paying off on unseen data
-    - Assumes train and future share a distribution
-  - Three flavours
-    - Supervised: learn from answers (x, y)
-    - Unsupervised: learn from structure (only x)
-    - Reinforcement: learn from consequences (reward)
-  - Workflow spine
-    - Data (collect, clean, SPLIT)
-    - Features (biggest lever on tabular)
-    - Model (~10% of the job)
-    - Evaluate (one metric, chosen first)
-    - Iterate (the gap says which way)
-  - Three splits, three jobs
+  mindmapMarkdown: `- What learning from data means
+  - The mechanism
+    - You pick the shape of the rule
+    - The rows pick the numbers inside it (parameters)
+    - Hyperparameters are your choices, not the data's
+    - Feature = input, label = answer, sample = one pair
+  - Why training error is not quality
+    - A lookup table scores 0.000 and knows nothing
+    - Straight line: 0.808 on train, 0.633 on new rows
+    - Memorizer: 0.000 on train, 6.667 on new rows
+    - Generalization = doing well on rows never seen
+  - Three piles
     - Train fits parameters (~70%)
     - Validation fits YOUR choices (~15%)
-    - Test fits nothing — opened ONCE (~15%)
-    - Shuffle before slicing
-    - Peeking = winner's curse = optimism you ship
+    - Test fits nothing, opened ONCE (~15%)
+    - Winner's curse: 200 noise models, 0.61 then 0.49
   - Fit failures
-    - Underfit: high train AND val, small gap
-    - Overfit: train ~0, big gap
-    - Polynomial degree 0 / 1 / 3 / 9 story
-    - U-curve of test error; live at its bottom
+    - Degree sweep: train falls 0.2276 to 0.0087
+    - Validation bottoms at degree 3 (0.0386), climbs to 0.0614
+    - Underfit: both high, small gap
+    - Overfit: low train, big gap
   - Bias vs variance
-    - Bias = wrong assumptions, systematically off
-    - Variance = sensitivity to the sample, unstable
-    - E[err] = bias^2 + variance + noise
+    - Bias = cannot represent the truth, wrong the same way each time
+    - Variance = too sensitive to which rows you got
+    - Flexibility trades one for the other
   - Fixes
-    - Bias: bigger model, better features, less reg
-    - Variance: more data, regularization, simpler, ensembling
-    - Diagnose with the gap BEFORE spending
-  - Noise floor
-    - Irreducible: label noise, ambiguity
-    - Estimate via human agreement
-    - 100% accuracy = leakage hunt, not a trophy`,
+    - Bias: more flexible model, better features
+    - Variance: more data, simpler model, averaging
+    - Diagnose from the gap BEFORE spending`,
 }
 
 export default m
