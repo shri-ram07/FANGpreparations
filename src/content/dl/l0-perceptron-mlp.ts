@@ -6,460 +6,668 @@ const m: Module = {
   level: 0,
   title: 'From Perceptron to MLP: Why We Need Non-Linearity',
   whyItMatters:
-    '"Why do neural networks need activation functions?" is asked in almost every deep-learning screen, and the answer is two lines of algebra that most candidates cannot produce. This module gives you that proof, the XOR story it came from, and the vocabulary — depth, width, parameter count, shapes — that the rest of the interview is conducted in. Everything after this is the same machine, bigger.',
-  estMinutes: 50,
+    'This is the first Deep Learning module, and it builds the whole machine from one neuron. A neuron is three numbers multiplied by three other numbers, added up, plus one more number, then squashed. That is it. Once you have computed one by hand you can read any network diagram, count the parameters in any architecture, and say exactly why a hidden layer is needed instead of repeating that it "adds capacity". Everything later in this subject is this same arithmetic, repeated more times.',
+  assumes: [
+    'You have read *Vectors & the Dot Product (= Similarity)* in Math for ML. A neuron is a dot product plus one extra number, and this module leans on that.',
+    'You have read *Matrices as Transformations*, so a grid of numbers acting on a list of numbers is familiar.',
+    'You have read *Gradient Descent + Linear Regression* — you know that a model has adjustable numbers and that training means nudging them.',
+    'You have read *Logistic Regression: Sigmoid, Cross-Entropy & Decision Boundaries* — you have met the sigmoid squashing function and the idea of a straight-line decision boundary.',
+    'You can read a Python for loop, a list, and a function definition. No numpy is used anywhere in this module, on purpose.',
+  ],
+  estMinutes: 44,
   sections: [
     {
       type: 'intuition',
-      title: 'One neuron: multiply, add, decide',
-      md: `A doorman deciding who gets in. He looks at a few facts about you, weighs each one by how much he cares, adds them up, and says yes or no.
+      title: 'One neuron, computed by hand',
+      md: `A loan desk looks at three facts about an applicant and outputs one number: how likely they are to repay.
 
-- The facts are the **inputs** x₁, x₂, … xₙ. Numbers.
-- How much he cares about each is a **weight** w₁, w₂, … wₙ. Learned, not given.
-- His general mood — how easy he is today — is the **bias** b. One number, no input attached.
-- He computes one score: z = w₁x₁ + w₂x₂ + … + b. Then a **step**: z ≥ 0 → output 1, else 0.
-- That is a **perceptron** (Rosenblatt, 1958). The entire neuron. Multiply, add, threshold.`,
-    },
-    {
-      type: 'math',
-      intro: 'The perceptron in symbols — and its famous descendant.',
-      latex: [
-        'z = \\mathbf{w}^\\top \\mathbf{x} + b = \\sum_{i=1}^{n} w_i x_i + b',
-        '\\hat{y} = \\text{step}(z) = \\begin{cases} 1 & z \\ge 0 \\\\ 0 & z < 0 \\end{cases}',
-        '\\text{Replace step with } \\sigma(z) = \\tfrac{1}{1 + e^{-z}} \\;\\; \\text{and you have logistic regression.}',
-      ],
+- The three facts are the **inputs**. Say they are: years in the current job = **1.0**, number of missed payments = **0.0**, monthly income in lakhs = **3.0**. Write them as a list: x = [1.0, 0.0, 3.0].
+- The desk cares about each fact by a different amount. Those amounts are the **weights**: w = [0.5, -1.5, 0.25]. Missed payments has a negative weight because more missed payments should push the answer down.
+- Multiply each input by its own weight and add the three results: 0.5 x 1.0 = 0.5, then -1.5 x 0.0 = 0.0, then 0.25 x 3.0 = 0.75. Sum = **1.25**.
+- Now add one more number that has no input attached to it, called the **bias**: b = -0.7. So 1.25 + (-0.7) = **0.55**. That single number is traditionally called **z**.
+- Finally squash z into the range 0 to 1 with the sigmoid you met in the Logistic Regression module: 1 / (1 + e^(-0.55)) = **0.6341**.
+
+That whole paragraph is one **neuron**. Multiply, add, add the bias, squash. There is nothing else inside it.`,
     },
     {
       type: 'intuition',
-      title: 'Same line, softer verdict',
-      md: `The perceptron and logistic regression are the same model wearing different shoes — worth saying out loud in an interview.
+      title: 'You have already done this — it is the dot product',
+      md: `The step "multiply each input by its own weight and add up the results" is exactly the **dot product** from *Vectors & the Dot Product (= Similarity)*. Same operation, same arithmetic, different vocabulary.
 
-- Both compute the identical score z = w·x + b. Both live and die by that one straight boundary.
-- Perceptron: hard **step**. Output is 0 or 1, no shades. Nothing to differentiate — the slope of a step is 0 everywhere and undefined at the jump.
-- Logistic regression: **sigmoid**. Output is a probability, and the curve has a real slope everywhere, so gradient descent works. See the ML module *Logistic Regression: Sigmoid, Cross-Entropy & Decision Boundaries*.
-- That swap — step to something smooth — is what made training networks possible at all.
-- But the boundary itself did not change. z = 0 is still a straight line.`,
-    },
-    {
-      type: 'intuition',
-      title: 'XOR: the wall',
-      md: `Two binary inputs. Output 1 when they **differ**, 0 when they match. Four points, that is the whole dataset:
-
-- (0,0) → 0 · (0,1) → 1 · (1,0) → 1 · (1,1) → 0
-- Plot them on a square. The two 1s sit at opposite corners. The two 0s sit at the *other* two opposite corners. The classes interleave diagonally.
-- Now the proof, in words: a straight line splits the plane into two sides, and each side is **convex** — if two points are on one side, everything between them is too.
-- The midpoint of the two 1s is (0.5, 0.5). The midpoint of the two 0s is *also* (0.5, 0.5).
-- So any line that puts both 1s on one side must put (0.5, 0.5) on that side — and the same line must put (0.5, 0.5) on the 0s' side. One point cannot be on both sides. **No line exists.**
-- AND and OR are fine — one line each. XOR is the smallest function that breaks a perceptron.`,
-    },
-    {
-      type: 'note',
-      md: 'In 1969 Minsky and Papert published *Perceptrons*, proving this limit in print — funding and interest collapsed into the first AI winter. The cruel part: everyone already knew a multi-layer network could do XOR. Nobody had a way to *train* one, and backpropagation would not be popularised until 1986.',
-    },
-    {
-      type: 'intuition',
-      title: 'The fix that does not work',
-      md: `Obvious idea: one line is not enough, so stack layers. Input → linear layer → linear layer → output. More layers, more power. Right?
-
-- No. Two stacked linear layers are **exactly one** linear layer, always.
-- h = W₁x, then ŷ = W₂h = W₂(W₁x). Matrix multiplication is associative, so that is (W₂W₁)x.
-- W₂W₁ is just... another matrix. Call it W_eq. You have ŷ = W_eq·x. One layer.
-- A hundred layers collapse the same way: W₁₀₀ ⋯ W₂W₁ = one matrix. Millions of parameters, one straight boundary.
-- Biases do not save it either — the composition is still an affine map (see the math below).
-- **This is the entire reason activation functions exist.** Put a non-linearity between the layers and the collapse is blocked: the product cannot be multiplied out.`,
-    },
-    {
-      type: 'math',
-      intro: 'The collapse, in three lines. This is the answer to "why do we need activations?"',
-      latex: [
-        'h = W_1 x \\;\\Rightarrow\\; \\hat{y} = W_2 h = W_2 (W_1 x) = (W_2 W_1) x = W_{\\text{eq}}\\, x',
-        'W_L W_{L-1} \\cdots W_2 W_1 = W_{\\text{eq}} \\qquad \\Rightarrow \\qquad L \\text{ linear layers} \\;\\equiv\\; 1 \\text{ linear layer}',
-        'W_2 (W_1 x + b_1) + b_2 = (W_2 W_1) x + (W_2 b_1 + b_2) \\;\\; \\text{— still one affine map}',
-        '\\text{With a non-linearity } \\varphi: \\;\\; W_2\\, \\varphi(W_1 x + b_1) + b_2 \\;\\; \\text{cannot be flattened.}',
-      ],
+- There, you wrote it as w . x and read it as "how much do these two lists of numbers agree".
+- Here, w is a fixed pattern the neuron has learned, and x is the input. The dot product is large when the input looks like the pattern and small when it does not.
+- A neuron is therefore: **dot product, then add the bias, then squash**. Two of those three steps you already know.
+- The bias is the only genuinely new piece, and it is one number. It shifts the whole result up or down regardless of the input, which is what lets the decision boundary sit somewhere other than through the origin.
+- Because it has no input to multiply, a bias is sometimes drawn as a weight attached to a fake input that is always 1. Same thing, written differently.`,
     },
     {
       type: 'code',
       lang: 'python',
-      title: 'Ten thousand weights doing the job of eight',
-      code: `import numpy as np
+      title: 'The neuron above, in plain Python',
+      code: `import math
 
-np.random.seed(0)
-X = np.random.randn(5, 4)
-W1 = np.random.randn(4, 100)     # 4 -> 100
-W2 = np.random.randn(100, 100)   # 100 -> 100
-W3 = np.random.randn(100, 2)     # 100 -> 2
+x = [1.0, 0.0, 3.0]
+w = [0.5, -1.5, 0.25]
+b = -0.7
+z = 0.0
+for i in range(3):
+    z = z + w[i] * x[i]
+print('weighted sum:', z)
+z = z + b
+print('z (with bias):', z)
+a = 1 / (1 + math.exp(-z))
+print('activation:', round(a, 4))
 
-deep = X @ W1 @ W2 @ W3          # three "layers", zero activations
-W_eq = W1 @ W2 @ W3              # collapse them into ONE 4x2 matrix
-
-print('W_eq shape:', W_eq.shape)
-print('identical?', np.allclose(deep, X @ W_eq))
-print('one layer could do it with', W_eq.size, 'weights instead of', W1.size + W2.size + W3.size)
-
-# W_eq shape: (4, 2)
-# identical? True
-# one layer could do it with 8 weights instead of 10600`,
+# ---- real output ----
+# weighted sum: 1.25
+# z (with bias): 0.55
+# activation: 0.6341`,
       annotations: {
-        9: 'Three matrix multiplies in a row — a "deep" network with the activations deleted.',
-        10: 'Same three matrices, multiplied together first. Associativity says the result must match.',
-        13: 'True. Not approximately equal — the same function, to floating-point precision.',
-        18: '10,600 parameters bought exactly nothing. This is the sentence to say in the interview.',
+        1: 'math is Python\'s built-in maths module. We need exactly one thing from it, math.exp, which computes e raised to a power.',
+        3: 'The three input numbers, as a plain list. Position 0 is years in job, position 1 is missed payments, position 2 is income.',
+        4: 'The three weights, in the same order as the inputs, so w[0] belongs to x[0]. Getting these two lists out of order is a real bug and the reason the ordering is worth saying out loud.',
+        5: 'The bias: one number, not a list, and not attached to any input.',
+        6: 'A running total, starting at zero. Written 0.0 rather than 0 to make it obvious it will hold decimals.',
+        7: 'range(3) produces 0, 1, 2 — the three positions in both lists. i is the position we are on.',
+        8: 'Multiply the input at position i by the weight at position i and add it to the total. Three passes through this line is the entire dot product.',
+        9: 'Prints 1.25, matching the hand arithmetic 0.5 + 0.0 + 0.75.',
+        10: 'Add the bias once, after the loop — not inside it. Adding it inside would add it three times.',
+        11: 'Prints 0.55. This is z, the neuron\'s raw score before squashing.',
+        12: 'The sigmoid: 1 divided by (1 plus e to the minus z). math.exp(-z) is e raised to -0.55. The result is always strictly between 0 and 1.',
+        13: 'Prints 0.6341. round(a, 4) cuts the float to 4 decimal places so the output is readable.',
+      },
+    },
+    {
+      type: 'math',
+      intro: 'The same neuron in symbols. Read the first line as "the dot product of w and x, plus b".',
+      latex: [
+        'z \\;=\\; \\mathbf{w} \\cdot \\mathbf{x} + b \\;=\\; \\sum_{i=1}^{n} w_i x_i + b',
+        'z \\;=\\; (0.5)(1.0) + (-1.5)(0.0) + (0.25)(3.0) + (-0.7) \\;=\\; 1.25 - 0.7 \\;=\\; 0.55',
+        'a \\;=\\; \\sigma(z) \\;=\\; \\frac{1}{1 + e^{-z}} \\;=\\; \\frac{1}{1 + e^{-0.55}} \\;=\\; 0.6341',
+      ],
+    },
+    {
+      type: 'intuition',
+      title: 'The words, defined once, in the order you meet them',
+      md: `Every term below is used for the rest of this subject. Nothing here is more complicated than the arithmetic you just did.
+
+- **Neuron** (also called a **unit**) — one dot product, plus a bias, then a squashing function. One neuron produces exactly one output number.
+- **Weight** — one adjustable number sitting on one connection. A neuron reading 3 inputs has 3 weights.
+- **Bias** — one adjustable number per neuron, with no input attached. It shifts that neuron\'s output up or down.
+- **Activation function** — the squashing function applied to z. Sigmoid is one. The other one used in this module is **ReLU**, which is even simpler: keep the number if it is positive, otherwise output 0.
+- **Activation** — confusingly, also the name for the *output* of a neuron after squashing. The 0.6341 above is an activation.
+- **Parameter** — any number the model learns. That means every weight and every bias, and nothing else. Inputs are not parameters; they come from your data.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Layers: many neurons reading the same inputs',
+      md: `Put four neurons side by side, each with its own 3 weights and its own bias, and feed all four the same three inputs. That group is a **layer**, and it turns 3 numbers into 4 numbers.
+
+- **Input layer** — just the raw numbers entering the network. It has no weights and does no arithmetic; it is a name for where the data goes in.
+- **Hidden layer** — any layer whose outputs you never look at directly. They are inputs to the next layer and nothing else. "Hidden" means hidden from you, not mysterious.
+- **Output layer** — the last layer. Its outputs are the answer: one number for a single prediction, or one number per class when choosing between classes.
+- **Width** — how many neurons are in a layer. The layer above has width 4.
+- **Depth** — how many layers have weights. The input layer has none, so it is not counted: a 3-4-2 network is a **2-layer** network with **one hidden layer**.
+- **Fully connected** (also called **dense**) — every neuron in the layer reads every output of the layer before it. No connections are missing. That is the only kind of layer in this module.
+- **Forward pass** — running data through the network from input to output, one layer at a time, doing exactly the arithmetic above. No learning happens during a forward pass; it just computes.`,
+    },
+    {
+      type: 'intuition',
+      title: 'XOR: four points that one neuron cannot handle',
+      md: `Here is the smallest problem that breaks a single neuron. Two inputs, each 0 or 1. The answer is 1 when the two inputs **differ** and 0 when they match. Four points, and that is the entire dataset.
+
+- (0, 0) gives 0. (0, 1) gives 1. (1, 0) gives 1. (1, 1) gives 0.
+- Draw them on a square. The two 1s sit at opposite corners: bottom-right and top-left. The two 0s sit at the *other* pair of opposite corners: bottom-left and top-right.
+- A single neuron ends in a threshold: output 1 when z is at or above 0, else 0. Since z = w1x1 + w2x2 + b, the boundary z = 0 is a **straight line**. One neuron draws exactly one straight line and answers 1 on one side, 0 on the other.
+- Now the argument. Draw the segment joining the two 1s. Its midpoint is (0.5, 0.5). Draw the segment joining the two 0s. Its midpoint is *also* (0.5, 0.5) — the diagonals of a square cross in the centre.
+- A straight line cuts the plane into two sides, and each side is **convex**: if two points are on one side, every point on the segment between them is on that side too.
+- So a line with both 1s on its "1" side must have (0.5, 0.5) on that side. The same line with both 0s on its "0" side must have (0.5, 0.5) on *that* side. One point cannot be on both sides. **No such line exists.**
+
+AND and OR are fine — each needs one line. XOR is the smallest function that a single neuron cannot compute, at any weights whatsoever.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'XOR part 1: four hand-picked lines, none of them right',
+      code: `def neuron(x1, x2, w1, w2, b):
+    z = w1 * x1 + w2 * x2 + b
+    return 1 if z >= 0 else 0
+
+xor = [(0, 0, 0), (0, 1, 1), (1, 0, 1), (1, 1, 0)]
+for w1, w2, b in [(1, 1, -0.5), (1, 1, -1.5), (-1, -1, 0.5), (1, -1, 0.0)]:
+    right = 0
+    for x1, x2, y in xor:
+        if neuron(x1, x2, w1, w2, b) == y:
+            right = right + 1
+    print('w =', (w1, w2), 'b =', b, '-> correct on', right, 'of 4')
+
+# ---- real output ----
+# w = (1, 1) b = -0.5 -> correct on 3 of 4
+# w = (1, 1) b = -1.5 -> correct on 1 of 4
+# w = (-1, -1) b = 0.5 -> correct on 1 of 4
+# w = (1, -1) b = 0.0 -> correct on 1 of 4`,
+      annotations: {
+        1: 'One neuron with two inputs, written as a function so we can call it with different weights. x1 and x2 are the inputs; w1, w2 and b are the neuron\'s parameters.',
+        2: 'The dot product of (w1, w2) with (x1, x2), plus the bias. Two terms instead of three, same operation as before.',
+        3: 'The threshold: output 1 if z is at least 0, else 0. "1 if condition else 0" is Python\'s conditional expression — the whole thing becomes 1 when the test passes and 0 when it does not.',
+        5: 'The complete XOR dataset. Each item is a tuple of three numbers: input 1, input 2, correct answer.',
+        6: 'Four candidate lines to try. "for w1, w2, b in ..." is tuple unpacking: each item in the list is a group of three numbers, and Python drops them into w1, w2 and b automatically.',
+        7: 'A counter for how many of the four points this line gets right.',
+        8: 'Walk the four data points. Unpacking again: x1, x2 and y come out of each tuple.',
+        9: 'Run the neuron on this point and compare its output to the correct answer y.',
+        10: 'Count the hit.',
+        11: 'Print the line and its score. The first row is OR (3 of 4 — it gets everything except (1,1)), the second is AND, the third is NOR, the fourth is a diagonal. None reaches 4.',
+      },
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'XOR part 2: try 1,377 lines instead of 4',
+      code: `# neuron() and xor from part 1 are reused here.
+best = 0
+tried = 0
+for w1 in range(-4, 5):
+    for w2 in range(-4, 5):
+        for b_half in range(-8, 9):
+            right = 0
+            for x1, x2, y in xor:
+                if neuron(x1, x2, w1, w2, b_half / 2) == y:
+                    right = right + 1
+            tried = tried + 1
+            if right > best:
+                best = right
+print('lines tried:', tried, '- best score any of them reached:', best, 'of 4')
+
+# ---- real output ----
+# lines tried: 1377 - best score any of them reached: 3 of 4`,
+      annotations: {
+        2: 'The best score seen so far, starting at 0.',
+        3: 'How many different lines we have tested, so the printed claim is checkable.',
+        4: 'Try every whole-number weight for input 1 from -4 to 4. range(-4, 5) stops before 5, so it gives -4, -3, ..., 4 — nine values.',
+        5: 'The same nine values for the second weight. Nesting the loops means every combination of w1 and w2 gets tried.',
+        6: 'Seventeen bias values. We loop over whole numbers and halve them below, so the biases are -4.0, -3.5, ..., 4.0.',
+        7: 'Reset the per-line score counter for this particular line.',
+        8: 'Score this line on all four XOR points, exactly as in part 1.',
+        9: 'b_half / 2 turns the whole number into the half-step bias. Everything else is identical to part 1.',
+        10: 'Count a correct point.',
+        11: 'Count this line as tried. 9 x 9 x 17 = 1377 lines.',
+        12: 'If this line beat the record, remember the new record.',
+        13: 'Store it.',
+        14: 'The result is 3, never 4. This is not a proof by itself — it is 1,377 confirmations of the midpoint argument above, which is the proof.',
       },
     },
     {
       type: 'intuition',
-      title: 'The MLP: layers with a kink between them',
-      md: `A **multi-layer perceptron** is the fix, and it is almost boring: alternate linear layers with a non-linearity.
+      title: 'The fix: two neurons first, then one more on top of them',
+      md: `Since no single line works, use two. Each line is a neuron, and both are easy ones we already saw scoring well on their own.
 
-- **Input layer** — your raw features. No weights here, it is just where the numbers enter.
-- **Hidden layer(s)** — fully connected: every unit reads every value from the layer before. Linear step, then an activation (ReLU, sigmoid, tanh, GELU — next module).
-- **Output layer** — one unit for regression, one per class for classification.
-- The rule that matters: **a non-linearity after every hidden layer**. Miss one and those two layers silently fuse into one.
-- What is a hidden unit? A **learned feature detector**. Each one is its own little perceptron that fires on some pattern in its input.
-- Stack them and the features compose: in a vision net the first layer learns edges and blobs, the next learns corners and textures from those edges, the next learns eyes and wheels, and the output layer just votes over parts.`,
+- Hidden neuron 1 computes **OR**: weights (1, 1), bias -0.5. It outputs 1 unless both inputs are 0.
+- Hidden neuron 2 computes **AND**: weights (1, 1), bias -1.5. It outputs 1 only when both inputs are 1.
+- Feed the two hidden outputs into a third neuron with weights (1, -1) and bias -0.5. In words: "output 1 when OR fired and AND did not".
+- Check (1, 1) by hand: h1 = step(1 + 1 - 0.5) = step(1.5) = 1. h2 = step(1 + 1 - 1.5) = step(0.5) = 1. Output = step(1 - 1 - 0.5) = step(-0.5) = **0**. Correct — the inputs match, so XOR is 0.
+- Check (0, 1): h1 = step(0 + 1 - 0.5) = step(0.5) = 1. h2 = step(0 + 1 - 1.5) = step(-0.5) = 0. Output = step(1 - 0 - 0.5) = step(0.5) = **1**. Correct.
+
+That is a hidden layer of width 2, and it is the whole solution.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'The 2-2-1 network solving XOR, all four inputs',
+      code: `def step(z):
+    return 1 if z >= 0 else 0
+
+for x1, x2 in [(0, 0), (0, 1), (1, 0), (1, 1)]:
+    h1 = step(1 * x1 + 1 * x2 - 0.5)
+    h2 = step(1 * x1 + 1 * x2 - 1.5)
+    y = step(1 * h1 + (-1) * h2 - 0.5)
+    print('x =', (x1, x2), 'h1 =', h1, 'h2 =', h2, '-> y =', y)
+
+# ---- real output ----
+# x = (0, 0) h1 = 0 h2 = 0 -> y = 0
+# x = (0, 1) h1 = 1 h2 = 0 -> y = 1
+# x = (1, 0) h1 = 1 h2 = 0 -> y = 1
+# x = (1, 1) h1 = 1 h2 = 1 -> y = 0`,
+      annotations: {
+        1: 'The threshold activation on its own, so the three neurons below read cleanly.',
+        2: 'Output 1 when z is at least 0, otherwise 0. Same rule as part 1.',
+        4: 'Walk the four possible inputs. There is no dataset to load — XOR has exactly four cases.',
+        5: 'Hidden neuron 1: weights 1 and 1, bias -0.5. This is OR.',
+        6: 'Hidden neuron 2: the same weights, a different bias. That single change turns OR into AND — the bias is what moves the line.',
+        7: 'The output neuron. Its inputs are h1 and h2, not x1 and x2. This is the point of the whole module: the second layer works on features the first layer built.',
+        8: 'Print the input, both hidden values, and the answer. Compare the y column to 0, 1, 1, 0 — all four correct, which no single line managed.',
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'Why that worked, said plainly',
+      md: `Look at the h1 and h2 columns in the output. The hidden layer rewrote the four points into new coordinates.
+
+- Original points: (0,0), (0,1), (1,0), (1,1). New points, as (h1, h2): (0,0), (1,0), (1,0), (1,1).
+- The two inputs that should answer 1 both landed on the same new point, (1, 0). The two that should answer 0 landed on (0, 0) and (1, 1).
+- In these new coordinates the answer-1 group and the answer-0 group **can** be split by one straight line, and h1 - h2 = 0.5 is such a line.
+- That is what a hidden layer does: it moves the data into a new set of coordinates where a straight line is enough. It does not draw a curved boundary; it straightens the problem out first.
+- The activation function is essential to this. If step were removed, h1 and h2 would just be two straight-line combinations of x1 and x2, and the output neuron would be a straight-line combination of those — still one straight line overall. The next-to-last section shows that collapse numerically.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Counting parameters by hand',
+      md: `Take a 3-4-2 network: 3 inputs, one hidden layer of 4 neurons, an output layer of 2 neurons. Count every learnable number in it.
+
+- **First layer, 3 into 4.** Each of the 4 hidden neurons reads all 3 inputs, so it has 3 weights. 4 neurons x 3 weights = **12 weights**. Each hidden neuron also has one bias, so **4 biases**. Layer total: 16.
+- **Second layer, 4 into 2.** Each of the 2 output neurons reads all 4 hidden outputs, so it has 4 weights. 2 x 4 = **8 weights**, plus **2 biases**. Layer total: 10.
+- **Whole network: 16 + 10 = 26 parameters.** That is 26 numbers that training will adjust, and nothing else in the network changes.
+- The rule, from that counting: a dense layer taking **n** inputs to **m** outputs has **n x m weights and m biases**.
+- The bias count is m, not n. One bias per *output* neuron. This is the half people get wrong, and the counting above is why: biases belong to the neurons doing the receiving.
+- Now the number that used to look like magic. A layer from 784 pixels to 128 hidden neurons has 784 x 128 = **100,352 weights** plus 128 biases = 100,480 parameters. Nothing new happened — it is the same 4 x 3 counting, with bigger numbers.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'The same count, done by a loop',
+      code: `sizes = [3, 4, 2]
+total = 0
+for i in range(len(sizes) - 1):
+    n = sizes[i]
+    m = sizes[i + 1]
+    weights = n * m
+    biases = m
+    total = total + weights + biases
+    print('layer', n, '->', m, ':', weights, 'weights +', biases, 'biases =', weights + biases)
+print('total parameters:', total)
+
+# ---- real output ----
+# layer 3 -> 4 : 12 weights + 4 biases = 16
+# layer 4 -> 2 : 8 weights + 2 biases = 10
+# total parameters: 26`,
+      annotations: {
+        1: 'The network shape as a list: 3 inputs, then a hidden layer of 4, then an output layer of 2.',
+        2: 'A running total of parameters across all layers.',
+        3: 'There are 3 numbers in sizes but only 2 layers with weights — a layer sits between each neighbouring pair. len(sizes) - 1 = 2, so i takes the values 0 and 1.',
+        4: 'n is how many numbers come into this layer.',
+        5: 'm is how many come out, which is the number of neurons in this layer.',
+        6: 'The counting rule: every one of the m neurons has n weights.',
+        7: 'One bias per neuron, so m of them. Written on its own line so the rule is impossible to misread.',
+        8: 'Add this layer\'s parameters to the running total.',
+        9: 'Print the arithmetic for this layer so you can check it against the hand count.',
+        10: 'Prints 26. Change sizes to [784, 128, 10] and this same loop prints 101,770.',
+      },
+    },
+    {
+      type: 'math',
+      intro: 'The counting rule, and the same rule applied to a network that classifies 28x28 images.',
+      latex: [
+        '\\text{dense layer } n \\to m: \\quad \\underbrace{n \\cdot m}_{\\text{weights}} \\;+\\; \\underbrace{m}_{\\text{biases}}',
+        '3 \\to 4 \\to 2: \\;\\; (3 {\\cdot} 4 + 4) + (4 {\\cdot} 2 + 2) \\;=\\; 16 + 10 \\;=\\; 26',
+        '784 \\to 128 \\to 10: \\;\\; (784 {\\cdot} 128 + 128) + (128 {\\cdot} 10 + 10) \\;=\\; 100{,}480 + 1{,}290 \\;=\\; 101{,}770',
+      ],
+    },
+    {
+      type: 'intuition',
+      title: 'A network is a stack of three steps, repeated',
+      md: `Here is the whole of a feed-forward neural network, with nothing left out.
+
+1. Multiply the incoming numbers by a grid of weights (that is one dot product per neuron).
+2. Add one bias per neuron.
+3. Apply an activation function to each result.
+
+Then hand the outputs to the next layer and do steps 1, 2, 3 again. Repeat until you reach the output layer. That sequence is the **forward pass**, and it is all that happens when a trained network makes a prediction.
+
+- A grid of weights with n rows and m columns is a **matrix**, and step 1 is exactly the matrix action you saw in *Matrices as Transformations*: a list of n numbers goes in, a list of m numbers comes out.
+- Real code writes steps 1 and 2 as one line, because a library does the whole grid at once. The loop below does the same arithmetic one neuron at a time so you can see every multiplication.
+- The activation in step 3 is applied to each number separately. It never mixes neurons together.
+- That is the entire architecture. What makes a big network big is repeating this more times with larger grids — not a different mechanism.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Forward pass part 1: one dense layer',
+      code: `def dense(inputs, weights, biases):
+    outputs = []
+    for j in range(len(biases)):
+        z = biases[j]
+        for i in range(len(inputs)):
+            z = z + weights[i][j] * inputs[i]
+        outputs.append(round(z, 4))
+    return outputs
+
+W1 = [[0.5, -0.2, 0.1, 0.9],
+      [-1.5, 0.4, 0.3, -0.6],
+      [0.25, 0.7, -0.8, 0.2]]
+b1 = [-0.7, 0.1, 0.0, 0.5]
+print(dense([1.0, 0.0, 3.0], W1, b1))
+
+# ---- real output ----
+# [0.55, 2.0, -2.3, 2.0]`,
+      annotations: {
+        1: 'One dense layer. inputs is the list coming in, weights is the grid, biases has one entry per neuron in this layer.',
+        2: 'An empty list that will collect one output number per neuron.',
+        3: 'Loop over the neurons. There is one bias per neuron, so len(biases) is the number of neurons — 4 here. j is which neuron we are computing.',
+        4: 'Start this neuron\'s total at its own bias, then add the weighted inputs on top. Same as the very first snippet, where we added b at the end — order does not matter for a sum.',
+        5: 'Loop over the incoming numbers. i is which input we are on.',
+        6: 'weights[i][j] is the weight connecting input i to neuron j. Row = which input, column = which neuron. Getting these two backwards is the most common bug when writing a layer from scratch.',
+        7: 'Store this neuron\'s finished value. append adds one item to the end of a list. round(z, 4) only tidies the printout.',
+        8: 'Hand back the list of outputs — 4 numbers came out of 3 numbers.',
+        10: 'Row 0 holds the weights leaving input 0, one for each of the 4 neurons. Read down a column to see one neuron\'s weights.',
+        11: 'Row 1: the weights leaving input 1.',
+        12: 'Row 2: the weights leaving input 2. Three rows and four columns = 12 weights, matching the hand count.',
+        13: 'The 4 biases, one per neuron.',
+        14: 'Run it on the same input as the very first snippet. Look at the first output: 0.55 — that is the exact neuron computed by hand at the top of this module, and its weights are the first column of W1 read downward, 0.5, -1.5, 0.25.',
+      },
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Forward pass part 2: two layers with an activation between them',
+      code: `# dense() from part 1 is reused here.
+def relu(values):
+    return [v if v > 0 else 0.0 for v in values]
+
+W2 = [[1.0, -0.5], [0.2, 0.8], [-0.3, 0.6], [0.7, 0.1]]
+b2 = [0.05, -0.15]
+x = [1.0, 0.0, 3.0]
+z1 = dense(x, W1, b1)
+h = relu(z1)
+z2 = dense(h, W2, b2)
+print('layer 1 (z) ', z1)
+print('after ReLU  ', h)
+print('output      ', z2)
+
+# ---- real output ----
+# layer 1 (z)  [0.55, 2.0, -2.3, 2.0]
+# after ReLU   [0.55, 2.0, 0.0, 2.0]
+# output       [2.4, 1.375]`,
+      annotations: {
+        2: 'ReLU applied to a whole list. ReLU is: keep the number if it is positive, otherwise give back 0.',
+        3: 'This is a list comprehension — Python\'s short way to write "build a new list by doing something to every item of an old one". Read it as: for each v in values, put v in the new list if v is greater than 0, otherwise put 0.0.',
+        5: 'The second layer\'s weight grid: 4 rows (one per hidden neuron) and 2 columns (one per output neuron) = 8 weights, matching the hand count.',
+        6: 'Two biases, one per output neuron. 8 + 2 + 12 + 4 = 26 parameters in total.',
+        7: 'The same three inputs as the very first snippet.',
+        8: 'Step 1 and 2 of the forward pass for layer 1: multiply and add biases. z1 is a list of 4 raw scores.',
+        9: 'Step 3: the activation. Notice -2.3 becomes 0.0 — that neuron contributes nothing to this particular prediction.',
+        10: 'Layer 2 takes the activated hidden values, not the raw z1. Feeding z1 here instead would delete the non-linearity and is a genuine, silent bug.',
+        11: 'The raw scores before the activation.',
+        12: 'The same numbers after ReLU. Exactly one of the four changed.',
+        13: 'The two output numbers. No activation was applied to the output layer here, which is the right choice when the answer is an unbounded number.',
+      },
     },
     { type: 'visual', component: 'NeuralNetForward', props: {} },
     {
       type: 'note',
-      md: 'Drive it: step through the three stages and watch the numbers appear layer by layer. Then click any edge and drag its weight — every value downstream of that edge moves, and the final ŷ moves with it. That sensitivity, *"how much does the output change if I nudge this one weight"*, is exactly the number backpropagation computes. Note also that this is the exact 2-3-1 network you will hand-backprop in the next module, so the numbers on screen are worth getting familiar with now.',
+      md: 'Step through the stages in that diagram and watch the numbers appear layer by layer — it is doing exactly what the dense() loop above does. Then drag any edge to change one weight, and notice that every value downstream of that edge moves. How much the final output moves when you nudge one weight is precisely the quantity the next module computes, so it is worth playing with now.',
     },
     {
       type: 'intuition',
-      title: 'The vocabulary the interview is conducted in',
-      md: `Say these wrong and you sound like you have only used a framework.
+      title: 'Worked case: a full 3-4-2 forward pass, by hand',
+      md: `Same network as the code above (W1, b1, W2, b2), a different input: x = [2.0, 1.0, 0.0]. Do every multiplication yourself before reading the totals.
 
-- **Unit / neuron** — one row of the computation: weights, sum, activation. **Layer** — a group of units computed together.
-- **Weight** — one number on one connection. **Bias** — one number per unit, no input attached; it shifts the boundary off the origin.
-- **Width** — units in a layer. **Depth** — how many layers *have weights*. The input layer does not count, so a 2-3-1 net is a **2-layer** net (or "one hidden layer"). Interviewers do use this to trip people up.
-- **Parameter** — any learned number: every weight plus every bias.
-- Counting rule, memorise it: a dense layer from n inputs to m outputs has **n·m weights + m biases**.
-- The bias count is m, not n — one per *output* unit. That is the half people get wrong.`,
+- **Hidden neuron 1.** Its weights are the first column of W1 read downward: 0.5, -1.5, 0.25. So z = -0.7 + 0.5(2.0) + (-1.5)(1.0) + 0.25(0.0) = -0.7 + 1.0 - 1.5 = **-1.2**.
+- **Hidden neuron 2.** Weights -0.2, 0.4, 0.7, bias 0.1. z = 0.1 - 0.4 + 0.4 + 0.0 = **0.1**.
+- **Hidden neuron 3.** Weights 0.1, 0.3, -0.8, bias 0.0. z = 0.0 + 0.2 + 0.3 + 0.0 = **0.5**.
+- **Hidden neuron 4.** Weights 0.9, -0.6, 0.2, bias 0.5. z = 0.5 + 1.8 - 0.6 + 0.0 = **1.7**.
+- **Apply ReLU** to [-1.2, 0.1, 0.5, 1.7]. Only the first is negative, so h = [**0.0**, 0.1, 0.5, 1.7]. Hidden neuron 1 is switched off for this input.
+- **Output neuron 1.** Weights 1.0, 0.2, -0.3, 0.7, bias 0.05. z = 0.05 + 0 + 0.02 - 0.15 + 1.19 = **1.11**.
+- **Output neuron 2.** Weights -0.5, 0.8, 0.6, 0.1, bias -0.15. z = -0.15 + 0 + 0.08 + 0.30 + 0.17 = **0.40**.
+
+The answer is [1.11, 0.40]. Running the code from part 2 with x = [2.0, 1.0, 0.0] prints exactly [1.11, 0.4]. Twenty-six parameters, twenty multiplications, one prediction — and a network with a hundred million parameters differs only in how many times you repeat that.`,
     },
     {
-      type: 'math',
-      intro: 'Parameter counting on a real net. Do this arithmetic until it is automatic.',
-      latex: [
-        '\\text{Dense layer } n \\to m: \\quad \\underbrace{n \\cdot m}_{\\text{weights}} \\;+\\; \\underbrace{m}_{\\text{biases}}',
-        '784 \\to 128 \\to 64 \\to 10: \\;\\; (784 {\\cdot} 128 + 128) + (128 {\\cdot} 64 + 64) + (64 {\\cdot} 10 + 10)',
-        '=\\; 100{,}480 \\;+\\; 8{,}256 \\;+\\; 650 \\;=\\; 109{,}386 \\text{ parameters}',
-        '\\text{Note: } 92\\% \\text{ of them sit in the first layer — width next to the input is expensive.}',
-      ],
+      type: 'intuition',
+      title: 'The classic mistake: stacking layers with no activation',
+      md: `Here is the reasoning that traps almost everybody the first time. "One layer draws one line. So more layers must draw more lines. Let me just stack them."
+
+- Take a 2-2-1 network with no activation function anywhere. Hidden neuron 1: h1 = 2x1 - x2 + 0.5. Hidden neuron 2: h2 = 3x2 - 1.0. Output: y = h1 + 4h2 - 0.2.
+- Substitute h1 and h2 into y: y = (2x1 - x2 + 0.5) + 4(3x2 - 1.0) - 0.2.
+- Expand: y = 2x1 - x2 + 0.5 + 12x2 - 4.0 - 0.2 = **2x1 + 11x2 - 3.7**.
+- Read that last line. It is a single neuron with weights (2, 11) and bias -3.7. The two layers, seven parameters between them, compute exactly what three parameters compute.
+- This is not an approximation and it does not depend on the numbers. Multiplying and adding, then multiplying and adding again, is still just multiplying and adding. Fifty stacked layers with no activations are still one straight line.
+- So a 50-layer network with no activations has millions of parameters and exactly the power of the single neuron that failed XOR. Run it below and see the two functions agree to the last decimal.`,
     },
     {
       type: 'code',
       lang: 'python',
-      title: 'A 2-3-1 forward pass by hand — matrices, no loops',
-      code: `import numpy as np
+      title: 'The mistake, shown numerically: two layers = one layer',
+      code: `def two_layers(x1, x2):
+    h1 = 2 * x1 - 1 * x2 + 0.5
+    h2 = 0 * x1 + 3 * x2 - 1.0
+    return 1 * h1 + 4 * h2 - 0.2
 
-# 2 -> 3 -> 1, the same weights as the live network above.
-W1 = np.array([[0.8, -1.2, 0.5],       # x1 -> the 3 hidden units
-               [0.6,  0.9, -0.7]])     # x2 -> the 3 hidden units
-b1 = np.array([0.1, -0.2, 0.05])
-W2 = np.array([[1.1], [-0.8], [0.6]])  # 3 hidden -> 1 output
-b2 = np.array([-0.1])
+def one_layer(x1, x2):
+    return 2 * x1 + 11 * x2 - 3.7
 
-X = np.array([[0.5, -0.4],             # a BATCH of 4 samples, 2 features each
-              [1.0,  1.0],
-              [0.0,  0.0],
-              [-2.0, 0.3]])
+for x1, x2 in [(1.0, 0.0), (0.0, 1.0), (2.0, -3.0), (0.7, 0.4)]:
+    print(x1, x2, '| two layers:', round(two_layers(x1, x2), 4), '| one layer:', round(one_layer(x1, x2), 4))
 
-Z1 = X @ W1 + b1                       # (4,2)@(2,3) -> (4,3); bias broadcasts
-H  = np.maximum(0, Z1)                 # ReLU. The non-linearity. Elementwise.
-Z2 = H @ W2 + b2                       # (4,3)@(3,1) -> (4,1)
-Y  = 1 / (1 + np.exp(-Z2))             # sigmoid -> probability
-
-for name, a in [('X', X), ('Z1', Z1), ('H', H), ('Z2', Z2), ('Y', Y)]:
-    print(name.rjust(2), 'shape', a.shape)
-
-print('params:', W1.size + b1.size + W2.size + b2.size)
-print('y_hat:', Y.ravel().round(4))
-print('hidden row 0:', H[0].round(4))
-
-#  X shape (4, 2)
-# Z1 shape (4, 3)
-#  H shape (4, 3)
-# Z2 shape (4, 1)
-#  Y shape (4, 1)
-# params: 13
-# y_hat: [0.6304 0.8249 0.51   0.1115]
-# hidden row 0: [0.26 0.   0.58]`,
+# ---- real output ----
+# 1.0 0.0 | two layers: -1.7 | one layer: -1.7
+# 0.0 1.0 | two layers: 7.3 | one layer: 7.3
+# 2.0 -3.0 | two layers: -32.7 | one layer: -32.7
+# 0.7 0.4 | two layers: 2.1 | one layer: 2.1`,
       annotations: {
-        4: 'W1 is (in_features, out_features) = (2, 3). One COLUMN per hidden unit, not one row. Getting this backwards is the most common from-scratch bug.',
-        15: 'The whole layer, one expression. b1 has shape (3,) and broadcasts across all 4 rows — every sample shares the same bias.',
-        16: 'Delete this line and the network collapses into a single 2->1 linear model. Everything in this module is about this line.',
-        21: 'Print shapes, always. The batch dimension stays in front and never mixes with features.',
-        23: '6 + 3 + 3 + 1 = 13 parameters. Same counting rule as a 100-million-parameter model, just smaller.',
-        33: 'Row 0 matches the live visual exactly: 0.6304.',
-        34: 'Hidden unit 2 output 0 for this input — ReLU clipped it. That unit contributes nothing to this prediction, and it will get no gradient from it either.',
+        1: 'The two-layer network with no activation function anywhere.',
+        2: 'Hidden neuron 1: weights 2 and -1, bias 0.5. No squashing applied.',
+        3: 'Hidden neuron 2: weights 0 and 3, bias -1.0. The 0 * x1 is written out so the weight grid is visible rather than implied.',
+        4: 'The output neuron reads h1 and h2 with weights 1 and 4, bias -0.2. Seven parameters used in total.',
+        6: 'The single neuron we derived by substituting, for comparison.',
+        7: 'Weights 2 and 11, bias -3.7. Three parameters.',
+        9: 'Four test inputs, including a negative and a fractional one so the agreement cannot be luck on nice numbers.',
+        10: 'Print both answers side by side. Every row matches exactly — they are the same function, not merely close.',
+      },
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'The fix, shown numerically: add ReLU and the collapse stops',
+      code: `def relu(z):
+    return z if z > 0 else 0.0
+
+def with_relu(x1, x2):
+    h1 = relu(2 * x1 - 1 * x2 + 0.5)
+    h2 = relu(0 * x1 + 3 * x2 - 1.0)
+    return 1 * h1 + 4 * h2 - 0.2
+
+for x1, x2 in [(1.0, 0.0), (0.0, 1.0), (2.0, -3.0), (0.7, 0.4)]:
+    print(x1, x2, '| with ReLU:', round(with_relu(x1, x2), 4), '| one layer:', round(one_layer(x1, x2), 4))
+
+# ---- real output ----
+# 1.0 0.0 | with ReLU: 2.3 | one layer: -1.7
+# 0.0 1.0 | with ReLU: 7.8 | one layer: 7.3
+# 2.0 -3.0 | with ReLU: 7.3 | one layer: -32.7
+# 0.7 0.4 | with ReLU: 2.1 | one layer: 2.1`,
+      annotations: {
+        1: 'ReLU on a single number this time, not a list.',
+        2: 'Keep z when it is positive, otherwise hand back 0.0.',
+        4: 'The identical network from the previous snippet, with one change.',
+        5: 'The change: hidden neuron 1\'s result now passes through relu before leaving.',
+        6: 'Same for hidden neuron 2. Nothing else in the network was touched.',
+        7: 'The output neuron is unchanged — same weights 1 and 4, same bias -0.2.',
+        9: 'The same four test inputs as before, so the two tables can be read side by side.',
+        10: 'Now the columns disagree on three of four rows. The last row agrees only because both hidden values happened to be positive there, so ReLU changed nothing for that one input — which is exactly how ReLU works: it is linear on the positive side and flat on the negative side, and the kink between them is the entire non-linearity.',
       },
     },
     {
       type: 'intuition',
-      title: 'Shapes discipline, and why GPUs love this shape',
-      md: `The single best debugging habit in deep learning: **write the shape after every layer** before you write the layer.
+      title: 'Practice problems',
+      md: `Pen and paper first. Every number here is small on purpose.
 
-- Forward pass is one expression: **X @ W + b**. Batch of B samples in, batch of B activations out.
-- (B, n) @ (n, m) → (B, m). The batch dimension B rides in front, untouched. Features are the last axis.
-- Why this shape and not one sample at a time: B samples share the same W, so it is one big matrix multiply. A GPU is thousands of cores waiting for exactly that, and the weights get read from memory once instead of B times.
-- That is the real reason batching speeds things up — not fewer FLOPs, but more work per byte moved.
-- Most deep-learning bugs are shape bugs, and the dangerous ones do not crash: y of shape (B,) against ŷ of shape (B,1) **broadcasts** into a (B,B) loss matrix and trains happily on nonsense.
-- So: print shapes, or assert them. A one-line assert costs nothing and catches the silent class.`,
+1. A neuron has inputs x = [2.0, -1.0], weights w = [0.3, 0.4], bias b = 0.5. Compute z. Then compute the ReLU activation, and separately the step activation (1 if z is at least 0, else 0).
+2. Count the parameters in a 5-8-8-3 network — that is 5 inputs, two hidden layers of 8, and 3 outputs. Give the per-layer breakdown and the total. What is the depth, and what is the width of the widest layer?
+3. A network takes 1000 inputs into a hidden layer of 500, then 500 into 10 outputs. Which layer holds more parameters, and by roughly what factor?
+4. Someone writes a 4-6-6-1 network with ReLU after the first hidden layer but forgets it after the second. How many layers does the network *effectively* have, and how many parameters are wasted?
+5. Using the XOR solution from this module, compute h1, h2 and y by hand for the input (1, 0). Show each z before the step is applied.`,
     },
     {
       type: 'intuition',
-      title: 'Universal approximation, stated honestly',
-      md: `The theorem people quote to justify neural networks (Cybenko 1989, Hornik 1991):
+      title: 'Worked solutions',
+      md: `Check every intermediate number, not only the final one.
 
-- **One hidden layer with enough units can approximate any continuous function on a compact domain to any accuracy you like.**
-- That is a real and strong result. Now the four things it does *not* say, which is where interviews actually go.
-- "Enough" is unbounded — the required width can grow astronomically, even exponentially in the input dimension. Existence, not affordability.
-- It is an **existence** proof. It says such weights *exist*. It says nothing about whether gradient descent will ever *find* them.
-- Compact domain only. Nothing about behaviour outside the training range — extrapolation stays a fantasy.
-- Nothing about **generalisation**. Approximating the training data is not learning the underlying function.
-- Honest summary: the theorem says shallow nets are not fundamentally limited. Practice says they are hopelessly *inefficient*.`,
+1. z = 0.3(2.0) + 0.4(-1.0) + 0.5 = 0.6 - 0.4 + 0.5 = **0.7**. ReLU(0.7) = **0.7**, because it is positive. step(0.7) = **1**, because 0.7 is at least 0. Both activations act on the same z; they only disagree on what they do with it.
+2. Layer 1, 5 to 8: 5 x 8 = 40 weights + 8 biases = 48. Layer 2, 8 to 8: 64 + 8 = 72. Layer 3, 8 to 3: 24 + 3 = 27. Total = **147**. Depth = **3**, because three layers have weights; the input layer does not count. Widest layer = **8**.
+3. Layer 1: 1000 x 500 + 500 = **500,500**. Layer 2: 500 x 10 + 10 = **5,010**. The first layer holds about **100 times** more. The general lesson: the layer next to a high-dimensional input is where nearly all the memory goes, because its parameter count is the product of two large numbers.
+4. The second hidden layer and the output layer have no non-linearity between them, so they multiply out into one layer exactly as in the mistake section. The network effectively has **3 weighted layers, not 4**. Counting the waste: layer 3 (6 to 6) is 36 + 6 = 42 parameters and layer 4 (6 to 1) is 6 + 1 = 7, total 49, and the same function is reachable with a single 6-to-1 layer costing 7. So **42 parameters buy nothing**. The network still trains and the loss still falls — it just cannot represent anything the smaller network could not.
+5. Input (1, 0). Hidden 1: z = 1(1) + 1(0) - 0.5 = **0.5**, and step(0.5) = **1**. Hidden 2: z = 1(1) + 1(0) - 1.5 = **-0.5**, and step(-0.5) = **0**. Output: z = 1(1) + (-1)(0) - 0.5 = **0.5**, and step(0.5) = **1**. XOR(1, 0) is 1, so it is correct — and it matches the third row of the 2-2-1 output above.`,
     },
     {
-      type: 'math',
-      intro: 'The statement itself. Read the quantifiers: N depends on epsilon, and nothing here mentions training.',
-      latex: [
-        '\\forall f \\in C(K),\\; \\forall \\varepsilon > 0 \\;\\; \\exists\\, N,\\, v_i,\\, w_i,\\, b_i \\;:\\;',
-        '\\sup_{x \\in K} \\left| \\sum_{i=1}^{N} v_i\\, \\varphi\\!\\left(w_i^\\top x + b_i\\right) - f(x) \\right| < \\varepsilon',
-        '\\text{Note what is missing: any bound on } N, \\text{ and any mention of an algorithm.}',
-      ],
-    },
-    {
-      type: 'note',
-      md: 'So why deep instead of wide? Parameter efficiency. Compare on MNIST-sized input: one hidden layer of 1000 units is 784·1000 + 1000 + 1000·10 + 10 = **795,010** parameters, while 784 → 128 → 64 → 10 is **109,386** — roughly 7× cheaper, and in practice the deep one wins on accuracy too. Depth lets features *compose*: layer 2 builds from layer 1 instead of rebuilding from raw pixels. There are functions a deep net represents with a polynomial number of units that a one-hidden-layer net needs exponentially many for. Depth is not magic, it is reuse.',
+      type: 'intuition',
+      title: 'Beyond the basics - skip this on your first read',
+      md: `Everything above stands on its own. This section names ideas you will meet later so the words are not new when you get there.
+
+- **Batching.** Real code pushes many inputs through at once rather than one at a time, because every input uses the same weight grid, so the whole batch becomes one large multiplication that a GPU can run in parallel. The arithmetic per input is identical to the dense() loop above.
+- **The universal approximation theorem** (Cybenko 1989, Hornik 1991) says a single hidden layer, given enough neurons and a non-linear activation, can get as close as you like to any continuous function on a bounded region. Two honest caveats: it puts no limit on how many neurons "enough" is, and it only says good weights *exist* — it says nothing about whether training will find them.
+- **So why go deep instead of very wide?** Cost. One hidden layer of 1000 neurons on 784 inputs costs 784(1000) + 1000 + 1000(10) + 10 = 795,010 parameters, while 784-128-64-10 costs 109,386 for usually better accuracy. Depth lets layer 2 build on the features layer 1 found, instead of rebuilding everything from raw pixels.
+- **Other activations.** ReLU and sigmoid are two of several; tanh, GELU and others differ in shape and in how they behave during training. The next module covers which to use where, and why sigmoid is now rarely used inside hidden layers.
+- **Historical note.** In 1969 Minsky and Papert published the XOR limitation in book form and interest in neural networks collapsed for years. Everyone already knew a hidden layer fixed XOR; nobody had a practical way to *train* one until backpropagation was popularised in 1986. That training method is the next module.`,
     },
   ],
   quiz: [
     {
-      question: 'Why can a single perceptron not learn XOR?',
+      question: 'A neuron has 3 inputs. How many parameters does it have?',
       options: [
-        {
-          text: 'XOR needs more training data than four points',
-          explanation: 'Data quantity is irrelevant — those four points are the complete function. The limit is representational, not statistical.',
-        },
-        {
-          text: 'The two positive points and the two negative points share the same midpoint, so no straight line can separate them',
-          explanation: 'Correct. Both diagonals cross at (0.5, 0.5); a line would have to put that single point on both sides at once. The perceptron draws exactly one line, so it is stuck.',
-        },
-        {
-          text: 'The step function is not differentiable',
-          explanation: 'True but irrelevant here — that blocks gradient training, not representation. Even with perfect weights handed to you, no single line separates XOR.',
-        },
+        { text: '3', explanation: 'That counts the weights and forgets the bias, which is also learned.' },
+        { text: '4', explanation: 'Correct: 3 weights, one per input, plus 1 bias that has no input attached.' },
+        { text: '6', explanation: 'There is no second number per input. One weight per connection, and one bias for the neuron.' },
       ],
       correct: 1,
     },
     {
-      question: 'You stack 50 linear layers with no activation functions. What can this network represent?',
+      question: 'Why can no single neuron compute XOR?',
       options: [
+        { text: 'Four data points are too few to train on', explanation: 'Quantity is not the issue — those four points are the complete function, and we brute-forced 1,377 candidate lines against them.' },
         {
-          text: 'Exactly what one linear layer represents',
-          explanation: 'Correct. W₅₀ ⋯ W₂W₁ multiplies out to a single matrix. Millions of parameters, one straight boundary.',
+          text: 'A single neuron\'s boundary is one straight line, and the two 1s and the two 0s share the midpoint (0.5, 0.5), so no line can put that point on both sides',
+          explanation: 'Correct. Each side of a line is convex, so a line holding both 1s must hold their midpoint, and the same point is the midpoint of the two 0s.',
         },
-        {
-          text: 'Any continuous function, by universal approximation',
-          explanation: 'Universal approximation requires a non-linear activation — it is the whole hypothesis of the theorem. Without one there is nothing to approximate with.',
-        },
-        {
-          text: '50 times more complex functions than one layer',
-          explanation: 'Depth without non-linearity adds zero expressiveness. The composition of linear maps is linear, full stop.',
-        },
+        { text: 'The step function has no slope, so it cannot be trained', explanation: 'True but a different problem. Even if perfect weights were handed to you for free, no straight line separates XOR.' },
       ],
-      correct: 0,
+      correct: 1,
     },
     {
       question: 'How many parameters does a dense layer with 100 inputs and 50 outputs have?',
       options: [
-        { text: '5,000', explanation: 'That is the weight count only — you forgot the biases.' },
-        { text: '150', explanation: 'That is 100 + 50, which is not how a fully connected layer works: every input connects to every output.' },
-        {
-          text: '5,050',
-          explanation: 'Correct: 100·50 = 5,000 weights plus 50 biases (one per OUTPUT unit) = 5,050.',
-        },
+        { text: '5,000', explanation: 'That is the weight count only. Each of the 50 output neurons also has a bias.' },
+        { text: '150', explanation: 'That is 100 + 50. In a fully connected layer every input connects to every output, so the weights multiply.' },
+        { text: '5,050', explanation: 'Correct: 100 x 50 = 5,000 weights, plus 50 biases — one per output neuron, not per input.' },
       ],
       correct: 2,
     },
     {
-      question: 'What does the universal approximation theorem actually guarantee?',
+      question: 'You stack 50 dense layers with no activation function between any of them. What can the network compute?',
       options: [
-        {
-          text: 'That suitable weights exist for a wide enough single hidden layer — nothing about how many units, or about finding them',
-          explanation: 'Correct. It is an existence proof on a compact domain. No bound on width, no algorithm, no generalisation claim.',
-        },
-        {
-          text: 'That gradient descent will find weights approximating any function',
-          explanation: 'The theorem never mentions an optimiser. Existence and findability are completely separate questions.',
-        },
-        {
-          text: 'That one hidden layer is the optimal architecture',
-          explanation: 'The opposite of the practical lesson — the required width can be astronomical, which is exactly why we build deep instead.',
-        },
+        { text: 'Exactly what one dense layer can compute', explanation: 'Correct. Substituting each layer into the next multiplies out to a single set of weights and one bias, as shown numerically in the mistake section. Millions of parameters, one straight boundary.' },
+        { text: 'Fifty times more complex functions than one layer', explanation: 'Depth with no non-linearity adds nothing. Multiply-and-add followed by multiply-and-add is still multiply-and-add.' },
+        { text: 'Any continuous function, because it is deep enough', explanation: 'That result requires a non-linear activation. With none, there is nothing to build a curve out of.' },
       ],
       correct: 0,
     },
     {
-      question: 'X has shape (32, 784), W has shape (784, 128), b has shape (128,). What is the shape of X @ W + b?',
+      question: 'In the 2-2-1 XOR network, the hidden layer turned the four inputs into the points (0,0), (1,0), (1,0) and (1,1). Why does that matter?',
       options: [
-        { text: '(784, 128)', explanation: 'That is W\'s own shape. The batch dimension does not disappear.' },
+        { text: 'It compressed the data into fewer numbers', explanation: 'Nothing was compressed — two numbers went in and two came out. The values changed, not the count.' },
         {
-          text: '(32, 128)',
-          explanation: 'Correct: (B, n) @ (n, m) → (B, m). The batch of 32 rides in front untouched, and b broadcasts across all 32 rows.',
+          text: 'In these new coordinates the two answer-1 points sit together and can be split from the answer-0 points by one straight line, which the output neuron then draws',
+          explanation: 'Correct. The hidden layer re-coordinates the problem so a straight line is enough. That is what a hidden layer buys you.',
         },
-        { text: '(32, 784)', explanation: 'That is the input shape — the matmul changes the feature dimension from 784 to 128.' },
+        { text: 'It removed the need for weights in the output layer', explanation: 'The output neuron still has weights (1, -1) and a bias of -0.5, and it needs all three.' },
       ],
       correct: 1,
     },
     {
-      question: 'Given universal approximation, why do practitioners build deep networks instead of one very wide layer?',
+      question: 'In a 3-4-2 network, what is the depth and what is the width of the hidden layer?',
       options: [
-        { text: 'Wide networks cannot represent non-linear functions', explanation: 'They can — that is precisely what the theorem says. Expressiveness is not the issue.' },
-        { text: 'Deep networks always train faster per epoch', explanation: 'Not reliably true, and depth brings its own training problems (vanishing gradients). Speed is not the argument.' },
-        {
-          text: 'Depth composes features, so the same function usually needs far fewer parameters than a shallow net',
-          explanation: 'Correct. Layer 2 builds on layer 1 instead of rebuilding from raw input. Some functions need exponentially many units when shallow, polynomially many when deep.',
-        },
-      ],
-      correct: 2,
-    },
-    {
-      question: 'What does a hidden unit in the first layer of an image network typically learn?',
-      options: [
-        {
-          text: 'A simple local pattern — an edge at some orientation, a colour blob',
-          explanation: 'Correct. A hidden unit is a learned feature detector, and early layers detect simple local structure. Later layers combine those into corners, textures, and eventually object parts.',
-        },
-        { text: 'A whole object class such as "cat"', explanation: 'That level of abstraction lives in deep layers. The first layer only sees raw pixels in a small neighbourhood.' },
-        { text: 'Nothing meaningful — hidden units stay random', explanation: 'They are trained. Visualising first-layer filters of any trained vision net reliably shows edge and colour detectors.' },
-      ],
-      correct: 0,
-    },
-    {
-      question: 'How are the perceptron and logistic regression related?',
-      options: [
-        { text: 'They are unrelated models from different families', explanation: 'They compute the identical score w·x + b. Only the final squashing differs.' },
-        {
-          text: 'Same w·x + b line; the perceptron applies a hard step, logistic regression applies a sigmoid to get a probability',
-          explanation: 'Correct — and the sigmoid is what makes it differentiable, which is what makes gradient descent (and therefore all of deep learning) possible.',
-        },
-        { text: 'Logistic regression has no bias term', explanation: 'It has one — the intercept. Both models shift their boundary off the origin with a bias.' },
+        { text: 'Depth 3, width 4', explanation: 'Depth counts layers that have weights. The input layer has none, so it is not counted.' },
+        { text: 'Depth 2, width 4', explanation: 'Correct. Two layers carry weights (3-to-4 and 4-to-2), and the hidden layer holds 4 neurons.' },
+        { text: 'Depth 2, width 3', explanation: 'Depth is right, but 3 is the number of inputs. The hidden layer\'s width is its own neuron count, 4.' },
       ],
       correct: 1,
     },
   ],
   interviewQuestions: [
     {
-      question: 'Why do neural networks need activation functions? Prove it, do not just assert it.',
+      question: 'Why do neural networks need activation functions? Prove it rather than asserting it.',
       answer:
-        'Because without them, depth is free of charge and free of value. Take two linear layers: h = W₁x + b₁, ŷ = W₂h + b₂. Substitute: ŷ = W₂(W₁x + b₁) + b₂ = (W₂W₁)x + (W₂b₁ + b₂). That is a single affine map with weight matrix W_eq = W₂W₁ and bias b_eq = W₂b₁ + b₂. Induction extends it to any depth, so L linear layers are exactly one linear layer — a hundred million parameters producing one straight boundary. A non-linearity φ between the layers gives W₂φ(W₁x + b₁) + b₂, and there is no algebraic move that flattens that. Say the associativity line explicitly; that is the part interviewers are listening for.',
+        'Because without them, extra layers add parameters and no new power. Take two layers with no activation: h = W1x + b1, then y = W2h + b2. Substitute the first into the second: y = W2(W1x + b1) + b2 = (W2W1)x + (W2b1 + b2). That is a single layer with weights W2W1 and bias W2b1 + b2. The same substitution repeats for any depth, so fifty layers collapse to one. Concretely: h1 = 2x1 - x2 + 0.5, h2 = 3x2 - 1, y = h1 + 4h2 - 0.2 expands to y = 2x1 + 11x2 - 3.7 — seven parameters doing the work of three, exactly. Put any non-linear function between the layers and the substitution no longer goes through, because you cannot pull x back out of it.',
       isCaseBased: false,
     },
     {
-      question: 'Explain the XOR problem and how an MLP solves it.',
+      question: 'Explain the XOR problem and how a hidden layer solves it.',
       answer:
-        'XOR outputs 1 when the two binary inputs differ: (0,0)→0, (0,1)→1, (1,0)→1, (1,1)→0. The positives sit on one diagonal of the unit square, the negatives on the other. A single perceptron draws one straight line and each side of a line is convex, so the region holding both positives must contain their midpoint (0.5, 0.5) — but that is also the midpoint of the two negatives, so the same point would need to be on both sides. No line exists. An MLP solves it with two hidden units: one computes OR, one computes AND, both linearly separable on their own, and the output unit computes OR AND NOT(AND). Two lines plus a non-linear combination carve out the diagonal region a single line cannot. The moral: hidden units build intermediate features that make a hard problem linearly separable in the new space.',
+        'XOR is 1 when the two binary inputs differ: (0,0) gives 0, (0,1) gives 1, (1,0) gives 1, (1,1) gives 0. One neuron thresholds w1x1 + w2x2 + b, so its boundary is one straight line. The two 1s and the two 0s lie on the two diagonals of the unit square, which cross at (0.5, 0.5). Each side of a line is convex, so a line holding both 1s must hold their midpoint; the same point is the midpoint of the 0s, so it would have to be on both sides. No line exists. Two hidden neurons fix it: one computes OR (weights 1,1, bias -0.5), one computes AND (weights 1,1, bias -1.5), and an output neuron with weights (1,-1) and bias -0.5 says "OR fired and AND did not". The hidden layer moves the four points into coordinates where one line suffices.',
       isCaseBased: false,
     },
     {
-      question: 'Count the parameters in an MLP with layers 784 → 256 → 128 → 10. Show your arithmetic.',
+      question: 'Count the parameters in a 784-256-128-10 network and show your arithmetic.',
       answer:
-        'Rule: a dense layer n → m has n·m weights + m biases. Layer 1: 784·256 + 256 = 200,704 + 256 = 200,960. Layer 2: 256·128 + 128 = 32,768 + 128 = 32,896. Layer 3: 128·10 + 10 = 1,280 + 10 = 1,290. Total = 235,146. Two things worth adding unprompted: 85% of the parameters sit in the first layer, so width right next to a high-dimensional input is where the memory goes; and biases are counted per output unit, not per input — that is the slip most candidates make under pressure.',
+        'The rule is that a dense layer from n inputs to m outputs holds n x m weights plus m biases — m biases, because one belongs to each receiving neuron. Layer 1: 784 x 256 = 200,704 weights plus 256 biases = 200,960. Layer 2: 256 x 128 = 32,768 plus 128 = 32,896. Layer 3: 128 x 10 = 1,280 plus 10 = 1,290. Total 235,146. Two things worth adding unprompted: about 85 percent of the parameters sit in the first layer, so width next to a high-dimensional input is what costs memory; and the depth here is 3, not 4, because the input layer carries no weights.',
       isCaseBased: false,
     },
     {
-      question: 'State the universal approximation theorem, then tell me why it did not end the field.',
+      question: 'What does a hidden unit actually compute, and why is stacking them useful?',
       answer:
-        'Statement: for any continuous f on a compact set K and any ε > 0, there exists a finite N and weights such that a single-hidden-layer network with a non-polynomial activation approximates f uniformly within ε on K. Why it settles nothing practical: (1) no bound on N — the width can grow exponentially in input dimension, so "possible" is not "affordable"; (2) it is an existence proof, silent on whether gradient descent reaches those weights, and the loss surface is non-convex; (3) compact domain only, so nothing about extrapolation; (4) nothing about generalisation — fitting the sample is not learning the function. The theorem tells us shallow nets are not fundamentally limited; the last decade of engineering tells us they are hopelessly inefficient, which is why depth won.',
+        'One hidden unit computes a dot product between its weight list and whatever came in, adds its bias, and passes the result through an activation. So it outputs a large number when the incoming pattern resembles its weights and a small one otherwise — a template matcher whose template is learned rather than designed. Stacking helps because the units in layer 2 match patterns in the outputs of layer 1, not in the raw input. In the XOR network, layer 1 produced "is at least one input on" and "are both inputs on", and layer 2 combined those two facts instead of the original coordinates. Scale that up and you get edges, then corners built from edges, then object parts built from corners.',
       isCaseBased: false,
     },
     {
-      question: 'Case: a colleague\'s 5-layer network trains without errors, loss goes down, but its predictions are indistinguishable from a linear regression baseline no matter how long it runs. Debug it.',
+      question: 'Case: a colleague\'s 5-layer network trains without errors and its loss goes down, but its predictions are indistinguishable from a straight-line model no matter how long it runs. Debug it.',
       answer:
-        'First hypothesis, and usually the answer: no non-linearity, or one that is secretly linear. Check whether every hidden layer is followed by an activation — a missing ReLU means the whole stack is algebraically one affine map, and a linear model is exactly what it can express. Watch also for an "identity" or "linear" activation passed by config, or an activation applied only at the last layer. Second: the non-linearities may be saturated or dead — all-negative pre-activations under ReLU output zero everywhere, so the network degenerates to its bias path; check activation statistics per layer. Third: learning rate so small that weights barely move from an initialisation that is effectively linear (sigmoid and tanh are near-linear around zero, so tiny weights make a deep tanh net behave linearly). Diagnostic order: print the module list and look for missing activations, then histogram each layer\'s activations, then check weight movement between step 0 and step 1000. The first check takes ten seconds and finds it most of the time.',
+        'First hypothesis, and usually the answer: there is no non-linearity, or one that is secretly linear. Check that every hidden layer is followed by an activation. A missing one means those layers multiply out into a single dense layer, and a straight-line model is precisely what that can express — you can verify it in one minute by substituting the weights of two adjacent layers and confirming a single equivalent layer reproduces the outputs. Watch too for an activation named "linear" or "identity" passed in by config, and for an activation applied only at the output. Second possibility: the activations are all dead. If every pre-activation is negative under ReLU, every hidden output is 0 and only the bias path survives, so print the fraction of zeros per layer. Third: the weights barely moved from initialisation, and sigmoid and tanh are close to straight lines near zero, so a network with tiny weights behaves almost linearly — compare weights at step 0 and step 1000. Do the check in that order; the first one takes ten seconds and finds it most of the time.',
       isCaseBased: true,
     },
     {
-      question: 'What is a hidden unit, really? Answer without saying "a neuron".',
+      question: 'Case: an MLP trains, the loss decreases smoothly, but accuracy sits at chance and the loss values look strangely small. What do you check?',
       answer:
-        'A learned feature detector. One hidden unit computes w·x + b over the previous layer and passes it through a non-linearity, so it outputs a large value when its input resembles the pattern encoded in w and a small one otherwise — a template matcher whose template is learned rather than designed. What makes a network powerful is that the units of layer k are matching patterns in the *features produced by layer k−1*, not raw input: edges, then corners built from edges, then object parts built from corners. That composition is exactly what a hand-engineered feature pipeline used to do manually, and it is why the deep-learning era is described as replacing feature engineering with representation learning.',
-      isCaseBased: false,
-    },
-    {
-      question: 'Case: your MLP trains, the loss decreases smoothly, but accuracy sits at chance. You notice the loss values are strangely small. What do you check?',
-      answer:
-        'Suspect a silent shape bug, which is the failure mode that does not crash. The classic: labels y of shape (B,) compared against predictions ŷ of shape (B,1). NumPy and PyTorch broadcast that into a (B, B) matrix, so you are averaging B² pairwise errors — mostly between unrelated samples — which produces a smooth, small, meaningless loss that optimises toward the mean. Checks in order: print the shape of y, ŷ, and the loss tensor before reduction (a per-sample loss must be (B,) or (B,1), never (B,B)); assert them permanently; then verify the batch axis has not been transposed into the feature axis somewhere in the data pipeline. Broader lesson worth stating: write the expected shape after every layer, and prefer explicit reshape or squeeze over relying on broadcasting to work out.',
+        'Suspect a mismatch between the shape of the predictions and the shape of the labels — the failure that does not crash. The output layer of a network with m output neurons produces m numbers per input, so a batch of B inputs produces a B-by-m block. If the labels arrive as a flat list of length B while the predictions are B-by-1, most array libraries will silently pair every prediction with every label instead of matching them up one to one, producing an average over B-squared mostly meaningless comparisons. That average is smooth and small and optimises toward the mean, which is exactly the symptom. Checks, in order: print the shape of the labels, the predictions, and the per-example loss before it is averaged — the per-example loss must have one entry per input, never a square block. Then assert those shapes permanently so the bug cannot come back. Then confirm nothing in the data pipeline transposed the batch dimension with the feature dimension. The general habit is to write the expected shape after every layer before writing the layer.',
       isCaseBased: true,
     },
     {
-      question: 'Depth versus width — how do you actually decide?',
+      question: 'Case: a regression MLP predicts temperature anomalies, which can be negative, but it never outputs a value below zero. It has ReLU after every layer, including the output. What is wrong, and what is the general rule?',
       answer:
-        'Start from the parameter-efficiency argument: depth composes features, so a deep net often represents the same function with far fewer parameters — some functions need exponentially many units when shallow and polynomially many when deep. Concretely on MNIST-sized input, one hidden layer of 1000 units is about 795k parameters while 784→128→64→10 is about 109k, and the deep one usually generalises better. Against that, depth costs training stability: vanishing and exploding gradients, sensitivity to initialisation, and a need for normalisation and residual connections. So the practical rule: go deep enough that features can compose over the hierarchy in your data (images and language are deeply hierarchical, tabular data much less so), keep width proportionate to input dimension, and note that for small tabular problems shallow-and-wide, or gradient-boosted trees, frequently beats deep.',
-      isCaseBased: false,
-    },
-    {
-      question: 'Why is the forward pass written as X @ W + b with a batch dimension, rather than W @ x per sample?',
-      answer:
-        'Because all B samples in a batch share the same W, so the whole batch is a single dense matrix multiply — (B, n) @ (n, m) → (B, m) — which is the one operation GPUs are built to saturate. The FLOP count is the same either way; what changes is arithmetic intensity: with a batch, W is read from memory once and reused across B rows, whereas per-sample calls are memory-bound and leave most cores idle. Keeping the batch on the leading axis also makes every layer shape-compatible and keeps the feature dimension last, which is the convention every framework and every kernel assumes. Follow-up worth pre-empting: this is also why very small batch sizes underuse a GPU while very large ones stop helping once the multiply is already compute-bound.',
-      isCaseBased: false,
-    },
-    {
-      question: 'The perceptron had a learning rule of its own. Why did the step function have to go?',
-      answer:
-        'The perceptron rule updates weights only on misclassification and is guaranteed to converge — but only for linearly separable data, and it does not extend past a single layer. The blocker is the step function: its derivative is 0 everywhere it is defined and undefined at the threshold, so there is no gradient to send backwards. Credit assignment across layers needs the chain rule, and the chain rule needs non-zero derivatives. Replacing step with sigmoid (later tanh, then ReLU) makes the output differentiable, which makes backpropagation possible, which makes multi-layer training possible. That is the causal chain from the 1969 dead end to 1986 — the smooth activation is the enabling change, not an aesthetic preference.',
-      isCaseBased: false,
-    },
-    {
-      question: 'Case: a candidate shows you a regression MLP predicting temperature anomalies (which can be negative). It has ReLU after every layer including the output, and the model never predicts below zero no matter how it is trained. What went wrong, and what is the general principle?',
-      answer:
-        'ReLU on the output layer clips every negative prediction to zero, so half the target range is unreachable — the network is not undertrained, it is architecturally incapable, and the gradient through a clipped unit is zero so it cannot even learn its way out. Fix: no activation on the output for unbounded regression (a plain linear output). The general principle is that the output activation is chosen by the *target range and loss*, not by habit: linear for unbounded regression, sigmoid for a probability in (0,1) with binary cross-entropy, softmax across a class dimension for multi-class, and ReLU or softplus only when the target really is non-negative. Hidden activations and output activations answer different questions — hidden ones exist to break linearity, the output one exists to match the label space.',
+        'ReLU on the output layer replaces every negative prediction with 0, so half the target range is unreachable. The model is not undertrained, it is architecturally incapable, and it cannot learn its way out either: a ReLU that has been pushed negative outputs 0 and passes no signal backwards, so there is nothing to correct with. The fix is to leave the output layer with no activation at all, which is what the forward-pass snippet in this module does. The general rule is that the output activation is chosen from the range of the target and the loss being used, never from habit: no activation for an unbounded number, sigmoid when the answer must be a probability between 0 and 1, softmax across the class dimension for choosing between classes, and ReLU only when the target genuinely cannot be negative. Hidden activations and the output activation answer different questions — hidden ones exist to stop the layers collapsing, the output one exists to match the label space.',
       isCaseBased: true,
+    },
+    {
+      question: 'Depth versus width — how would you actually decide?',
+      answer:
+        'Start from cost. Depth lets later layers build on features earlier layers found, so the same function often needs far fewer parameters: one hidden layer of 1000 neurons on 784 inputs is about 795,000 parameters, while 784-128-64-10 is about 109,000 and usually generalises better. Against that, depth makes training harder — the signal that reaches early layers gets weaker, and you start needing careful initialisation, normalisation and skip connections. So the practical rule: go deep enough that features can compose over whatever hierarchy your data has. Images and language are strongly hierarchical, so depth pays; tabular data much less so, and there a shallow wide network, or a tree-based model, frequently wins. Also keep width near the input in proportion to the input size, since that layer dominates the parameter count.',
+      isCaseBased: false,
     },
   ],
   flashcards: [
-    { front: 'Perceptron in one line', back: 'z = w·x + b, then a hard step. One learned straight boundary. Swap step for sigmoid and it is logistic regression.' },
-    { front: 'Why a perceptron fails XOR', back: 'The positives and negatives share midpoint (0.5, 0.5); a line\'s sides are convex, so one point cannot be on both. Not fixable with more data.' },
-    { front: 'Stacked linear layers', back: 'W₂(W₁x) = (W₂W₁)x = one matrix. L linear layers ≡ 1 linear layer. THE reason activations exist.' },
-    { front: 'MLP structure', back: 'Input → hidden layer(s) → output, fully connected, with a non-linearity after EVERY hidden layer. Miss one and those two layers fuse.' },
-    { front: 'What a hidden unit is', back: 'A learned feature detector. Early layers detect edges; later layers detect combinations of earlier features.' },
-    { front: 'Dense layer parameter count', back: 'n → m costs n·m weights + m biases. Biases are per OUTPUT unit.' },
-    { front: 'Universal approximation, honestly', back: 'One hidden layer with enough units approximates any continuous function on a compact set. No width bound, no algorithm, no generalisation claim.' },
-    { front: 'Why deep, not just wide', back: 'Depth composes features → far fewer parameters for the same function. 784→128→64→10 is ~109k params vs ~795k for one 1000-unit layer.' },
-    { front: 'Forward pass shape rule', back: '(B, n) @ (n, m) + (m,) → (B, m). Batch dimension in front, features last, bias broadcasts.' },
-    { front: 'Depth counting convention', back: 'Depth = layers WITH weights. The input layer does not count, so a 2-3-1 net is a 2-layer (one hidden layer) network.' },
+    { front: 'What one neuron computes', back: 'Dot product of weights with inputs, plus a bias, then an activation. Example: w=[0.5,-1.5,0.25], x=[1,0,3], b=-0.7 gives z=0.55, sigmoid gives 0.6341.' },
+    { front: 'Weight vs bias', back: 'Weight: one number per connection, multiplied by an input. Bias: one number per neuron, no input attached, shifts the output up or down.' },
+    { front: 'Why one neuron fails XOR', back: 'Its boundary is one straight line. The two 1s and the two 0s share midpoint (0.5, 0.5), and each side of a line is convex, so one point would have to be on both sides.' },
+    { front: 'The 2-2-1 XOR solution', back: 'Hidden 1 = OR (1, 1, -0.5). Hidden 2 = AND (1, 1, -1.5). Output = (1, -1, -0.5), meaning "OR fired and AND did not".' },
+    { front: 'What a hidden layer buys you', back: 'New coordinates in which the classes can be split by a straight line. It straightens the problem instead of curving the boundary.' },
+    { front: 'Dense layer parameter count', back: 'n inputs to m outputs costs n x m weights plus m biases. Biases are per output neuron. 3-4-2 = (12+4) + (8+2) = 26.' },
+    { front: 'Stacked layers with no activation', back: 'h1 = 2x1 - x2 + 0.5, h2 = 3x2 - 1, y = h1 + 4h2 - 0.2 becomes y = 2x1 + 11x2 - 3.7. Any depth collapses to one layer.' },
+    { front: 'What a forward pass is', back: 'Repeat per layer: multiply by the weight grid, add one bias per neuron, apply the activation. Nothing else happens when a network predicts.' },
   ],
   mindmapMarkdown: `- From Perceptron to MLP
-  - Perceptron
-    - z = w·x + b, then step; no usable gradient
-    - step → sigmoid = logistic regression
-  - XOR wall
-    - (0,0)→0 (0,1)→1 (1,0)→1 (1,1)→0
-    - both diagonals share midpoint → no line works
-    - 1969 Minsky & Papert → AI winter
-  - Failed fix: stack linear layers
-    - W₂(W₁x) = (W₂W₁)x
-    - with biases: still one affine map
-    - L layers ≡ 1 → therefore activations exist
-  - MLP
-    - input → hidden(s) → output, fully connected
-    - non-linearity after EVERY hidden layer
-    - hidden unit = learned feature detector
-    - edges → corners → parts → classes
-  - Anatomy vocabulary
-    - width = units, depth = weighted layers (input not counted)
-    - dense n→m: n·m weights + m biases
-    - 784-128-64-10 = 109,386 params
+  - One neuron
+    - z = dot product of w and x, plus b
+    - [0.5,-1.5,0.25] . [1,0,3] = 1.25, minus 0.7 = 0.55
+    - activation squashes z: sigmoid 0.6341, or ReLU
+  - Vocabulary
+    - weight per connection, bias per neuron
+    - input / hidden / output layer
+    - width = neurons in a layer
+    - depth = layers with weights (input not counted)
+    - dense = every neuron reads every previous output
+  - XOR
+    - (0,0)->0 (0,1)->1 (1,0)->1 (1,1)->0
+    - both diagonals share midpoint (0.5,0.5)
+    - 1377 lines tried, best 3 of 4
+    - fix: hidden OR + hidden AND, output = OR and not AND
+    - hidden layer re-coordinates, then one line works
+  - Parameter counting
+    - n -> m costs n*m weights + m biases
+    - 3-4-2 = 16 + 10 = 26
+    - 784 -> 128 = 100,352 weights + 128 biases
   - Forward pass
-    - X @ W + b: (B,n)@(n,m) → (B,m)
-    - one big GEMM → GPUs saturate
-    - shapes discipline: state the shape after every layer
-    - silent bug: (B,) vs (B,1) broadcasts to (B,B)
-  - Universal approximation
-    - 1 hidden layer, enough units, compact domain
-    - "enough" may be astronomical
-    - existence, not findability
-    - depth buys parameter efficiency`,
+    - multiply, add bias, activate; repeat per layer
+    - that is the whole network
+  - Classic mistake
+    - no activation: 2 layers = 1 layer, exactly
+    - 2x1 - x2 + 0.5 then +4h2 - 0.2 becomes 2x1 + 11x2 - 3.7
+    - add ReLU and the collapse stops`,
 }
 
 export default m

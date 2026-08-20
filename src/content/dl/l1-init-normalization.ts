@@ -6,128 +6,368 @@ const m: Module = {
   level: 1,
   title: 'Weight Init, BatchNorm vs LayerNorm',
   whyItMatters:
-    'Two of the most-asked deep-learning interview questions live here: "why can you not initialize all weights to zero?" and "what does BatchNorm do differently at test time?". Both have short, exact answers that most candidates fumble. Beyond interviews, this is the module that decides whether a deep network trains at all or sits at chance forever.',
-  estMinutes: 55,
+    'Before a network can learn anything, the numbers flowing through it have to stay a sensible size. Get the starting weights slightly too small and the signal fades to nothing by layer six. Slightly too large and it grows past a hundred. This module shows both failures happening, with printed numbers per layer, then builds the two standard fixes: choosing the starting weights by a rule instead of by guess, and re-standardising the numbers between layers. Along the way it answers the two questions every deep-learning interview asks - why all-zero starting weights break a network, and why BatchNorm computes something different when you are testing than when you are training.',
+  assumes: [
+    'You have seen a Python for loop, a function definition, a list, and print',
+    'You know what an average is, and that squaring a number makes it positive',
+    'Read the DL module *Activation Functions* first: this module uses ReLU (keep positive numbers, turn negative numbers into 0) and sigmoid on every page',
+    'Read the DL module *Backpropagation* first: this module uses the idea that training sends a gradient backwards through the layers and nudges each weight by (gradient) x (step size)',
+    'No other deep learning background is needed. Every term used here is defined here.',
+  ],
+  estMinutes: 44,
   sections: [
     {
       type: 'intuition',
-      title: 'Start with the dumbest init: all zeros',
-      md: `Every weight = 0. Clean, simple, and completely broken. Here is why, in the argument interviewers want to hear.
+      title: 'The failure that motivates everything',
+      md: `Take 100 numbers of typical size 1. Push them through six layers of a neural network. A layer multiplies its inputs by weights, adds the results up, and applies ReLU. Nothing exotic. Here is the typical size of the numbers coming out of each of the six layers, for three different choices of how big the starting weights are.
 
-- Layer with 3 hidden units. All weights zero → all three compute the **same** output.
-- Backprop sends the same gradient to each of them, because their inputs and their downstream weight are identical.
-- Same start + same gradient = same value after the update. Forever.
-- You built a 3-unit layer and got a 1-unit layer wearing a costume. Width bought you nothing.
-- The name for this: the units are **symmetric**, and nothing in the math ever breaks the symmetry.
-- Random init breaks it on step zero. That is the whole job of initialization: *make the units different so they can learn different things*.`,
-    },
-    {
-      type: 'note',
-      md: `Two follow-ups interviewers add. **"What about a constant c instead of 0?"** Same failure — the constant does not matter, the *sameness* does. **"What about biases?"** Biases can safely be zero, because the weights are already random: the units differ before the bias ever matters. That is exactly what PyTorch does for most layers.`,
+- Starting weights a bit small: **0.3530, 0.1484, 0.0589, 0.0227, 0.0087, 0.0034**. The signal is gone.
+- Starting weights just right: **1.2362, 1.1568, 1.2555, 1.1641, 0.9622, 1.0128**. It stays put.
+- Starting weights a bit large: **2.1911, 5.0441, 10.0510, 20.6837, 51.8068, 127.8427**. It has run away.
+
+Those are real numbers, printed by the program two sections down. Nothing changed between the three runs except the size of the starting weights. Six layers is a shallow network; real ones go 30 or 100 deep, where 0.0034 becomes a number your computer rounds to zero and 127 becomes a number it cannot store.
+
+**Initialisation** is the word for choosing the starting values of the weights before any training happens. The three lines above are the whole argument for taking that choice seriously: it is not a detail, it decides whether the network trains at all.`,
     },
     {
       type: 'intuition',
-      title: 'Too small and too large fail the same way: through depth',
-      md: `Random is necessary but not sufficient. The *scale* of the random numbers decides whether a 30-layer network is trainable.
+      title: 'Two words we need before the code',
+      md: `Both are simple, and both get used constantly from here on.
 
-- **Too small** (say every weight ~ 0.01): each layer shrinks the signal. Multiply a shrink 30 times and the last layer receives essentially zero. Nothing to learn from.
-- **Too large** (say ~ 1.0 with wide layers): each layer inflates the signal. With tanh/sigmoid the activations slam into the flat ends and **saturate** — the derivative there is ~0, so no gradient flows. With ReLU the numbers just explode.
-- Both are the same disease: a per-layer multiplier that is not ~1, compounded by depth.
-- So state the goal properly, the way a paper would: **keep the variance of the activations roughly constant as you go forward, and the variance of the gradients roughly constant as you go backward.**
-- That single sentence is the entire theory behind Xavier and He. Everything else is arithmetic.`,
+- **Weight.** One adjustable number inside the network. Each output unit of a layer has one weight per input it receives, and it computes (weight 1 x input 1) + (weight 2 x input 2) + ... That sum is called the **pre-activation**, and then ReLU is applied to it.
+- **Typical size.** To say "these 100 numbers are around 1" we need one number summarising the whole list. Square every value, take the average of the squares, take the square root. That is the **root-mean-square**, and it is the thing printed above. Squaring first is what stops a big positive and a big negative from cancelling out to a misleadingly small answer.
+
+We will write both of these as two small Python functions, then use them to reproduce the three lines from the previous section.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Part 1: one layer, and a way to measure the size of a signal',
+      code: `import random
+import math
+
+random.seed(0)                       # same numbers every run, so you can check mine
+
+def one_layer(x, scale):             # push the list x through one layer
+    out = []                         # the values this layer will send onward
+    for j in range(len(x)):          # build one output unit at a time
+        w = [random.gauss(0, scale) for _ in range(len(x))]
+        z = sum(w[i] * x[i] for i in range(len(x)))
+        out.append(max(0.0, z))      # ReLU: keep positives, turn negatives into 0
+    return out
+
+def typical_size(x):                 # how big are these numbers, on average?
+    return math.sqrt(sum(v * v for v in x) / len(x))`,
+      annotations: {
+        1: 'random gives us random numbers. We use plain Python here on purpose: no library is hiding the arithmetic.',
+        2: 'math gives us sqrt, the square root.',
+        9: 'random.gauss(0, scale) draws one random number centred on 0, where scale controls how spread out the draws are: most land within one scale of 0. The square brackets are a list comprehension - a compact way to write "make a list by running this expression once per item". Here it makes one weight for every input, so this unit gets len(x) weights.',
+        10: 'The multiply-and-add. sum(...) with an expression and a for inside it is a generator expression: it produces w[0]*x[0], w[1]*x[1], ... one at a time and adds them up. This total is the pre-activation z.',
+        12: 'Hand the finished list of unit outputs back to the caller. It becomes the input list of the next layer.',
+        15: 'Square each value (v * v), average them (divide by how many there are), then take the square root. That is the root-mean-square from the previous section, in one line.',
+      },
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Part 2: six layers, three choices of starting weight',
+      code: `signal = [random.gauss(0, 1) for _ in range(100)]
+print('input typical size %.4f' % typical_size(signal))
+
+for scale in [0.05, 0.1414, 0.30]:   # three sizes of starting weight
+    x = signal                       # every run starts from the same input
+    sizes = []                       # the typical size after each layer
+    for layer in range(6):           # six layers deep
+        x = one_layer(x, scale)
+        sizes.append('%.4f' % typical_size(x))
+    print('scale', scale, '->', ' '.join(sizes))
+
+# ---- real output ----
+# input typical size 1.0655
+# scale 0.05 -> 0.3530 0.1484 0.0589 0.0227 0.0087 0.0034
+# scale 0.1414 -> 1.2362 1.1568 1.2555 1.1641 0.9622 1.0128
+# scale 0.3 -> 2.1911 5.0441 10.0510 20.6837 51.8068 127.8427`,
+      annotations: {
+        1: 'Build the input: 100 random numbers spread around 0 with scale 1, so their typical size is about 1.',
+        2: "The % operator inside a string is old-style formatting. '%.4f' means \"put a number here, 4 digits after the decimal point\". It prints 1.0655, confirming the input really is around 1.",
+        8: 'Replace x with what the layer produced. Next time round the loop, that output becomes the input - this is how depth is built.',
+        9: 'Record the typical size of this layer\'s output as a 4-decimal string, so the six numbers line up when printed.',
+        10: "' '.join(sizes) glues the six strings together with a space between them, giving one tidy line per scale.",
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'Reading the three lines: what the scale actually controls',
+      md: `Look at the ratio between one layer and the next, because that ratio is the whole story.
+
+- At scale 0.05 each layer multiplies the typical size by roughly **0.39**. Six layers means 0.39 multiplied by itself six times, which is 0.0035. That matches the printed 0.0034.
+- At scale 0.1414 the ratio is roughly **1.0**, so six layers leave the size where it started.
+- At scale 0.30 the ratio is roughly **2.2**, and 2.2 to the sixth power is about 113, close to the printed 127.
+
+A per-layer multiplier that is not 1 gets raised to the power of the depth. There is no third outcome: a number slightly below 1 raised to a high power goes to zero, and a number slightly above 1 goes to infinity. **Vanishing** is the name for the first failure, **exploding** for the second, and both wreck training - a layer receiving 0.0034 has nothing to learn from, and a layer receiving 127 produces updates that throw the weights off a cliff.
+
+So the goal of initialisation states itself: **choose the starting weights so that each layer multiplies the typical size of the signal by about 1.**`,
+    },
+    {
+      type: 'intuition',
+      title: 'Where the rule comes from: variance and fan-in',
+      md: `Two more words, then the arithmetic that gives us 0.1414.
+
+- **Variance** of a list of numbers means the average of their squared distances from their own average. It is a measure of spread: small variance means the numbers huddle together, large variance means they are scattered. When we say "the variance of the activations" we mean the spread of the numbers coming out of a layer.
+- **Fan-in** is the number of inputs feeding into one output unit. In our code that is len(x), which was 100. **Fan-out** is the number of units the layer sends its output to. They are just counts; the odd names come from circuit diagrams.
+
+Now the arithmetic. One pre-activation is a sum of fan-in separate terms, each one (a weight) x (an input). When you add up independent numbers that are all centred on zero, the variances add. So:
+
+- variance of the pre-activation = fan-in x (variance of one weight) x (variance of one input).
+- We want the output spread to match the input spread, so set fan-in x variance(weight) = 1, giving **variance(weight) = 1 / fan-in**.
+- ReLU then deletes every negative pre-activation, replacing it with 0. Roughly half the values are negative, so ReLU roughly halves the variance of what comes out. To pay for that in advance, double the weight variance: **variance(weight) = 2 / fan-in**.
+- With fan-in 100 that is 2/100 = 0.02, and the scale we pass to random.gauss is the square root of the variance: sqrt(0.02) = **0.1414**. That is exactly the middle line of the printout, and it is exactly the line that stayed at 1.`,
     },
     {
       type: 'math',
-      intro: 'The goal, then the two recipes that achieve it. n_in = fan_in = number of inputs feeding one unit.',
+      intro: 'The same three steps in symbols. n_in is fan-in, w is one weight, x is one input, z is the pre-activation.',
       latex: [
-        '\\text{Goal: } \\mathrm{Var}(a^{[l]}) \\approx \\mathrm{Var}(a^{[l-1]}) \\quad \\text{forward, and} \\quad \\mathrm{Var}\\!\\left(\\frac{\\partial L}{\\partial a^{[l-1]}}\\right) \\approx \\mathrm{Var}\\!\\left(\\frac{\\partial L}{\\partial a^{[l]}}\\right) \\quad \\text{backward}',
-        'z = \\sum_{i=1}^{n_{in}} w_i x_i \\;\\Rightarrow\\; \\mathrm{Var}(z) = n_{in}\\,\\mathrm{Var}(w)\\,\\mathrm{Var}(x) \\;\\;\\Rightarrow\\;\\; \\mathrm{Var}(w) = \\tfrac{1}{n_{in}} \\text{ gives } \\mathrm{Var}(z) = \\mathrm{Var}(x)',
-        '\\textbf{Xavier / Glorot (tanh, sigmoid): } \\mathrm{Var}(w) = \\frac{1}{n_{in}} \\quad\\text{or the two-sided}\\quad \\frac{2}{n_{in} + n_{out}}',
-        '\\textbf{He / Kaiming (ReLU): } \\mathrm{Var}(w) = \\frac{2}{n_{in}}, \\qquad w \\sim \\mathcal{N}\\!\\left(0, \\tfrac{2}{n_{in}}\\right)',
+        'z = \\sum_{i=1}^{n_{in}} w_i x_i \\quad\\Rightarrow\\quad \\mathrm{Var}(z) = n_{in}\\,\\mathrm{Var}(w)\\,\\mathrm{Var}(x)',
+        '\\textbf{Xavier / Glorot: } \\mathrm{Var}(w) = \\frac{1}{n_{in}} \\quad \\text{(or the two-sided } \\tfrac{2}{n_{in} + n_{out}} \\text{)}',
+        '\\textbf{He / Kaiming: } \\mathrm{Var}(w) = \\frac{2}{n_{in}}, \\qquad \\text{scale} = \\sqrt{\\tfrac{2}{n_{in}}} = \\sqrt{\\tfrac{2}{100}} = 0.1414',
       ],
     },
     {
       type: 'intuition',
-      title: 'Where the 2 in He init comes from',
-      md: `Xavier assumes the activation passes signal through roughly unchanged near zero — true for tanh, false for ReLU.
+      title: 'The two named recipes, and which activation each one is for',
+      md: `The two rules above have names, and the names come up in every interview.
 
-- **ReLU deletes half its inputs.** Every negative pre-activation becomes exactly 0.
-- Deleting half the values halves the variance of what comes out: Var(ReLU(z)) ≈ ½·Var(z) for zero-mean symmetric z.
-- Compound that halving over 30 layers and the signal is gone — Xavier init under-shoots for ReLU nets.
-- Fix: **double the weight variance to pre-pay for the halving.** 1/n_in becomes 2/n_in. That is the entire derivation of He init.
-- Rule you can say in one breath: *"Xavier for tanh and sigmoid, He for ReLU and its family, and the factor 2 is because ReLU zeroes half the signal."*
-- Xavier has a second, two-sided form 2/(n_in + n_out): it compromises between keeping forward variance stable (wants 1/n_in) and backward variance stable (wants 1/n_out).`,
+- **Xavier initialisation** (also called **Glorot initialisation**) sets variance(weight) = 1 / fan-in. It is the version without the ReLU correction, so it is the right choice for activations that pass a signal through roughly unchanged near zero: **sigmoid and tanh**.
+- **He initialisation** (also called **Kaiming initialisation**) sets variance(weight) = 2 / fan-in. The extra factor of 2 pays for ReLU deleting half the signal, so it is the right choice for **ReLU and its relatives**.
+- Xavier also has a two-sided form, 2 / (fan-in + fan-out). The reason: keeping the forward signal stable asks for 1/fan-in, while keeping the backward gradient stable asks for 1/fan-out. When the two counts differ you cannot have both, so this form splits the difference.
+- One sentence to remember all of it: *Xavier for sigmoid and tanh, He for ReLU, and the 2 in He is because ReLU throws away half the signal.*
+
+Both rules are about the **spread** of the starting weights, never the sign or the pattern. The weights are still random draws. Which brings us to the reason they must be random at all.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Symmetry breaking: why all-zero weights never work',
+      md: `A tempting shortcut is to start every weight at 0. It is clean, it is unbiased, and it destroys the network. Here is the argument, before the code that shows it.
+
+- **Symmetry breaking** means making the units of a layer different from each other on purpose, so they can end up learning different things.
+- Take a hidden layer with 3 units. If all their weights are identical, all 3 receive the same inputs and multiply them by the same numbers, so all 3 produce the same output. They are copies.
+- Training sends a gradient back to each unit. Because the 3 units have identical inputs and identical outgoing connections, the gradient arriving at each of them is also identical.
+- Same starting value plus same gradient means same value after the update. And after the next update. Forever.
+- You built a 3-unit layer and got a 1-unit layer wearing a costume. Width bought you nothing, at any width.
+- Note what the real problem is: not that the value is zero, but that the values are **the same**. Starting every weight at 0.7 fails in exactly the same way.
+
+Random starting values break the symmetry before step one, at no cost. That is the second job of initialisation, alongside getting the scale right.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Three hidden units, all-zero weights versus random weights',
+      code: `import math
+
+def sigmoid(z):                      # squashes any number into the range 0 to 1
+    return 1.0 / (1.0 + math.exp(-z))
+
+def one_step(name, w, v, x, target):
+    h = [sigmoid(wj * x) for wj in w]
+    y = sum(v[j] * h[j] for j in range(len(v)))
+    grad_v = [(y - target) * h[j] for j in range(len(v))]
+    print(name, 'hidden', [round(a, 4) for a in h], 'grad_v', [round(g, 4) for g in grad_v])
+
+one_step('all zeros ', [0.0, 0.0, 0.0], [0.0, 0.0, 0.0], 1.5, 1.0)
+one_step('random    ', [0.7, -0.3, 1.2], [0.5, -0.8, 0.1], 1.5, 1.0)
+
+# ---- real output ----
+# all zeros  hidden [0.5, 0.5, 0.5] grad_v [-0.5, -0.5, -0.5]
+# random     hidden [0.7408, 0.3894, 0.8581] grad_v [-0.6336, -0.333, -0.734]`,
+      annotations: {
+        1: 'math.exp is needed for sigmoid. Nothing else is imported: this whole network is three numbers wide.',
+        4: 'The sigmoid formula. At z = 0 it returns 1/(1+1) = 0.5, which is the value you will see in the all-zeros output.',
+        6: 'w holds the 3 incoming weights (one per hidden unit), v holds the 3 outgoing weights, x is the single input value and target is the answer we want.',
+        7: 'Compute the 3 hidden unit outputs. wj * x is that unit\'s pre-activation, and sigmoid turns it into the unit\'s output. The list comprehension does this once per weight in w.',
+        8: 'The final output: each hidden output multiplied by its outgoing weight, all added up.',
+        9: 'The gradient for each outgoing weight. For a squared-error loss it works out to (prediction - target) x (the hidden output that weight multiplies). This is the number that decides how far the weight moves.',
+        10: 'round(a, 4) trims each number to 4 decimals so the two lines are readable side by side.',
+        12: 'The all-zeros run: 3 hidden weights of 0, 3 outgoing weights of 0, input 1.5, target 1.0.',
+        13: 'The same call with 6 different random numbers. Everything else is identical.',
+      },
     },
     {
       type: 'note',
-      md: `What PyTorch actually does, since interviewers like catching this: **nn.Linear and nn.Conv2d default to Kaiming uniform with a = sqrt(5)**, which works out close to a modest Xavier-style uniform — *not* the He normal you would pick by hand for a deep ReLU stack. For deep ReLU networks people still call \`nn.init.kaiming_normal_(w, nonlinearity='relu')\` explicitly. The default is a safe compromise, not the optimum for your architecture.`,
+      md: `Read the two output lines. With all zeros, the 3 hidden units all print **0.5** and all 3 gradients print **-0.5**: identical values, identical updates, identical forever. With random weights the units print **0.7408, 0.3894, 0.8581** and get gradients **-0.6336, -0.333, -0.734** - three different numbers, so the three units immediately start moving apart and can specialise. One extra detail interviewers like: the **biases** (the constant each unit adds) *can* safely start at zero, because the random weights have already made the units different. That is what PyTorch does by default.`,
     },
     {
       type: 'intuition',
-      title: 'Vanishing and exploding gradients',
-      md: `This is the problem initialization was invented to fix, and it is worth naming precisely because the fix list is an interview staple.
+      title: 'Why good initialisation is not enough',
+      md: `Initialisation fixes the size of the signal at step 0 only. Then training starts moving the weights, and the moment they move, the careful variance calculation stops holding.
 
-- Backprop through L layers is a **product** of L per-layer Jacobian factors (cross-ref: the backprop module — the chain rule multiplies down the graph).
-- A product of many numbers has only three fates: shrink to 0, blow up, or stay near 1. There is no fourth option.
-- Each factor slightly below 1 → **vanishing gradients**: early layers get nothing, they stay at their random init while late layers overfit.
-- Each factor slightly above 1 → **exploding gradients**: one step throws the weights to huge values, the next forward pass overflows.
-- Sigmoid makes vanishing worse for free: its derivative maxes out at 0.25, so even a perfect weight scale loses 4x per layer.`,
-    },
-    {
-      type: 'math',
-      intro: 'Why depth is unforgiving — the multiplication chain, with numbers.',
-      latex: [
-        '\\frac{\\partial L}{\\partial W^{[1]}} = \\underbrace{\\frac{\\partial L}{\\partial a^{[L]}} \\prod_{l=2}^{L} \\frac{\\partial a^{[l]}}{\\partial a^{[l-1]}}}_{L-1 \\text{ factors, multiplied}} \\cdot \\frac{\\partial a^{[1]}}{\\partial W^{[1]}}',
-        '\\text{factor} \\approx 0.9 \\Rightarrow 0.9^{50} \\approx 0.005 \\;(\\text{vanished}) \\qquad \\text{factor} \\approx 1.1 \\Rightarrow 1.1^{50} \\approx 117 \\;(\\text{exploded})',
-        '\\text{Gradient clipping by norm: } \\;\\; g \\leftarrow g \\cdot \\min\\!\\left(1, \\frac{c}{\\lVert g \\rVert_2}\\right) \\quad \\text{keep the direction, cap the length}',
-      ],
-    },
-    {
-      type: 'note',
-      md: `**The symptoms, so you can diagnose in an interview.** Loss stuck at chance level (0.693 for balanced binary, ln(k) for k classes) and barely moving = **vanishing**. Loss fine for a few steps then NaN or inf = **exploding**. **The fix list, in the order you would try it.** (1) Correct init — Xavier or He, free. (2) ReLU family over sigmoid/tanh — derivative is 1 on the positive side, no built-in decay. (3) Normalization layers — the rest of this module. (4) **Residual connections** — a plus-x path gives the gradient a route with factor 1 that skips the whole block; this is why 100+ layer networks became possible (forward-ref: ResNet in L2). (5) **Gradient clipping by norm** — the standard for RNNs and transformers, and specifically an *exploding*-gradient fix, not a vanishing one. (6) Lower learning rate and warmup — the blunt instrument that hides the symptom.`,
+- After a thousand updates, layer 3's weights are no longer the numbers you drew. The typical size of what layer 3 emits has drifted.
+- Layer 4 now receives a differently-sized signal than it was set up for, and passes an even more differently-sized one to layer 5. The drift compounds with depth, exactly like the failure in the opening section.
+- You cannot re-initialise mid-training - that would throw away everything learned.
+
+**Normalisation** is the fix: instead of only choosing the starting scale well, insert a step *between* layers that re-standardises the numbers on every single forward pass. The signal is measured and rescaled continuously, so drift never gets a chance to compound. The next sections build that step from one small vector.`,
     },
     {
       type: 'intuition',
-      title: 'BatchNorm: fix the statistics, not just the starting point',
-      md: `Good init makes the variances right at step 0. Then training moves the weights and the variances drift again. BatchNorm re-fixes them at every single step.
+      title: 'Normalise one vector by hand, all six steps',
+      md: `Take three numbers: **2, 10, 1**. Normalising them means shifting and stretching them so they end up centred on 0 with a spread of 1.
 
-- For **each feature** (each column of the layer output), compute mean and variance **across the batch dimension** — down the column, over the examples.
-- Subtract the mean, divide by the std. That feature now has mean 0, variance 1 for this batch.
-- Then rescale with two **learned** parameters per feature: y = γ·x̂ + β.
-- Why learn γ and β at all? Because forcing mean 0 / variance 1 removes a freedom the layer might need. A sigmoid unit that wants to saturate, or a feature that should be large, can no longer be. γ and β let the network **undo** the normalization if that is genuinely better — including γ = std, β = mean, which recovers the original exactly.
-- Normalization sets a sane default scale; γ and β keep the layer's right to disagree.`,
-    },
-    {
-      type: 'math',
-      intro: 'BatchNorm, for m examples in a batch and feature index j.',
-      latex: [
-        '\\mu_j = \\frac{1}{m}\\sum_{i=1}^{m} x_{ij}, \\qquad \\sigma_j^2 = \\frac{1}{m}\\sum_{i=1}^{m}\\left(x_{ij} - \\mu_j\\right)^2 \\qquad \\text{(down the batch, one pair per feature)}',
-        '\\hat{x}_{ij} = \\frac{x_{ij} - \\mu_j}{\\sqrt{\\sigma_j^2 + \\epsilon}}, \\qquad y_{ij} = \\gamma_j\\,\\hat{x}_{ij} + \\beta_j \\qquad (\\gamma, \\beta \\text{ learned, } 2d \\text{ parameters})',
-        '\\text{Inference uses running estimates: } \\;\\; \\mu_{run} \\leftarrow (1-\\rho)\\,\\mu_{run} + \\rho\\,\\mu_{batch} \\quad \\text{(collected while training, frozen at test)}',
-      ],
+1. **Mean.** (2 + 10 + 1) / 3 = 13 / 3 = **4.3333**.
+2. **Distance from the mean**, one per number: 2 - 4.3333 = -2.3333; 10 - 4.3333 = 5.6667; 1 - 4.3333 = -3.3333.
+3. **Variance**: square those, then average. 5.4444 + 32.1111 + 11.1111 = 48.6667, divided by 3 = **16.2222**. The square root of the variance is the **standard deviation**: sqrt(16.2222) = **4.0278**. That is the typical distance from the mean.
+4. **Subtract the mean.** The three distances from step 2 are already this: -2.3333, 5.6667, -3.3333. Their average is now 0.
+5. **Divide by the standard deviation.** -2.3333 / 4.0278 = **-0.5793**; 5.6667 / 4.0278 = **1.4069**; -3.3333 / 4.0278 = **-0.8276**. These three have mean 0 and spread 1. This trio is called the **normalised** values.
+6. **Scale and shift.** Multiply each by a number called **gamma** and add a number called **beta**. With gamma = 2 and beta = 5 on the middle position: 2 x 1.4069 + 5 = **7.8138**.
+
+Steps 1 to 5 are the same in every normalisation layer that exists. Step 6 is the part that makes it a *learned* layer, and it needs its own explanation.`,
     },
     {
       type: 'intuition',
-      title: 'Train vs test — the question they always ask',
-      md: `BatchNorm is the only common layer that **computes something different at training time than at test time**. Know exactly what and why.
+      title: 'Why gamma and beta exist',
+      md: `Forcing every layer output to mean 0 and spread 1 sounds harmless. It is not: it takes away a freedom the layer might genuinely need.
 
-- **Training:** use the statistics of the current batch. They are what backprop can differentiate through, and their noise is part of the benefit.
-- **Test:** use a **running average** of the means and variances collected during training. Frozen numbers, no batch involved.
-- The reason is not efficiency, it is that the alternative is impossible: **a single test example has no batch to normalize against.** Normalizing one example by its own batch statistics divides it by a variance of zero.
-- Second reason, equally interview-worthy: with batch statistics at test time, your prediction for a user would depend on **whoever else happened to be in the same batch**. Predictions must be deterministic per input.
-- In PyTorch this switch is \`model.eval()\` (and \`model.train()\` to go back). It also switches dropout off.`,
+- Maybe this feature should be large, and the layer had a good reason for that. Maybe a sigmoid unit downstream wants inputs far from zero. Normalisation just deleted both possibilities.
+- So the layer gets two numbers per feature that it **learns** during training, exactly like weights: **gamma**, which multiplies, and **beta**, which adds.
+- If normalising was the right call, training leaves gamma near 1 and beta near 0 and nothing happens.
+- If it was the wrong call, training can set gamma to the original standard deviation and beta to the original mean, which reverses steps 4 and 5 exactly and recovers the original numbers.
+- So normalisation supplies a sensible default scale, and gamma and beta keep the layer's right to disagree with it. Nothing is forced permanently.
+
+A small warning about the word: **eps**. In code you will see a tiny number like 0.00001 added inside the square root before dividing. It exists only so that a feature whose values are all identical - variance exactly 0 - does not cause a division by zero.`,
+    },
+    {
+      type: 'intuition',
+      title: 'BatchNorm: which numbers get averaged together',
+      md: `Everything so far normalised one list of three numbers. A real layer produces a whole grid: one row per example, one column per feature. Which numbers should be averaged together?
+
+- A **batch** is the small group of examples - say 4, or 256 - that the network processes together before it updates the weights once.
+- **Batch normalisation**, usually written **BatchNorm**, computes the mean and variance **down each column**: for one feature, across all the examples in the batch.
+- So a layer with 3 features produces 3 means and 3 variances, no matter how many examples are in the batch. Each feature is standardised using only its own column.
+- It then applies gamma and beta, one pair per feature. A 3-feature BatchNorm layer therefore has 6 learned numbers.
+- Note the consequence, because everything awkward about BatchNorm follows from it: **the output for one example depends on the other examples that happened to share its batch.** The examples are coupled.
+
+Our grid: 4 examples, 3 features. Rows [2, 10, 1], [4, 12, 3], [6, 14, 11], [8, 16, 5]. The code below computes the three column statistics.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'BatchNorm: statistics down each column',
+      code: `import math
+
+def mean(v):
+    return sum(v) / len(v)
+
+def variance(v):
+    m = mean(v)
+    return sum((a - m) ** 2 for a in v) / len(v)
+
+def normalise(v):
+    m, s = mean(v), math.sqrt(variance(v) + 1e-5)
+    return [(a - m) / s for a in v]
+
+X = [[2.0, 10.0, 1.0], [4.0, 12.0, 3.0], [6.0, 14.0, 11.0], [8.0, 16.0, 5.0]]
+for j in range(3):                   # one feature at a time
+    col = [row[j] for row in X]
+    print('feature', j, col, 'mean %.2f var %.2f ->' % (mean(col), variance(col)), [round(a, 3) for a in normalise(col)])
+
+# ---- real output ----
+# feature 0 [2.0, 4.0, 6.0, 8.0] mean 5.00 var 5.00 -> [-1.342, -0.447, 0.447, 1.342]
+# feature 1 [10.0, 12.0, 14.0, 16.0] mean 13.00 var 5.00 -> [-1.342, -0.447, 0.447, 1.342]
+# feature 2 [1.0, 3.0, 11.0, 5.0] mean 5.00 var 14.00 -> [-1.069, -0.535, 1.604, 0.0]`,
+      annotations: {
+        1: 'Only math is needed. Everything else is written out so you can see each step.',
+        3: 'Step 1 of the hand calculation: add the numbers, divide by how many there are.',
+        4: 'sum(v) adds every item in the list; len(v) counts them.',
+        6: 'Steps 2 and 3: the average of the squared distances from the mean.',
+        7: 'Compute the mean once and store it, so the next line can measure distances from it.',
+        8: '(a - m) is one distance from the mean and ** 2 squares it. The generator expression does that for every item and sum adds them; dividing by len(v) turns the total into an average.',
+        10: 'Steps 4 and 5 together: subtract the mean, divide by the standard deviation.',
+        11: 'Two assignments on one line - this is tuple unpacking, and it is the same as writing m = mean(v) then s = math.sqrt(...). The 1e-5 is eps, the tiny guard against dividing by zero.',
+        12: 'Build the output list: each value minus the mean, divided by the standard deviation.',
+        14: 'The batch: 4 rows (examples), 3 columns (features). This exact grid is used for the rest of the module.',
+        16: '[row[j] for row in X] walks down the rows and picks position j out of each one, which pulls out column j - all 4 values of feature j. Pulling out a column is the entire idea of BatchNorm.',
+        17: 'Print the raw column, its mean and variance, and its normalised version. Check the first line against the hand calculation: mean 5, and (2-5)/sqrt(5) = -1.342.',
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'BatchNorm at training time versus at evaluation time',
+      md: `This is the single most-asked BatchNorm question, and it has a concrete reason behind it.
+
+- **At training time** BatchNorm uses the mean and variance of the batch in front of it, right now. Those are the numbers the code above computed.
+- **At evaluation time** - meaning when you are measuring quality on held-out data, or serving real requests - it uses **running statistics** instead: a running average of every batch mean and every batch variance it saw during training, saved and then frozen.
+- The reason it *must* be different: **one test example on its own has no batch to average over.** Its column contains a single number, so that column's mean is the number itself and its variance is exactly 0. Subtracting the mean gives 0, and dividing by sqrt(0 + eps) leaves 0. The example is erased.
+- Second reason, just as real: with batch statistics at test time, the prediction for one user would depend on **which other users happened to be in the same batch**. Send the same request twice in different batches and get two different answers.
+- In PyTorch the switch is one line, \`model.eval()\`, and \`model.train()\` switches back. **What breaks if you forget it:** the model keeps using batch statistics on your test data, so validation numbers change when you change the batch size, and single-request serving in production collapses. It fails quietly - no error, just wrong answers.
+
+**The small-batch problem.** Running statistics only help at test time. During training, if your batch is 2 or 4 examples - common when the images are large and the GPU is full - then each mean and variance is estimated from 2 or 4 numbers. That estimate is mostly noise, and the noise is now damage rather than help. This is the situation where BatchNorm should be replaced.`,
+    },
+    {
+      type: 'intuition',
+      title: 'LayerNorm: turn the averaging 90 degrees',
+      md: `**Layer normalisation**, written **LayerNorm**, uses exactly the same six steps. It changes only which numbers get grouped together.
+
+- BatchNorm groups a **column**: one feature, across all the examples. LayerNorm groups a **row**: one example, across all its features. Per-example instead of per-batch.
+- Nothing outside the example is ever consulted, so **batch size 1 behaves identically to batch size 256** - the small-batch problem simply does not exist.
+- **Training and evaluation are the same computation.** No running statistics, no frozen numbers, nothing to switch on or off, no forgotten \`model.eval()\` for this layer.
+- Variable-length inputs are fine. In a batch of sentences, position 40 might exist in 3 sentences and not in the other 29, so "the average over the batch at position 40" has no sensible answer. LayerNorm never asks the question, because each token normalises against its own features.
+- Those three properties are why **transformers, and therefore every large language model, use LayerNorm** rather than BatchNorm. You will meet this again in the GenAI subject, where each transformer block is attention, then LayerNorm, then a small feed-forward network, then LayerNorm again.
+- Gamma and beta are still there and still one pair per feature. Which axis you average over is a separate decision from whether the layer can rescale afterwards.
+
+One consequence worth seeing in the output below: examples [2, 10, 1] and [4, 12, 3] normalise to *the same* three numbers. They differ only by a constant +2, and step 4 subtracts the mean, which removes exactly that. LayerNorm deliberately discards each example's overall level and overall spread; gamma and beta are how the network puts useful scale back.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'LayerNorm by row, then one example arriving alone',
+      code: `gamma = [1.0, 2.0, 1.0]              # learned scale, one per feature
+beta = [0.0, 5.0, 0.0]               # learned shift, one per feature
+
+for i, row in enumerate(X):
+    xhat = normalise(row)
+    y = [gamma[j] * xhat[j] + beta[j] for j in range(3)]
+    print('example', i, row, '-> LayerNorm', [round(a, 3) for a in xhat], '-> scale+shift', [round(a, 3) for a in y])
+
+run_mean = [mean([r[j] for r in X]) for j in range(3)]
+run_var = [variance([r[j] for r in X]) for j in range(3)]
+lone = [2.0, 10.0, 1.0]              # ONE example arrives, with no batch
+good = [(lone[j] - run_mean[j]) / math.sqrt(run_var[j] + 1e-5) for j in range(3)]
+bad = [normalise([lone[j]])[0] for j in range(3)]
+print('eval mode  ->', [round(a, 3) for a in good])
+print('train mode ->', [round(a, 3) for a in bad])
+print('LayerNorm  ->', [round(a, 3) for a in normalise(lone)])
+
+# ---- real output ----
+# example 0 [2.0, 10.0, 1.0] -> LayerNorm [-0.579, 1.407, -0.828] -> scale+shift [-0.579, 7.814, -0.828]
+# example 1 [4.0, 12.0, 3.0] -> LayerNorm [-0.579, 1.407, -0.828] -> scale+shift [-0.579, 7.814, -0.828]
+# example 2 [6.0, 14.0, 11.0] -> LayerNorm [-1.313, 1.111, 0.202] -> scale+shift [-1.313, 7.222, 0.202]
+# example 3 [8.0, 16.0, 5.0] -> LayerNorm [-0.359, 1.364, -1.005] -> scale+shift [-0.359, 7.728, -1.005]
+# eval mode  -> [-1.342, -1.342, -1.069]
+# train mode -> [0.0, 0.0, 0.0]
+# LayerNorm  -> [-0.579, 1.407, -0.828]`,
+      annotations: {
+        4: 'enumerate(X) hands back two things each time round: the position i (0, 1, 2, 3) and the row itself. Without it we would need a counter variable.',
+        5: 'Normalise the ROW. Same function as before, different list handed to it - that single difference is BatchNorm versus LayerNorm.',
+        6: 'Step 6 by hand: multiply by gamma, add beta, one feature at a time. Feature 1 has gamma 2 and beta 5, which is why its output is far from 0.',
+        7: 'Print the raw row, the normalised row, and the rescaled row, so all three stages are visible on one line.',
+        9: 'Collect what BatchNorm would have saved during training: the mean of each column. The inner comprehension pulls out column j and mean averages it; the outer one repeats that for all 3 features.',
+        10: 'The matching variances. These 6 numbers are the running statistics, and after training they are frozen.',
+        12: 'BatchNorm in evaluation mode: normalise the lone example using the frozen numbers from line 9 and 10. No batch is involved at all.',
+        13: 'BatchNorm still in training mode, which is the bug. Each column now holds one number, so its variance is 0 and every result is 0. [0] takes the single value out of the one-item list normalise returns.',
+        14: 'Prints [-1.342, -1.342, -1.069] - exactly what this example got when it was inside the batch. Evaluation mode is correct.',
+        15: 'Prints [0.0, 0.0, 0.0]. The example has been erased. This is what a forgotten model.eval() does to a single-request prediction.',
+        16: 'LayerNorm on the same lone example prints [-0.579, 1.407, -0.828], identical to its row in the batch above. No modes, no running statistics, nothing to forget.',
+      },
     },
     {
       type: 'visual',
       component: 'PointerBoxDiagram',
       props: {
         title: 'Which numbers get averaged: BatchNorm vs LayerNorm',
-        notice: 'One batch: 4 examples, 3 features. Watch which cells feed each statistic — a column (across examples) or a row (inside one example). The last frames are the train-vs-test question.',
+        notice: 'One batch: 4 examples, 3 features. Watch which cells feed each statistic - a column (across examples) or a row (inside one example). The last frames are the train-vs-evaluation question.',
         leftLabel: 'batch rows',
         rightLabel: 'statistics used',
         frames: [
           {
-            note: 'The batch: 4 examples, 3 features each. Two ways to normalize this grid — down the columns, or across the rows.',
+            note: 'The batch: 4 examples, 3 features each. Two ways to normalise this grid - down the columns, or across the rows.',
             stack: [
               { name: 'x1', value: '[ 2, 10,  1]' },
               { name: 'x2', value: '[ 4, 12,  3]' },
@@ -137,7 +377,7 @@ const m: Module = {
             heap: [{ id: 'grid', value: 'features f0 f1 f2', label: 'columns' }],
           },
           {
-            note: 'BatchNorm, feature f0: gather that ONE column from ALL 4 examples. Four arrows, one statistic. Each feature gets its own pair.',
+            note: 'BatchNorm, feature f0: gather that ONE column from ALL 4 examples. Four arrows, one mean and one variance. Each feature gets its own pair.',
             stack: [
               { name: 'x1', value: '[ 2, 10,  1]', to: 'c0' },
               { name: 'x2', value: '[ 4, 12,  3]', to: 'c0' },
@@ -151,7 +391,7 @@ const m: Module = {
             ],
           },
           {
-            note: 'BatchNorm output. Every COLUMN now has mean 0, std 1. Then gamma and beta rescale each feature — the layer keeps its right to be un-normalized.',
+            note: 'BatchNorm output. Every COLUMN now has mean 0 and spread 1. Gamma and beta then rescale each feature.',
             stack: [
               { name: 'x1', value: '[-1.3 -1.3 -1.1]' },
               { name: 'x2', value: '[-0.4 -0.4 -0.5]' },
@@ -161,7 +401,7 @@ const m: Module = {
             heap: [{ id: 'colz', value: 'col means all 0.0', label: 'per feature' }],
           },
           {
-            note: 'LayerNorm, example x3: gather that ONE row across its 3 features. One arrow, one statistic, no other example involved.',
+            note: 'LayerNorm, example x3: gather that ONE row across its 3 features. One arrow, one mean and one variance, no other example involved.',
             stack: [
               { name: 'x1', value: '[ 2, 10,  1]' },
               { name: 'x2', value: '[ 4, 12,  3]' },
@@ -171,387 +411,253 @@ const m: Module = {
             heap: [{ id: 'r3', value: 'mu=10.33 sd=3.30', label: 'x3 alone' }],
           },
           {
-            note: 'LayerNorm output. Every ROW has mean 0, std 1. x1 and x2 land on the same vector: they differ only by a constant shift, which LayerNorm removes by design.',
-            stack: [
-              { name: 'x1', value: '[-0.6  1.4 -0.8]' },
-              { name: 'x2', value: '[-0.6  1.4 -0.8]' },
-              { name: 'x3', value: '[-1.3  1.1  0.2]' },
-              { name: 'x4', value: '[-0.4  1.4 -1.0]' },
-            ],
-            heap: [{ id: 'rowz', value: 'row means all 0.0', label: 'per example' }],
-          },
-          {
-            note: 'Test time. ONE example arrives. BatchNorm has no column to average over — its own batch statistics give variance 0 and erase the example to zeros.',
+            note: 'Test time, BatchNorm still in training mode. ONE example arrives and there is no column to average - its own variance is 0, so the example is erased to zeros.',
             stack: [{ name: 'x_test', value: '[ 2, 10,  1]', to: 'dead', danger: true }],
             heap: [{ id: 'dead', value: 'all zeros', label: 'no column' }],
           },
           {
-            note: 'The fix: during training BatchNorm kept a running average of every batch mean and variance. At eval() it uses those frozen numbers — deterministic, batch-size independent.',
+            note: 'Evaluation mode. During training BatchNorm kept a running average of every batch mean and variance; now it uses those frozen numbers. Deterministic, and independent of batch size.',
             stack: [{ name: 'x_test', value: '[ 2, 10,  1]', to: 'run' }],
             heap: [
               { id: 'run', value: 'mu=5.00 sd=2.24', label: 'running avg' },
               { id: 'outc', value: '[-1.3 -1.3 -1.1]', label: 'correct' },
             ],
           },
-          {
-            note: 'LayerNorm at test time: the exact same code path. The row is its own reference, so there is nothing to remember and no eval() mode to forget.',
-            stack: [{ name: 'x_test', value: '[ 2, 10,  1]', to: 'own' }],
-            heap: [
-              { id: 'own', value: 'mu=4.33 sd=4.03', label: 'its own row' },
-              { id: 'outl', value: '[-0.6  1.4 -0.8]', label: 'same as train' },
-            ],
-          },
         ],
       },
     },
     {
-      type: 'note',
-      md: `**The classic bug, worth memorizing as a story.** You forget \`model.eval()\` before evaluating. BatchNorm keeps using batch statistics, so a test image's prediction now depends on the other images sitting in the same batch. Symptoms: validation accuracy that changes when you change the batch size, results that differ between batch inference and one-at-a-time serving, and a model that looks fine offline but is wrong in production where requests arrive alone. Same forgotten call also leaves dropout on, which drags accuracy down for a completely separate reason.`,
+      type: 'intuition',
+      title: 'Worked case: a 4-layer network, computed by hand',
+      md: `A network with 4 hidden layers. Each layer has fan-in 256 and uses ReLU. Someone initialises every weight from a spread of 0.03 because "small weights are safer". Work out what happens before running anything.
+
+1. **The per-layer multiplier.** The rule from earlier: the multiplier on the typical size is sqrt(fan-in x variance(weight) / 2), where the divide-by-2 is ReLU deleting half the values. Variance of the weights is 0.03 squared = 0.0009. So 256 x 0.0009 = 0.2304, divided by 2 is 0.1152, and sqrt(0.1152) = **0.3394**.
+2. **Through 4 layers.** 0.3394 x 0.3394 = 0.1152. 0.1152 x 0.3394 = 0.0391. 0.0391 x 0.3394 = **0.01327**. An input of typical size 1 reaches the last layer at size 0.013.
+3. **What the last layer sees.** Its inputs are around 0.013, so its output is around 0.013 too. The predictions barely move away from whatever the output bias is, and the loss sits flat.
+4. **The correct scale.** He initialisation wants variance(weight) = 2 / 256 = 0.0078125, so the spread is sqrt(0.0078125) = **0.0884**. Check it: 256 x 0.0078125 = 2, divided by 2 is 1, sqrt(1) = **1.0**. The multiplier is exactly 1 and nothing shrinks.
+5. **How far off was 0.03?** It is 0.0884 / 0.03 = about **3 times too small**, and that innocent-looking factor of 3 turned into a factor of 75 by layer 4 (1 / 0.01327). Depth is what makes small mistakes expensive.
+6. **The alternative fix.** Insert a normalisation layer after each of the 4 layers. Layer 1 still emits numbers around 0.34, but the norm layer rescales them back to spread 1 before layer 2 sees them, so there is nothing left to compound. This is exactly why normalisation makes networks so much less sensitive to how you initialised them.`,
     },
     {
       type: 'intuition',
-      title: 'What BatchNorm buys, and where it hurts',
-      md: `Buys, in the order of how much they matter in practice:
+      title: 'The classic mistake, walked into on purpose',
+      md: `An engineer trains an image classifier. The notebook reports **96%** accuracy on the validation set. The same model deployed behind an API, answering one request at a time, gets about **60%**. The code is identical, the weights are identical, the data is identical.
 
-- **Much higher learning rates are safe.** Normalizing after each layer stops one layer's scale drift from detonating the next, so the usable learning-rate range widens by roughly an order of magnitude.
-- **Faster convergence** — fewer epochs to the same loss, which is why it was adopted almost instantly in vision.
-- **Mild regularization for free**: each example is normalized by statistics that depend on random batch-mates, so the same example gets slightly different activations every epoch. That noise behaves like a weak dropout.
-
-Hurts:
-
-- **Small batches make the statistics noisy.** Batch size 2 or 4 estimates a mean from 2 or 4 numbers — the noise stops being a regularizer and becomes damage. Detection and segmentation models, where batch size is limited by image size, hit this hard.
-- **Awkward for variable-length sequences.** In a padded batch, position 40 exists in 3 sequences and not in the other 29 — which examples are you averaging over? There is no clean answer.
-- **It couples examples in a batch.** Training is no longer a pure function of one example; distributed training needs the statistics synced or approximated; the train/test gap exists at all only because of this coupling.`,
+- The evaluation loop looks like this: load the validation set, run it through the model in batches of 64, count how many are right. There is no \`model.eval()\` call anywhere in it.
+- So BatchNorm is still in training mode. In the notebook that is nearly harmless: batches of 64 give reasonable column statistics, close enough to the running ones, and accuracy looks fine.
+- In production each request arrives alone. The batch is one row. Every column has variance 0, every normalised value becomes 0, and the layer hands the next layer a grid of zeros. The prediction is whatever the network outputs for an empty input - roughly a constant, which is why it lands near chance.
+- **The 30-second confirmation.** Re-run the offline evaluation with batch size 1. If accuracy collapses to about 60%, the diagnosis is certain. As a second check, shuffle the validation set and re-run: if individual predictions change, the model is reading its batch-mates.
+- **Why this hides so well.** Nothing errors. No warning is printed. The offline number is not merely optimistic, it is measuring a different computation than the one that will run in production.
+- **The fix** is one line, \`model.eval()\`, before the evaluation loop. It swaps BatchNorm to running statistics and switches dropout off, which is a second, smaller reason the offline number was wrong.
+- **The design-level fix**, if single-request serving is the product: use LayerNorm or GroupNorm, which have no separate evaluation behaviour to forget.`,
     },
     {
       type: 'intuition',
-      title: 'LayerNorm: turn the averaging 90 degrees',
-      md: `Same normalization formula, different axis — and every BatchNorm weakness disappears with it.
+      title: 'Practice problems',
+      md: `Pen, paper, and a calculator for square roots. Nothing here needs a computer.
 
-- Compute mean and variance **across the feature dimension, inside one example**. A row, not a column.
-- No other example is ever consulted. **Batch size 1 works identically to batch size 256.**
-- **Train and test are the same computation.** No running averages, no eval() switch for this layer, no batch-composition bug. That alone removes a whole class of production incidents.
-- Sequence-friendly: each token normalizes itself, so padding and variable lengths are non-issues.
-- This is exactly why **transformers use LayerNorm** (cross-ref: the GenAI transformer-block module — attention → Add & Norm → FFN → Add & Norm). Variable-length text, per-token independence, and inference on a single sequence all rule BatchNorm out.
-- γ and β still exist and are still per-feature — the learned rescale is orthogonal to which axis you average over.`,
+1. A layer has fan-in 512 and uses ReLU. What spread should the starting weights be drawn from under He initialisation? Under Xavier?
+2. A network has 10 layers and each one multiplies the typical size of the signal by 0.8. The input has typical size 1. What reaches layer 10? Now repeat with a multiplier of 1.25.
+3. Normalise the vector [6, 2, 4] by hand: mean, variance, standard deviation, then the three normalised values. Then apply gamma = 3 and beta = -1 to all three.
+4. A batch is [[1, 8], [3, 4], [5, 6]]: 3 examples, 2 features. Give the BatchNorm mean of each feature, and the LayerNorm mean of each example. State how many means each method produced.
+5. A colleague says: "I set all my weights to 0.5 instead of 0, so symmetry is broken." Is that right? Explain in two sentences.`,
     },
     {
-      type: 'math',
-      intro: 'LayerNorm for example i over d features — note what is missing: any m, any running estimate.',
-      latex: [
-        '\\mu_i = \\frac{1}{d}\\sum_{j=1}^{d} x_{ij}, \\qquad \\sigma_i^2 = \\frac{1}{d}\\sum_{j=1}^{d}\\left(x_{ij} - \\mu_i\\right)^2 \\qquad \\text{(across the features, one pair per example)}',
-        'y_{ij} = \\gamma_j \\frac{x_{ij} - \\mu_i}{\\sqrt{\\sigma_i^2 + \\epsilon}} + \\beta_j \\qquad \\text{identical at train and at test}',
-        '\\textbf{RMSNorm} \\text{ drops the mean subtraction entirely: } \\;\\; y_{ij} = \\gamma_j \\frac{x_{ij}}{\\sqrt{\\frac{1}{d}\\sum_{k=1}^{d} x_{ik}^2 + \\epsilon}}',
-      ],
+      type: 'intuition',
+      title: 'Worked solutions',
+      md: `Follow every step, not just the last number.
+
+1. He wants variance = 2 / 512 = 0.003906, so the spread is sqrt(0.003906) = **0.0625**. Xavier wants variance = 1 / 512 = 0.001953, spread sqrt(0.001953) = **0.0442**. He is larger by a factor of sqrt(2) = 1.414, which is the ReLU correction.
+2. 0.8 to the tenth power: 0.8^2 = 0.64, ^4 = 0.4096, ^8 = 0.1678, and ^10 = 0.1678 x 0.64 = **0.1074**. The signal has lost about 90% of its size. With 1.25: 1.25^2 = 1.5625, ^4 = 2.4414, ^8 = 5.9605, ^10 = 5.9605 x 1.5625 = **9.3132**. Notice 0.8 and 1.25 are each other's opposites and the damage is symmetric.
+3. Mean = (6 + 2 + 4) / 3 = **4**. Distances: 2, -2, 0. Squares: 4, 4, 0, summing to 8; variance = 8 / 3 = **2.6667**; standard deviation = sqrt(2.6667) = **1.6330**. Normalised: 2 / 1.6330 = **1.2247**, -2 / 1.6330 = **-1.2247**, 0 / 1.6330 = **0**. After gamma 3 and beta -1: 3 x 1.2247 - 1 = **2.6741**, 3 x -1.2247 - 1 = **-4.6741**, 3 x 0 - 1 = **-1**.
+4. BatchNorm goes down the columns: feature 0 is [1, 3, 5] with mean **3**, feature 1 is [8, 4, 6] with mean **6**. That is **2 means**, one per feature. LayerNorm goes across the rows: [1, 8] gives **4.5**, [3, 4] gives **3.5**, [5, 6] gives **5.5**. That is **3 means**, one per example. The count follows the axis: BatchNorm gives one per feature, LayerNorm one per example.
+5. **No.** Symmetry breaking is about the units being *different from each other*, not about the value being non-zero. If every weight is 0.5, all the units still compute the same output, still receive the same gradient, and still stay identical forever - exactly the all-zeros failure. What is needed is that the weights differ, which is why they are drawn randomly.`,
     },
     {
-      type: 'code',
-      lang: 'python',
-      title: 'Both norms on the same 4x3 batch — the only difference is the axis',
-      code: `import numpy as np
+      type: 'intuition',
+      title: 'Beyond the basics - skip this on your first read',
+      md: `Everything above stands on its own. This section only names things so the words are familiar later.
 
-# 4 examples (rows) x 3 features (columns) - one small batch.
-X = np.array([[2., 10.,  1.],
-              [4., 12.,  3.],
-              [6., 14., 11.],
-              [8., 16.,  5.]])
-eps = 1e-5
-
-# BatchNorm: statistics DOWN each column (axis=0) -> one mean/var per FEATURE.
-bn_mean = X.mean(axis=0)                    # shape (3,): one number per feature
-bn_var = X.var(axis=0)
-bn = (X - bn_mean) / np.sqrt(bn_var + eps)  # broadcasts down the 4 rows
-
-# LayerNorm: statistics ACROSS each row (axis=1) -> one mean/var per EXAMPLE.
-ln_mean = X.mean(axis=1, keepdims=True)     # shape (4, 1): one number per example
-ln_var = X.var(axis=1, keepdims=True)
-ln = (X - ln_mean) / np.sqrt(ln_var + eps)  # broadcasts across the 3 features
-
-print('BN mean per FEATURE ', bn_mean.round(3), 'shape', bn_mean.shape)
-print('LN mean per EXAMPLE', ln_mean.ravel().round(3), 'shape', ln_mean.shape)
-print('BatchNorm out\\n', bn.round(3))
-print('LayerNorm out\\n', ln.round(3))
-print('BN column means', bn.mean(axis=0).round(3), '| LN row means', ln.mean(axis=1).round(3))
-
-# Now ONE test example arrives, alone.
-x1 = X[:1]
-ln_1 = (x1 - x1.mean(axis=1, keepdims=True)) / np.sqrt(x1.var(axis=1, keepdims=True) + eps)
-bn_1 = (x1 - x1.mean(axis=0)) / np.sqrt(x1.var(axis=0) + eps)
-print('LN alone  ', ln_1.round(3), 'same as in batch?', np.allclose(ln_1, ln[:1]))
-print('BN alone  ', bn_1.round(3), '<- batch stats of one row: everything erased')
-print('BN running', ((x1 - bn_mean) / np.sqrt(bn_var + eps)).round(3), '<- what eval() does')
-
-# ---- real output ----
-# BN mean per FEATURE  [ 5. 13.  5.] shape (3,)
-# LN mean per EXAMPLE [ 4.333  6.333 10.333  9.667] shape (4, 1)
-# BatchNorm out
-#  [[-1.342 -1.342 -1.069]
-#   [-0.447 -0.447 -0.535]
-#   [ 0.447  0.447  1.604]
-#   [ 1.342  1.342  0.   ]]
-# LayerNorm out
-#  [[-0.579  1.407 -0.828]
-#   [-0.579  1.407 -0.828]
-#   [-1.313  1.111  0.202]
-#   [-0.359  1.364 -1.005]]
-# BN column means [0. 0. 0.] | LN row means [ 0.  0. -0.  0.]
-# LN alone   [[-0.579  1.407 -0.828]] same as in batch? True
-# BN alone   [[0. 0. 0.]] <- batch stats of one row: everything erased
-# BN running [[-1.342 -1.342 -1.069]] <- what eval() does`,
-      annotations: {
-        4: 'Rows are examples, columns are features. Fix that convention in your head — every axis argument below depends on it.',
-        11: 'axis=0 collapses the ROW axis, so the mean is taken DOWN each column: over examples, per feature. Shape (3,) = one statistic per feature. This is BatchNorm.',
-        13: 'gamma and beta would multiply and add here. Left out on purpose so the axis story stays visible; they are per-feature vectors of shape (3,) in both norms.',
-        16: 'axis=1 collapses the FEATURE axis: one mean per example, shape (4, 1). keepdims=True is what makes the broadcast line up row-wise instead of erroring.',
-        24: 'The proof, in one line: BatchNorm zeroes the COLUMN means, LayerNorm zeroes the ROW means. Same formula, perpendicular axes.',
-        29: 'A batch of one row: its variance along axis=0 is exactly 0, so this divides by sqrt(eps) after subtracting the value from itself. Every number becomes 0. This is why BatchNorm needs a different rule at test time.',
-        44: 'Rows 1 and 2 of the LayerNorm output are identical: [2,10,1] and [4,12,3] differ only by a constant +2 shift, which LayerNorm subtracts away. Normalization deliberately discards per-example mean and scale; gamma and beta are how the network gets useful scale back.',
-        50: 'Running statistics reproduce the training-time answer for this row exactly, using no batch at all. This line IS model.eval().',
-      },
-    },
-    {
-      type: 'note',
-      md: `Read the last three output lines as the interview answer, out loud. **LN alone** reproduces its in-batch row exactly and \`np.allclose\` says \`True\` — LayerNorm at test time is not a special case, it is the same computation. **BN alone** returns \`[0, 0, 0]\`: batch statistics of a single example destroy the example. **BN running** returns \`[-1.342, -1.342, -1.069]\` — the correct training-time answer, recovered from frozen numbers with no batch present. Those three lines are the whole train-vs-test story with no hand-waving.`,
-    },
-    {
-      type: 'note',
-      md: `**Pre-norm vs post-norm, honestly.** The original transformer was *post-norm*: x + Sublayer(x), then LayerNorm on top. Modern ones are *pre-norm*: x + Sublayer(LayerNorm(x)). Pre-norm trains more stably at depth because the residual path stays un-normalized end to end, so the gradient reaches layer 1 without passing through every norm — post-norm deep stacks often need a learning-rate warmup to survive the first few thousand steps at all. The honest cost: post-norm, when it does train, tends to reach slightly better final quality, which is why the debate did not simply end. Default to pre-norm; know that the choice is about *gradient flow through the residual path*, which is the point the question is testing.`,
-    },
-    {
-      type: 'note',
-      md: `**The rest of the family, one line each.** **GroupNorm** — split the channels into G groups and normalize within each group, per example: batch-independent like LayerNorm, and the standard rescue for detection/segmentation where batch size is 2. **InstanceNorm** — GroupNorm with G = number of channels, i.e. normalize each channel of each example alone; used in style transfer, because erasing per-channel mean and scale erases style. **RMSNorm** — LayerNorm with the mean subtraction dropped, dividing by the root-mean-square only: fewer operations, no measured quality loss, and now the default in Llama-family LLMs. **WeightNorm** — normalizes the weights instead of the activations; mostly historical.`,
+- **What BatchNorm buys beyond stability.** It lets you use a much larger step size safely, because a big update in one layer gets re-standardised before it disturbs the next. It also acts as a mild accidental regulariser: each example is normalised by statistics that depend on its random batch-mates, so it sees slightly different numbers every epoch. That is a side effect, not a strategy - it weakens as the batch grows and vanishes entirely at evaluation time.
+- **GroupNorm.** Split a layer's features into a few groups and normalise inside each group, per example. Batch-independent like LayerNorm, and the standard replacement when the batch size is 2 or 4.
+- **RMSNorm.** LayerNorm with step 4 removed: no mean subtraction, just divide by the root-mean-square. Slightly cheaper, no measured loss of quality, and now the default in most large language models.
+- **Where the norm sits in a transformer block.** Putting LayerNorm before the sublayer (*pre-norm*) leaves an unnormalised path running straight from input to output, so gradients reach the early layers easily and very deep stacks train stably. Putting it after (*post-norm*, the original design) usually needs a slow warm-up of the step size to survive early training.
+- **Residual connections.** A separate escape from the vanishing problem: add a layer's input to its output, giving the gradient a route with multiplier exactly 1 that skips the layer entirely. This is what made networks hundreds of layers deep possible, and it is covered in the CNN architectures module.
+- **Gradient clipping.** If the gradient's overall length exceeds a chosen cap, shrink it back to the cap while keeping its direction. This is a fix for exploding gradients only - it does nothing for vanishing ones.`,
     },
   ],
   quiz: [
     {
-      question: 'You initialize every weight in a hidden layer to 0. What is the precise failure?',
+      question: 'You initialise every weight in a hidden layer to 0. What is the precise failure?',
       options: [
         {
           text: 'The gradients are all zero, so nothing ever updates',
-          explanation:
-            'Close but wrong in the details — gradients are generally non-zero (the bias path and the loss still produce signal). The failure is that they are IDENTICAL across units, not that they are zero.',
+          explanation: 'The gradients are generally not zero - in the worked example they were -0.5 each. The failure is that they are identical across the units, not that they vanish.',
         },
         {
           text: 'All units in the layer compute the same output and receive the same gradient, so they stay identical forever',
-          explanation:
-            'Correct. This is the symmetry argument: same value + same gradient = same value after the update. An n-unit layer behaves like a 1-unit layer no matter how wide you make it.',
+          explanation: 'Correct. Same value plus same gradient means same value after the update, at every step. A 3-unit layer behaves like a 1-unit layer however wide you build it.',
         },
         {
           text: 'The loss becomes NaN on the first step',
-          explanation: 'NaN is the exploding-gradient symptom. Zero init fails silently — training runs, the loss just plateaus uselessly.',
+          explanation: 'NaN is the exploding-signal symptom. Zero init fails silently: training runs normally and the loss just sits still.',
         },
       ],
       correct: 1,
     },
     {
-      question: 'You are building a 40-layer ReLU network. Which initialization, and why that specific constant?',
+      question: 'A layer has fan-in 200 and uses ReLU. What spread should the starting weights be drawn from?',
       options: [
         {
-          text: 'He: Var(w) = 2/fan_in, because ReLU zeroes half its inputs and halves the variance, so you double the weight variance to compensate',
-          explanation: 'Correct, and the reason is the whole answer. Xavier under-shoots for ReLU precisely by that factor of 2, compounding over depth.',
+          text: 'sqrt(2/200) = 0.1, because ReLU deletes half the signal so the weight variance is doubled to 2/fan-in',
+          explanation: 'Correct. That is He initialisation, and doubling the variance pays in advance for the half that ReLU throws away.',
         },
         {
-          text: 'Xavier: Var(w) = 1/fan_in, the general-purpose choice',
-          explanation: 'Xavier is derived assuming the activation passes signal roughly unchanged — true near zero for tanh, false for ReLU, which deletes half the values.',
+          text: 'sqrt(1/200) = 0.0707, the general-purpose choice',
+          explanation: 'That is Xavier, which is derived assuming the activation passes the signal through roughly unchanged. True for tanh, false for ReLU.',
         },
         {
-          text: 'Uniform in [-1, 1], since it is symmetric around zero',
-          explanation: 'Symmetry around zero is necessary but says nothing about scale. With any reasonable fan_in this variance is far too large and the activations explode.',
+          text: 'Anywhere in the range -1 to 1, since that is symmetric around zero',
+          explanation: 'Being centred on zero is necessary but says nothing about the spread. With fan-in 200 that spread is far too large and the signal explodes with depth.',
         },
       ],
       correct: 0,
     },
     {
-      question: 'At test time, what statistics does BatchNorm use?',
+      question: 'A network multiplies the typical size of its signal by 0.9 at every layer. After 50 layers, what fraction of the original size remains?',
       options: [
-        { text: 'The statistics of the test batch', explanation: 'This is the bug, not the design: predictions would then depend on which other examples share the batch, and a single-example request has no batch at all.' },
-        { text: 'The statistics of the last training batch', explanation: 'One arbitrary batch would be a noisy, arbitrary estimate. BatchNorm accumulates across all of training instead.' },
+        { text: 'About 0.45, because 50 layers each lose 10%', explanation: 'The losses multiply, they do not add. 50 x 10% is not how repeated multiplication works.' },
+        { text: 'About 0.005, because 0.9 multiplied by itself 50 times is roughly 1/200', explanation: 'Correct, and this is the vanishing problem in one number. A per-layer multiplier of 0.9 looks harmless and is fatal at depth.' },
+        { text: 'Exactly 0, because floating point rounds it away', explanation: '0.005 is comfortably representable. The signal is useless long before the arithmetic itself fails.' },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'At evaluation time, what statistics does BatchNorm use?',
+      options: [
+        { text: 'The statistics of the test batch it is currently given', explanation: 'That is the bug, not the design: a prediction would then depend on which other examples share the batch, and a single request has no batch at all.' },
+        { text: 'The statistics of the last training batch it saw', explanation: 'One arbitrary batch would be a noisy, arbitrary estimate. BatchNorm accumulates across all of training instead.' },
         {
-          text: 'A running average of the batch means and variances collected during training',
-          explanation: 'Correct. Frozen numbers, no batch needed, fully deterministic per input. In PyTorch, model.eval() is what switches to them.',
+          text: 'A running average of the batch means and variances collected during training, then frozen',
+          explanation: 'Correct. Frozen numbers, no batch needed, and the same answer every time for the same input. In PyTorch, model.eval() is what switches to them.',
         },
       ],
       correct: 2,
     },
     {
-      question: 'Training loss is 2.7, then 2.4, then inf, then NaN, all within 5 steps. Best first diagnosis?',
+      question: 'A grid of 32 examples by 512 features leaves a layer. How many means does LayerNorm compute?',
       options: [
-        { text: 'Vanishing gradients', explanation: 'Vanishing gradients make the loss sit flat near chance level. Nothing about it produces inf or NaN.' },
-        {
-          text: 'Exploding gradients — reduce the learning rate and add gradient clipping by norm',
-          explanation: 'Correct. NaN within a handful of steps is the signature of exploding updates. Clipping caps the gradient length while keeping its direction; also check the init scale.',
-        },
-        { text: 'Not enough training data', explanation: 'Data quantity affects generalization, not numerical overflow during the first few optimizer steps.' },
-      ],
-      correct: 1,
-    },
-    {
-      question: 'A tensor of shape (32, 512) leaves a layer: 32 examples, 512 features. LayerNorm computes how many means?',
-      options: [
-        { text: '32 — one per example, each averaging over its 512 features', explanation: 'Correct. LayerNorm collapses the FEATURE axis, so each example gets exactly one mean and one variance, computed with no reference to the other 31.' },
-        { text: '512 — one per feature, each averaging over the 32 examples', explanation: 'That is BatchNorm. It collapses the batch axis instead, giving one statistic per feature.' },
-        { text: '1 — a single mean over all 16,384 numbers', explanation: 'That would mix examples together, destroying the batch-independence that is LayerNorm\'s entire selling point.' },
+        { text: '32 - one per example, each averaging over that example\'s 512 features', explanation: 'Correct. LayerNorm groups a row, so each example gets exactly one mean and one variance, computed without looking at the other 31.' },
+        { text: '512 - one per feature, each averaging over the 32 examples', explanation: 'That is BatchNorm. It groups a column instead, giving one statistic per feature.' },
+        { text: '1 - a single mean over all 16,384 numbers', explanation: 'That would mix the examples together, which destroys the batch-independence that is the entire point of LayerNorm.' },
       ],
       correct: 0,
     },
     {
-      question: 'Why do BatchNorm and LayerNorm both have learned parameters γ and β?',
+      question: 'Why do BatchNorm and LayerNorm both have learned gamma and beta?',
       options: [
-        { text: 'To speed up the normalization computation', explanation: 'They add work, not remove it — two extra elementwise operations per feature.' },
-        { text: 'To keep the output strictly between 0 and 1', explanation: 'Neither norm bounds its output at all; normalized values routinely exceed 1 in magnitude, and γ can scale them further.' },
+        { text: 'To make the normalisation faster to compute', explanation: 'They add two operations per feature rather than removing any.' },
+        { text: 'To keep the output between 0 and 1', explanation: 'Neither layer bounds its output. Normalised values regularly go past 1 in size, and gamma can stretch them further.' },
         {
-          text: 'Because forcing mean 0 / variance 1 removes a freedom the layer may need — γ and β let the network undo the normalization when that is better',
-          explanation:
-            'Correct. With γ = std and β = mean the layer recovers its original distribution exactly. Normalization supplies a good default scale; these two parameters preserve the right to disagree with it.',
+          text: 'Because forcing mean 0 and spread 1 removes a freedom the layer may need, and gamma and beta let the network undo the normalisation when that is better',
+          explanation: 'Correct. Setting gamma to the original standard deviation and beta to the original mean recovers the original numbers exactly, so the default is a suggestion the layer can overrule.',
         },
       ],
       correct: 2,
-    },
-    {
-      question: 'Your segmentation model can only fit batch size 2 on the GPU. What breaks, and what do you switch to?',
-      options: [
-        { text: 'Nothing breaks; BatchNorm is batch-size independent', explanation: 'It is the opposite — BatchNorm is the one common layer whose output depends on batch composition.' },
-        {
-          text: 'BatchNorm estimates each mean and variance from 2 numbers, so the statistics are pure noise — switch to GroupNorm (or LayerNorm)',
-          explanation:
-            'Correct, and this is exactly why GroupNorm was invented. Batch-independent norms give identical behaviour at batch size 2 and 256, and match train to test for free.',
-        },
-        { text: 'The learning rate must be doubled to compensate', explanation: 'The problem is estimator variance, not step size. A different learning rate cannot make a 2-sample mean informative.' },
-      ],
-      correct: 1,
-    },
-    {
-      question: 'Pre-norm transformer blocks (x + Sublayer(LN(x))) vs post-norm (LN(x + Sublayer(x))). What is the main practical difference?',
-      options: [
-        {
-          text: 'Pre-norm trains more stably at depth because the residual path stays un-normalized, so gradients reach early layers without passing through every norm',
-          explanation: 'Correct. Post-norm deep stacks typically need learning-rate warmup to survive early training; post-norm can still edge out slightly better final quality when it does converge.',
-        },
-        { text: 'Pre-norm uses fewer parameters', explanation: 'Identical parameter count — the same LayerNorm modules, just placed differently relative to the residual addition.' },
-        { text: 'Post-norm works on variable-length sequences and pre-norm does not', explanation: 'Both are LayerNorm, so both are per-token and length-agnostic. Placement does not change that.' },
-      ],
-      correct: 0,
     },
   ],
   interviewQuestions: [
     {
-      question: 'Why can you not initialize all the weights of a neural network to zero?',
+      question: 'Why can you not initialise all the weights of a neural network to zero?',
       answer:
-        'Symmetry. With identical weights, every unit in a layer computes the identical output; during backprop each of those units receives the identical gradient, because their inputs and their outgoing weights are identical too. Identical value plus identical gradient means identical value after the update — forever. The layer is effectively one unit no matter how wide you built it. Note the two refinements interviewers probe for: (1) any constant fails, not just zero — the sameness is the problem, not the value; (2) biases CAN be zero-initialized safely, because random weights already break the symmetry, and that is what PyTorch does.',
+        'Symmetry. With identical weights, every unit in a layer computes an identical output, and during backpropagation each of those units receives an identical gradient, because their inputs and their outgoing connections are identical too. Identical value plus identical gradient means identical value after the update, forever, so the layer behaves like a single unit no matter how wide it is. Two refinements interviewers probe for: any constant fails, not just zero, because the sameness is the problem rather than the value; and the biases can safely start at zero, because random weights have already made the units different, which is what PyTorch does by default.',
       isCaseBased: false,
     },
     {
-      question: 'Derive Xavier initialization, then explain how He differs and why.',
+      question: 'Derive Xavier initialisation, then explain how He differs and why.',
       answer:
-        'One pre-activation is z = sum of n_in terms w_i x_i. For independent zero-mean w and x, Var(z) = n_in · Var(w) · Var(x). To keep Var(z) = Var(x) — the stated goal of constant activation variance across depth — you need Var(w) = 1/n_in. That is Xavier. The two-sided form 2/(n_in + n_out) is a compromise: forward stability wants 1/n_in, backward gradient stability wants 1/n_out, so you average the constraints. He changes one assumption: ReLU zeroes every negative pre-activation, so Var(ReLU(z)) is about half of Var(z). Compounded over depth that is fatal, so you pre-pay by doubling the weight variance: Var(w) = 2/n_in. Summary line: Xavier for tanh/sigmoid, He for ReLU, and the 2 is the price of ReLU deleting half the signal.',
+        'A pre-activation is a sum of fan-in terms, each one a weight times an input. For independent, zero-centred weights and inputs, the variances add: Var(z) = fan-in x Var(w) x Var(x). To keep the output spread equal to the input spread across depth, you need Var(w) = 1/fan-in. That is Xavier. Its two-sided form, 2/(fan-in + fan-out), is a compromise: keeping the forward signal stable asks for 1/fan-in while keeping the backward gradient stable asks for 1/fan-out, so it splits the difference. He changes one assumption. ReLU replaces every negative pre-activation with 0, which roughly halves the variance of what comes out, and that halving compounds through depth. So you double the weight variance to pay for it in advance: Var(w) = 2/fan-in. Summary: Xavier for sigmoid and tanh, He for ReLU, and the 2 is the price of ReLU discarding half the signal.',
       isCaseBased: false,
     },
     {
-      question: 'Explain exactly what BatchNorm does differently at training time and at test time, and why the difference has to exist.',
+      question: 'Explain exactly what BatchNorm does differently at training time and at evaluation time, and why the difference must exist.',
       answer:
-        'Training: for each feature, compute the mean and variance across the current batch, normalize with them, then apply the learned per-feature gamma and beta. Test: use a running average of those means and variances, accumulated during training with a momentum term, and frozen. The difference is not an optimization — it is forced. A single test example has no batch to compute statistics from; normalizing it by its own batch statistics divides by a variance of zero and erases the example to zeros. Second, equally important reason: if you did use test-batch statistics, one user\'s prediction would depend on which other users happened to be batched with them, which makes serving non-deterministic and offline evaluation unreproducible. In PyTorch, model.eval() performs the switch (and also disables dropout); forgetting it is the classic bug. Worth adding that this train/test gap is the price of BatchNorm coupling examples — LayerNorm has no such gap because it never leaves the example.',
+        'At training time, for each feature it computes the mean and variance across the current batch, normalises with them, then applies the learned per-feature gamma and beta. At evaluation time it uses a running average of those means and variances, accumulated throughout training and then frozen. The difference is forced, not an optimisation. A single test example has no batch to compute statistics from: its column holds one number, so the variance is exactly zero and normalising erases the example to zeros. The second reason is just as decisive: if you used test-batch statistics, one user\'s prediction would depend on which other users happened to be batched with them, so serving would be non-deterministic and offline evaluation unreproducible. In PyTorch, model.eval() performs the switch and also disables dropout; forgetting it is the classic bug. Worth adding that this gap exists only because BatchNorm couples the examples in a batch - LayerNorm has no such gap because it never leaves the example.',
       isCaseBased: false,
     },
     {
-      question: 'Case: a colleague reports 96% validation accuracy in the notebook, but the deployed service gets roughly 60% on the same data, one request at a time. Where do you look first?',
+      question: 'Case: a colleague reports 96% validation accuracy in a notebook, but the deployed service gets about 60% on the same data, one request at a time. Where do you look first?',
       answer:
-        'Prime suspect: model.eval() was never called, so BatchNorm is still using batch statistics. Offline, batches of 64 give reasonable estimates and accuracy looks fine. In production each request arrives alone, so BatchNorm normalizes a batch of one — variance zero, the example collapses toward zeros, the prediction becomes garbage. Confirming test that takes 30 seconds: re-run the offline evaluation with batch size 1, and separately shuffle the validation set and see whether per-example predictions change. Both moving confirms it. Same missing call also leaves dropout active, which contributes its own smaller drop. Related suspects if eval() was called: running statistics never converged because training was too short or momentum was mis-set, and train/serve preprocessing skew. Fix order: eval() first, since it is one line and explains the full magnitude.',
+        'Prime suspect: model.eval() was never called, so BatchNorm is still using batch statistics. Offline, batches of 64 give reasonable column statistics and the number looks fine. In production every request arrives alone, so BatchNorm normalises a batch of one: the variance is zero, the example collapses to zeros, and the network outputs roughly a constant, which lands near chance. The confirmation takes thirty seconds: re-run the offline evaluation with batch size 1 and see whether accuracy drops to about 60%, then shuffle the validation set and check whether individual predictions change. Both moving confirms it. The same missing call leaves dropout active, which contributes a smaller additional drop. If eval() was in fact called, the next suspects are running statistics that never converged because training was too short, and a mismatch between the preprocessing used offline and the one used in the service. Fix order: eval() first, because it is one line and explains the full size of the gap. The design-level answer, if single-request serving is the product, is to use a normalisation that has no evaluation mode at all.',
       isCaseBased: true,
     },
     {
-      question: 'What are vanishing and exploding gradients, and what actually fixes each?',
+      question: 'What are vanishing and exploding signals, and what fixes each?',
       answer:
-        'Backprop through L layers multiplies L Jacobian factors together. If the typical factor is slightly below 1, the product decays geometrically — 0.9^50 is about 0.005 — and early layers receive no signal: vanishing. Slightly above 1 and it blows up — 1.1^50 is about 117 — and one update destroys the weights: exploding. Symptoms differ and matter: vanishing shows as loss frozen near chance (0.693 for balanced binary); exploding shows as NaN within a few steps. Fixes for vanishing: correct init (He/Xavier), ReLU-family activations instead of sigmoid whose derivative caps at 0.25, normalization layers, and above all residual connections, which give the gradient a factor-1 path around every block — that is what made 100+ layer networks trainable. Fixes for exploding: gradient clipping by norm (the standard in RNNs and transformers), lower learning rate, warmup. Naming clipping as an exploding-only fix is a detail that separates good answers from memorized ones.',
+        'Both come from the same fact: passing a signal through many layers multiplies a per-layer factor by itself once per layer, and both backpropagation and the forward pass work that way. A factor slightly below 1 decays geometrically - 0.9 to the fiftieth power is about 0.005 - so the early layers receive nothing and never move: vanishing. A factor slightly above 1 blows up - 1.1 to the fiftieth is about 117 - and one update destroys the weights: exploding. The symptoms differ and matter. Vanishing shows as a loss stuck near its starting value and barely moving. Exploding shows as inf or NaN within a handful of steps. Fixes for vanishing: correct initialisation with He or Xavier, ReLU-family activations rather than sigmoid, normalisation layers, and above all residual connections, which give the gradient a path with factor exactly 1 around each block. Fixes for exploding: gradient clipping by norm, a smaller step size, and warm-up. Naming clipping as an exploding-only fix is worth doing explicitly.',
       isCaseBased: false,
     },
     {
       question: 'Case: an LSTM language model trains fine for 200 steps, then the loss becomes NaN. Give your debugging order.',
       answer:
-        'NaN after healthy steps means numerical explosion, not a config error — a config error would fail at step 0. (1) Print the global gradient norm each step and look at the last few before the NaN; a spike from ~1 to ~10^4 confirms exploding gradients, which recurrent models are especially prone to because BPTT multiplies the same recurrent matrix once per timestep. Fix: clip_grad_norm_ with a threshold around 1.0. (2) Check the learning rate and whether a scheduler just stepped it up; add warmup. (3) Look for a data outlier at that position — an unusually long sequence or a corrupted row; log the batch that caused it. (4) Check for numerically illegal operations: log(0) in a custom loss, division by a value that hit zero, sqrt of a negative. (5) If using fp16, check for overflow and confirm the gradient scaler is enabled. Tradeoff to name: clipping makes training survive but masks a scale problem — if you need a very tight clip threshold to stay alive, the init or learning rate is wrong and should be fixed at the source.',
-      isCaseBased: true,
-    },
-    {
-      question: 'Why does BatchNorm allow much higher learning rates?',
-      answer:
-        'Without it, a large step in layer 3 changes the scale of everything layer 4 onwards receives, and that scale drift compounds through depth — so the learning rate has to be small enough that no layer disturbs its successors too much. BatchNorm re-standardizes each layer\'s output every step, so a scale change caused by a big update is largely undone before it propagates. It also makes the loss surface better conditioned: the current explanation in the literature is smoothness of the loss and its gradients rather than the original "internal covariate shift" story, which later work largely deflated. A useful extra: BatchNorm makes the layer invariant to the scale of its weights, so a weight that doubles produces the same output — which decouples the effective step size from the weight magnitude.',
+        'NaN after healthy steps means numerical explosion, not a configuration error - a configuration error would fail at step 0. First, print the total gradient size at every step and look at the last few before the NaN; a jump from around 1 to around 10,000 confirms exploding gradients, which recurrent models are especially prone to because the same recurrent weight matrix is applied once per timestep, so its factor is raised to the sequence length. The fix is clipping the gradient norm at around 1.0. Second, check the step size and whether a scheduler just raised it; add a warm-up if so. Third, look for a data outlier at that position, such as an unusually long sequence or a corrupted row, and log the batch that caused it. Fourth, check for numerically illegal operations: a log of zero in a custom loss, a division by something that reached zero, a square root of a negative. Fifth, if training in half precision, confirm the gradient scaler is enabled. One tradeoff to name: clipping keeps training alive but hides a scale problem, so if you need a very tight clip threshold to survive, the initialisation or the step size is wrong and should be fixed at the source.',
       isCaseBased: false,
     },
     {
       question: 'Why do transformers use LayerNorm rather than BatchNorm?',
       answer:
-        'Three reasons, all decisive. (1) Variable-length sequences: in a padded batch, position 40 exists in some sequences and not others, so "the mean over the batch at position 40" has no well-defined denominator. LayerNorm normalizes each token against its own features and never asks the question. (2) Train/test identity: LLM inference frequently runs one sequence at a time and generates one token at a time, so a normalization that needs a batch is a liability; LayerNorm has no running statistics and no eval() mode. (3) Batch-size independence: LLM training uses small per-device batches with gradient accumulation, and BatchNorm statistics would be noisy and would need cross-device synchronization. Add the practical footnote: modern LLMs have mostly moved one step further to RMSNorm, which drops the mean subtraction and is cheaper with no measured quality loss.',
+        'Three reasons, each sufficient on its own. First, variable-length sequences: in a padded batch, position 40 exists in some sequences and not others, so a mean over the batch at that position has no well-defined denominator. LayerNorm normalises each token against its own features and never asks the question. Second, training and inference are the same computation: language models frequently run one sequence at a time and generate one token at a time, so a layer that needs a batch is a liability. LayerNorm has no running statistics and no evaluation mode to forget. Third, batch-size independence: large-model training uses small per-device batches with gradient accumulation, and BatchNorm statistics would be noisy and would need synchronising across devices. A useful footnote is that modern large language models have mostly moved one step further to RMSNorm, which drops the mean subtraction and is cheaper with no measured loss of quality.',
       isCaseBased: false,
     },
     {
       question: 'Case: you are training an object detector. Batch size is 2 per GPU because the images are large. Validation metrics are unstable across epochs and much worse than training. What is your hypothesis and your fix?',
       answer:
-        'Hypothesis: BatchNorm with batch size 2 estimates each mean and variance from two examples. That estimate is nearly pure noise, so (a) the effective regularization from batch noise becomes damage rather than help, and (b) the running averages accumulated from noisy batch statistics are a poor match for what the network actually sees at test time — producing exactly the train/val gap and instability described. Fixes, ranked: (1) swap BatchNorm for GroupNorm — batch-independent, designed for this case, and identical at train and test. (2) SyncBatchNorm to pool statistics across GPUs, which restores an effective batch of 2 x num_gpus, at the cost of a synchronization per layer. (3) Freeze the BatchNorm layers if fine-tuning from a pretrained backbone — use the pretrained running statistics and stop updating them; this is standard practice in detection codebases. (4) Gradient accumulation does NOT help, because it does not change the batch each BatchNorm layer sees. Naming that last point is what shows you understand the mechanism rather than the recipe.',
+        'Hypothesis: BatchNorm with batch size 2 estimates each mean and variance from two examples, which is almost pure noise. Two consequences follow. The noise injected into every forward pass stops being a mild regulariser and becomes damage. And the running statistics, accumulated from those noisy batch estimates, are a poor description of what the network actually sees, so the frozen numbers used at evaluation do not match the training-time behaviour - which is exactly the unstable, much-worse validation gap described. Fixes, ranked. First, replace BatchNorm with GroupNorm: batch-independent, designed for this case, and identical at training and evaluation. Second, use SyncBatchNorm to pool statistics across GPUs, restoring an effective batch of 2 times the number of GPUs at the cost of a synchronisation per layer. Third, if fine-tuning from a pretrained backbone, freeze the BatchNorm layers and keep the pretrained running statistics, which is standard practice in detection codebases. Fourth, note that gradient accumulation does not help at all, because it does not change the batch that each BatchNorm layer actually sees. That last point is the one that shows you understand the mechanism rather than the recipe.',
       isCaseBased: true,
-    },
-    {
-      question: 'Pre-norm or post-norm, and what is the actual difference?',
-      answer:
-        'Post-norm (original transformer): LN(x + Sublayer(x)) — the normalization sits on the residual stream. Pre-norm (nearly all modern models): x + Sublayer(LN(x)) — the residual path is a clean, un-normalized identity from input to output. That difference is entirely about gradient flow: in pre-norm, the gradient can reach layer 1 through a path that never passes a normalization, so deep stacks train stably from step 0. Post-norm puts a LayerNorm on every residual hop, and deep post-norm models typically need learning-rate warmup to survive the first thousands of steps. The honest counterpoint: when post-norm does converge it often reaches marginally better final quality, which is why it has not vanished, and hybrids exist. Default to pre-norm; be able to say the reason is the residual gradient path, not tradition.',
-      isCaseBased: false,
-    },
-    {
-      question: 'Is BatchNorm a regularizer? Argue both sides.',
-      answer:
-        'Yes, mildly, and by accident. Each example is normalized using statistics that depend on its randomly chosen batch-mates, so the same example produces slightly different activations every epoch — stochastic noise injected into the forward pass, which is structurally what dropout does. Empirically, adding BatchNorm often lets you reduce or remove dropout. But it is a weak and uncontrollable regularizer: its strength depends on batch size (bigger batch = less noise = less regularization), you cannot tune it independently, and it disappears completely at test time by construction. So: treat it as a side effect worth knowing about, never as your regularization strategy. Weight decay, dropout, data augmentation, and early stopping remain the tools you actually control.',
-      isCaseBased: false,
-    },
-    {
-      question: 'A Linear layer is immediately followed by BatchNorm. What happens to the Linear layer\'s bias term?',
-      answer:
-        'It becomes redundant, and you should set bias=False. BatchNorm subtracts the batch mean of each feature; any constant bias added by the Linear layer shifts that feature by the same constant for every example, so it shifts the mean by exactly the same amount and gets subtracted straight back out. The bias parameters would receive gradients that ultimately do nothing to the output, and beta already provides a learned per-feature shift downstream. This is why torchvision ResNet convolutions all use bias=False — every one of them is followed by a BatchNorm. Small detail, but it is a fast check on whether you understand what BatchNorm actually removes.',
-      isCaseBased: false,
     },
   ],
   flashcards: [
-    { front: 'Why not initialize all weights to zero?', back: 'Symmetry: every unit computes the same output and gets the same gradient, so they stay identical forever. Any constant fails, not just 0. Biases CAN be zero — random weights already break symmetry.' },
-    { front: 'The goal of good initialization', back: 'Keep the variance of activations roughly constant going forward and of gradients going backward. Too small shrinks the signal through depth; too large saturates activations and explodes gradients.' },
-    { front: 'Xavier / Glorot', back: 'Var(w) = 1/fan_in (or the two-sided 2/(fan_in + fan_out)). For tanh and sigmoid, which pass signal roughly unchanged near zero.' },
-    { front: 'He / Kaiming and the factor 2', back: 'Var(w) = 2/fan_in, for ReLU. ReLU zeroes half its inputs and so halves the variance — you double the weight variance to pre-pay for it.' },
-    { front: 'Vanishing vs exploding: symptoms and fixes', back: 'Product of L factors: 0.9^50 vanishes (loss stuck at chance), 1.1^50 explodes (NaN in a few steps). Vanishing: He/Xavier init, ReLU, norm layers, residual connections. Exploding: gradient clipping by norm, lower LR, warmup.' },
-    { front: 'BatchNorm in one line, plus its weaknesses', back: 'Normalize each FEATURE across the BATCH (down the column), then rescale with learned gamma and beta. Buys high LR, fast convergence, mild regularization. Weak on small batches, variable-length sequences, and it couples examples in a batch.' },
-    { front: 'Why gamma and beta exist', back: 'Forcing mean 0 / var 1 removes a freedom the layer might need. gamma = std, beta = mean recovers the original exactly — the network keeps the right to be un-normalized.' },
-    { front: 'BatchNorm at train vs test', back: 'Train: current batch statistics. Test: a running average collected during training, frozen. Required because one test example has no batch, and because predictions must not depend on batch-mates. model.eval() is the switch.' },
-    { front: 'LayerNorm in one line, and why transformers use it', back: 'Normalize across the FEATURES inside one example (across the row). Batch-size independent, identical at train and test, works on variable-length sequences — exactly what transformers need.' },
-    { front: 'Pre-norm vs post-norm, and the norm family', back: 'Pre-norm x + Sublayer(LN(x)): un-normalized residual path, stable at depth, the modern default; post-norm needs warmup. GroupNorm: channel groups per example, the small-batch rescue. InstanceNorm: per channel, style transfer. RMSNorm: LayerNorm without the mean subtraction, Llama-family default.' },
+    { front: 'Why not initialise all weights to zero?', back: 'Symmetry: every unit computes the same output and receives the same gradient, so they stay identical forever. Any constant fails, not just 0, because the sameness is the problem. Biases can be zero - random weights already break the symmetry.' },
+    { front: 'The goal of initialisation', back: 'Choose the starting weights so each layer multiplies the typical size of the signal by about 1. Too small and it fades through depth (0.9 to the 50th is 0.005); too large and it explodes (1.1 to the 50th is 117).' },
+    { front: 'Xavier / Glorot', back: 'Var(w) = 1/fan-in, or the two-sided 2/(fan-in + fan-out). For sigmoid and tanh, which pass the signal roughly unchanged near zero. Fan-in is the number of inputs into one unit.' },
+    { front: 'He / Kaiming and the factor 2', back: 'Var(w) = 2/fan-in, for ReLU. ReLU turns every negative value into 0, roughly halving the variance, so you double the weight variance to pay for it in advance. With fan-in 100 the spread is sqrt(0.02) = 0.1414.' },
+    { front: 'The six steps of any normalisation layer', back: 'Mean, distances from the mean, variance, subtract the mean, divide by the standard deviation, then multiply by learned gamma and add learned beta. Only the choice of which numbers get grouped together changes between BatchNorm and LayerNorm.' },
+    { front: 'Why gamma and beta exist', back: 'Forcing mean 0 and spread 1 removes a freedom the layer may need. Setting gamma to the original standard deviation and beta to the original mean recovers the original numbers exactly, so the layer keeps its right to be un-normalised.' },
+    { front: 'BatchNorm: axis, and train versus evaluation', back: 'Statistics down each column: one feature, across the batch. Training uses the current batch. Evaluation uses a frozen running average, because a lone test example has variance 0 and would be erased, and because predictions must not depend on batch-mates. model.eval() is the switch. Batches of 2 to 4 make the statistics pure noise.' },
+    { front: 'LayerNorm: axis, and why transformers use it', back: 'Statistics across each row: one example, across its features. Batch-size independent, identical at training and evaluation with no running statistics, and fine with variable-length sequences - exactly what transformers and language models need.' },
   ],
   mindmapMarkdown: `- Weight Init, BatchNorm vs LayerNorm
-  - Why init matters
-    - All zeros = symmetry, units never differ
-    - Too small: signal dies through depth
-    - Too large: saturation, exploding
-    - Goal: constant variance fwd and bwd
-  - The recipes
-    - Xavier: 1/fan_in or 2/(fan_in+fan_out)
-    - He: 2/fan_in for ReLU
-    - The 2 = ReLU zeroes half the signal
-    - PyTorch default: kaiming uniform a=sqrt(5)
-  - Vanishing / exploding
-    - Product of L factors: 0.9^50 dies, 1.1^50 blows up
-    - Symptoms: stuck at chance vs NaN
-    - Fixes: init, ReLU, norms, residuals
-    - Clipping by norm (exploding only)
+  - The failure
+    - 6 layers, scale 0.05 -> 0.0034 (vanished)
+    - 6 layers, scale 0.30 -> 127.8 (exploded)
+    - Per-layer multiplier raised to the depth
+    - Goal: multiplier about 1
+  - Initialisation
+    - Var(z) = fan-in x Var(w) x Var(x)
+    - Xavier 1/fan-in: sigmoid, tanh
+    - He 2/fan-in: ReLU (2 = ReLU deletes half)
+    - Symmetry breaking: all-same weights never differ
+    - Biases may start at 0
+  - Normalisation, six steps
+    - mean, variance, subtract, divide
+    - learned gamma (scale), beta (shift)
+    - eps guards divide-by-zero
   - BatchNorm
-    - Stats DOWN the batch, per feature
-    - Learned gamma, beta per feature
-    - Buys: higher LR, faster, mild regularization
-    - Train: batch stats. Test: running average
-    - Because one example has no batch
+    - Statistics down the column, per feature
+    - Train: current batch. Eval: frozen running average
+    - One example alone has variance 0 -> erased
     - Bug: forgot model.eval()
-    - Weak: small batches, seq lengths, coupling
+    - Small batches: statistics are noise
   - LayerNorm
-    - Stats ACROSS features, per example
-    - Train == test, batch-size independent
-    - Why transformers use it
-    - Pre-norm stable at depth vs post-norm warmup
-  - The family
-    - GroupNorm: channel groups, small batches
-    - InstanceNorm: per channel, style transfer
-    - RMSNorm: no mean subtraction, LLM default`,
+    - Statistics across the row, per example
+    - Train == eval, batch size 1 is fine
+    - Variable-length sequences work
+    - Why transformers and LLMs use it
+  - Beyond the basics
+    - GroupNorm for small batches
+    - RMSNorm: no mean subtraction
+    - Pre-norm vs post-norm
+    - Residual connections, gradient clipping`,
 }
 
 export default m

@@ -6,70 +6,82 @@ const m: Module = {
   level: 0,
   title: 'Backpropagation: The Chain Rule on a Graph',
   whyItMatters:
-    'This is the algorithm that made deep learning possible, and "derive backprop for one layer" is asked in almost every DL interview. It is also the only module where a candidate who has written the backward pass by hand is instantly distinguishable from one who has only called loss.backward(). Build it here in NumPy, on XOR, and you will never be bluffing again.',
-  estMinutes: 65,
+    'A network has one number at the end saying how wrong it is, and thousands of adjustable numbers inside. To improve, every one of those numbers needs its own slope: if I nudge this one, how much does the wrongness change? Backpropagation computes all of them in a single sweep from the end of the network back to the start. This module builds that sweep by hand on a network with six weights, in plain Python, and then checks the answer by measuring it directly.',
+  assumes: [
+    'Read the Math module **Slopes, Derivatives & the Gradient** first. Derivative, slope at a point, partial derivative, gradient and the chain rule are all defined there, and this module uses them without re-deriving them.',
+    'Read the DL module **From Perceptron to MLP** first. You should know that a neuron computes a weighted sum and then passes it through a squashing function, and why a network needs a hidden layer at all.',
+    'Basic Python: lists, indexing, a for loop, a function, and print.',
+    'No calculus notation beyond what the Math module taught. No numpy at all — every snippet here is plain Python lists and loops.',
+  ],
+  estMinutes: 45,
   sections: [
     {
       type: 'intuition',
-      title: 'The problem: one number, a million dials',
-      md: `Training is the loop you already know: predict, measure the miss, nudge every weight downhill. The nudge needs a gradient — ∂L/∂w — **for every single weight**.
+      title: 'One number at the end, a pile of dials inside',
+      md: `Training is the loop you already know from gradient descent: predict, measure how wrong you were, nudge every weight a little downhill, repeat. The nudge needs a slope for **every single weight**.
 
-- A tiny 2-3-1 network has 13 numbers. ResNet-50 has 25 million. GPT-3 has 175 billion.
-- The loss L is ONE number, measured at the very end of the network.
-- Every weight, however deep and however early, contributed something to that one number.
-- So the question is brutally concrete: *how much would L change if I wiggled this one weight?* — asked 25 million times, for every batch, for every step.
-- Get all of them cheaply and you can train anything. That is the entire job.`,
+- A tiny network with 2 inputs, 2 hidden units and 1 output has 6 weights and 3 biases. Nine numbers.
+- ResNet-50, a standard image model, has 25 million. Large language models have hundreds of billions.
+- The wrongness, called the **loss**, is ONE number, computed at the very end of the network.
+- Every weight, however early and however deep, helped produce that one number.
+- So the question is concrete: *how much would the loss change if I nudged this one weight?* — asked once per weight, on every batch of data, for every training step.
+
+Get all those slopes cheaply and you can train anything. That is the whole job of this module.`,
     },
     {
       type: 'intuition',
-      title: 'The naive way, and why it is hopeless',
-      md: `Obvious plan: to find ∂L/∂w, nudge w by a tiny ε, run the whole network again, see how much L moved. Divide. Done.
+      title: 'The obvious method, and why it is hopeless',
+      md: `Obvious plan: to find the slope for one weight, nudge it by a tiny amount, run the whole network again, see how much the loss moved, divide. That is exactly the measure-the-slope method from the Math module, and it works perfectly.
 
-- Cost per weight: one full forward pass (two, if you nudge both directions for accuracy).
-- ResNet-50: 25 million weights → **25 million forward passes** to take ONE gradient step.
-- At an optimistic 1000 forward passes per second, that is about 7 hours. Per step. You need millions of steps.
-- The cost is fundamentally wrong: it scales with the *number of parameters*, and parameters are the thing we keep adding.
-- Backprop gets every one of those gradients in **one backward pass**, costing roughly the same as one forward pass. Not 25 million times cheaper by a trick — cheaper because it stops throwing away work.`,
+- Cost for one weight: one full run of the network (two runs, if you nudge both directions to be accurate).
+- ResNet-50 has 25 million weights, so that is 25 million runs to take ONE step.
+- At an optimistic 1000 runs per second, one step takes about 7 hours. Training needs millions of steps.
+- The cost is wrong in a structural way: it grows with the number of weights, and weights are the thing we keep adding.
+- Backprop gets every one of those slopes in **one sweep backwards through the network**, costing roughly as much as a single forward run. Not by a trick — by not throwing away work it already did.
+
+Hold onto the slow method anyway. At the end of this module it comes back as a *checker*: run it on one weight and see whether backprop gave the same answer.`,
     },
     {
       type: 'intuition',
-      title: 'Blame assignment: the whole idea in one image',
-      md: `A restaurant serves a bad dish. The customer complains once, at the door — that complaint is the loss.
+      title: 'Blame assignment: the whole idea in one picture',
+      md: `A restaurant serves a bad dish. The customer complains once, at the door. That single complaint is the loss.
 
-- The manager does not re-cook 25 million dishes to find the culprit. He asks the chef: *how much of this was you?*
-- The chef splits his share of the blame among his inputs: mostly the sauce, a little the pan.
+- The manager does not re-cook every dish in the kitchen to find the culprit. He asks the chef one question: *how much of this was you?*
+- The chef splits his share of the blame among his own inputs: mostly the sauce, a little the pan.
 - The sauce station splits its share again: mostly the salt, a little the stock.
-- Blame flows **backwards**, and each station only needs two things: the blame handed to it, and how sensitive its own output was to each of its inputs.
-- Nobody ever sees the whole restaurant. One pass from the door to the kitchen and every station knows its bill.
+- Blame flows **backwards**, and each station needs only two things: the blame handed to it from downstream, and how sensitive its own output was to each of its own inputs.
+- Nobody ever sees the whole restaurant. One walk from the door back into the kitchen, and every station knows its bill.
 
 That is backpropagation. The loss is measured at the output, and each layer asks the layer before it: *how much of this error was your doing?*`,
     },
     {
       type: 'hinglish',
-      md: `Ek dish kharab bani. Customer ne shikayat sirf **darwaze pe** ki — wahi hai loss. Ab manager 25 million dish dobara nahi banata; wo chef se poochta hai, chef sauce wale se, sauce wala namak wale se. Har banda sirf apne hisse ka blame aage badhata hai.
+      md: `Ek dish kharab bani. Customer ne shikayat sirf **darwaze pe** ki — wahi hai loss. Ab manager poori kitchen dobara nahi banata; wo chef se poochta hai, chef sauce wale se, sauce wala namak wale se. Har banda sirf apne hisse ka blame aage badhata hai.
 
-Backprop bilkul yahi hai: **galti output pe napi gayi, phir peeche har weight se poocha gaya — tera kitna haath tha is galti me?** Har layer ke paas do hi cheezein hoti hain: upar se aaya hua blame, aur apna chhota sa local derivative. Dono ko multiply karo, peeche pass kar do. Ek hi backward chakkar me poore network ka hisaab saaf.`,
+Backprop bilkul yahi hai: **galti output pe napi gayi, phir peeche har weight se poocha gaya — tera kitna haath tha is galti me?** Har layer ke paas do hi cheezein hoti hain: upar se aaya hua blame, aur apna chhota sa local slope. Dono ko multiply karo, peeche pass kar do. Ek hi backward chakkar me poore network ka hisaab saaf.`,
     },
     {
       type: 'intuition',
-      title: 'The computational graph: the machine that does it',
-      md: `Stop thinking "layers" for a minute and think **graph**. Every operation is a node.
+      title: 'The five words this module runs on',
+      md: `Five terms, defined now, used everywhere below. None of them is more than one sentence.
 
-- Nodes are operations: multiply, add, relu, sigmoid, the loss itself.
-- Edges carry **values forward** during the forward pass, and **gradients backward** during the backward pass.
-- Each node needs exactly two things to do its job on the way back: its own **local derivative** (how my output changes when my input changes — a one-line fact about that operation alone), and the **gradient arriving from downstream** (how much L cares about my output).
-- Multiply them. That is the chain rule. Pass the result to my inputs.
-- No node ever knows what the network looks like. A relu node has never heard of the loss function. Local rule, global result — that is why the same code runs a 3-neuron toy and a 175-billion-parameter model.`,
+- **Forward pass** — running the network from input to output: each layer computes its weighted sum, squashes it, and hands the result to the next layer. It ends with a prediction and a loss.
+- **Backward pass** — walking the same network in reverse, from the loss back to the input, computing one slope per weight along the way. That is backpropagation.
+- **Local gradient** — how much one single operation's output changes when its own input changes. A one-line fact about that operation alone. Squaring has one, adding has one, relu has one. Nothing local knows about the rest of the network.
+- **Delta**, also called the **error signal** — the blame that has arrived at one particular spot in the network. Written δ. Concretely, δ at a spot is the slope of the loss with respect to the number sitting at that spot.
+- **Parameter update** — the last step: each weight moves a small distance against its own slope. w becomes w − α × (slope of loss for w), where α is the step size. This is plain gradient descent; backprop only supplies the slopes.
+
+And one recalled from the Math module, not re-derived here: the **chain rule**. When one quantity feeds another, you **multiply** the two slopes along the path. That is the only operation backprop performs.`,
     },
     { type: 'visual', component: 'NeuralNetForward', props: {} },
     {
       type: 'note',
-      md: 'Run the forward pass above a few times and change a weight. Two things to notice, because both matter in a minute. First, every neuron does the same two steps: a weighted sum (**z**), then a squashing function (**a = f(z)**). Second, the intermediate values z and a are *sitting there on screen* — the network computed them and is keeping them. It has to. The backward pass will need every one of them.',
+      md: 'Run the forward pass above and change a weight. Two things to notice, because both matter shortly. First, every neuron does the same two steps: a weighted sum (call it **z**), then a squashing function (call the result **a = f(z)**). Second, those intermediate z and a values are sitting there on screen — the network computed them and is keeping them. It has to. The backward pass will need every one of them.',
     },
     {
       type: 'math',
       intro:
-        'One hidden layer, one output, binary label. Forward first — nothing new, just naming things so the derivation has vocabulary.',
+        'One hidden layer, one output, a label that is 0 or 1. This is the forward pass in symbols — nothing new, just names so the derivation has vocabulary. W is a weight matrix, b a bias, relu(z) = max(0, z), and sigma is the sigmoid that squashes any number into the range 0 to 1.',
       latex: [
         'z^{[1]} = W^{[1]} x + b^{[1]} \\qquad a^{[1]} = \\mathrm{relu}(z^{[1]})',
         'z^{[2]} = W^{[2]} a^{[1]} + b^{[2]} \\qquad \\hat{y} = \\sigma(z^{[2]}) = \\frac{1}{1 + e^{-z^{[2]}}}',
@@ -79,7 +91,7 @@ Backprop bilkul yahi hai: **galti output pe napi gayi, phir peeche har weight se
     {
       type: 'math',
       intro:
-        'The same forward pass with real numbers, so the backward numbers below have something to hang on. x has 2 features, the hidden layer has 2 units, the label is 1.',
+        'The same forward pass with real numbers, because the backward numbers below have to hang on something. The input x has 2 features, the hidden layer has 2 units, and the true label is 1. Every number in this module comes from this one example.',
       latex: [
         'x = \\begin{bmatrix} 1 \\\\ 2 \\end{bmatrix}, \\quad W^{[1]} = \\begin{bmatrix} 0.5 & -0.5 \\\\ 1.0 & 0.5 \\end{bmatrix}, \\quad b^{[1]} = 0, \\quad W^{[2]} = \\begin{bmatrix} 1.0 & -0.5 \\end{bmatrix}, \\quad b^{[2]} = 0.25, \\quad y = 1',
         'z^{[1]} = \\begin{bmatrix} -0.5 \\\\ 2.0 \\end{bmatrix} \\;\\to\\; a^{[1]} = \\begin{bmatrix} 0 \\\\ 2.0 \\end{bmatrix} \\;\\to\\; z^{[2]} = -0.75 \\;\\to\\; \\hat{y} = 0.3208 \\;\\to\\; \\mathcal{L} = 1.1369',
@@ -88,31 +100,32 @@ Backprop bilkul yahi hai: **galti output pe napi gayi, phir peeche har weight se
     },
     {
       type: 'intuition',
-      title: 'The first step back, and a small miracle',
-      md: `Start at the loss and walk one node backwards, to z⁽²⁾ — the number just before the sigmoid.
+      title: 'The first step back, and a cancellation worth watching',
+      md: `Start at the loss and walk one step backwards, to z⁽²⁾ — the number just before the sigmoid.
 
-- Chain rule says: ∂L/∂z⁽²⁾ = (∂L/∂ŷ) · (∂ŷ/∂z⁽²⁾). Two ugly expressions.
-- ∂L/∂ŷ for cross-entropy has ŷ(1−ŷ) in the *denominator*. ∂ŷ/∂z⁽²⁾ for sigmoid is ŷ(1−ŷ). They cancel exactly.
-- What survives is **ŷ − y**. Prediction minus truth. That is it.
-- We call it **δ_out** (delta at the output) — the blame that starts the whole backward journey.
-- This cancellation is not luck: cross-entropy is *designed* as the matching loss for sigmoid, precisely so the gradient never gets squashed by the sigmoid's flat tails. (The Metrics subject derives this the other way round, from "why cross-entropy over MSE for classification" — same fact, opposite direction.)
-- Same story for softmax + categorical cross-entropy: δ_out = ŷ − y again, with one-hot y.`,
+- The chain rule says: slope of L with respect to z⁽²⁾ = (slope of L with respect to ŷ) × (slope of ŷ with respect to z⁽²⁾). Two factors, multiplied, exactly as the Math module showed.
+- The first factor, for cross-entropy loss, has ŷ(1−ŷ) sitting in its **denominator**.
+- The second factor, the sigmoid's own local gradient, is exactly ŷ(1−ŷ).
+- They cancel. What survives is **ŷ − y**: prediction minus truth, and nothing else.
+- Call it **δ_out**, the delta at the output. It is the blame that starts the whole backward journey.
+
+This cancellation is a design decision, not luck. Sigmoid is nearly flat when ŷ is close to 0 or 1, so its local gradient ŷ(1−ŷ) is tiny there — and "confidently wrong" is exactly when you most want a big update. Cross-entropy is built with that flatness in its denominator precisely so it cancels out. The next line shows the cancellation written out.`,
     },
     {
       type: 'math',
       intro:
-        'The cancellation written out, then the rest of the backward pass. Read each line as: local derivative × the delta that arrived.',
+        'The cancellation, then the rest of the backward pass. Read every line the same way: local gradient × the delta that arrived. The circled dot means multiply element by element, and the superscript T means the matrix is flipped so the same connections are read in the other direction.',
       latex: [
         '\\frac{\\partial \\mathcal{L}}{\\partial \\hat{y}} = \\frac{\\hat{y} - y}{\\hat{y}(1-\\hat{y})} \\qquad \\frac{\\partial \\hat{y}}{\\partial z^{[2]}} = \\hat{y}(1-\\hat{y})',
         '\\delta_{\\text{out}} \\equiv \\frac{\\partial \\mathcal{L}}{\\partial z^{[2]}} = \\frac{\\hat{y} - y}{\\hat{y}(1-\\hat{y})} \\cdot \\hat{y}(1-\\hat{y}) = \\hat{y} - y',
         '\\frac{\\partial \\mathcal{L}}{\\partial W^{[2]}} = \\delta_{\\text{out}} \\; a^{[1]\\top} \\qquad \\frac{\\partial \\mathcal{L}}{\\partial b^{[2]}} = \\delta_{\\text{out}}',
-        '\\delta_{\\text{hidden}} = \\left( W^{[2]\\top} \\delta_{\\text{out}} \\right) \\odot \\mathrm{relu}^{\\prime}(z^{[1]}), \\qquad \\mathrm{relu}^{\\prime}(z) = \\mathbf{1}[z > 0]',
+        '\\delta_{\\text{hidden}} = \\left( W^{[2]\\top} \\delta_{\\text{out}} \\right) \\odot \\mathrm{relu}^{\\prime}(z^{[1]}), \\qquad \\mathrm{relu}^{\\prime}(z) = 1 \\text{ if } z > 0, \\text{ else } 0',
         '\\frac{\\partial \\mathcal{L}}{\\partial W^{[1]}} = \\delta_{\\text{hidden}} \\; x^{\\top} \\qquad \\frac{\\partial \\mathcal{L}}{\\partial b^{[1]}} = \\delta_{\\text{hidden}}',
       ],
     },
     {
       type: 'math',
-      intro: 'The same five lines, with the numbers from the forward pass above. Every value here is one multiplication away from the one before it.',
+      intro: 'The same five lines with the numbers from the forward pass above. Every value here is one multiplication away from the one before it — no new ideas, only arithmetic.',
       latex: [
         '\\delta_{\\text{out}} = 0.3208 - 1 = -0.6792',
         '\\frac{\\partial \\mathcal{L}}{\\partial W^{[2]}} = -0.6792 \\cdot \\begin{bmatrix} 0 & 2.0 \\end{bmatrix} = \\begin{bmatrix} 0 & -1.3584 \\end{bmatrix}',
@@ -122,507 +135,537 @@ Backprop bilkul yahi hai: **galti output pe napi gayi, phir peeche har weight se
     },
     {
       type: 'note',
-      md: 'Look at the zeros. Hidden unit 1 had z = −0.5, so relu switched it off — and its entire row of ∂L/∂W1 is zero. **A neuron that did not contribute to the prediction receives no blame and gets no update.** That is relu\'s local derivative (1 if on, 0 if off) doing its job, and it is also the mechanism behind "dying relu": a unit that is off for every sample in the data never gets a gradient again, forever.',
+      md: 'Look at the zeros. Hidden unit 1 had z = −0.5, so relu switched it off and its output was 0 — and its entire row of slopes is zero. **A neuron that contributed nothing to the prediction receives no blame and gets no update.** That is relu\'s local gradient (1 when the unit is on, 0 when it is off) doing its job. It is also the mechanism behind the "dying relu" problem: a unit that is off for every sample in the dataset never receives a slope again, so it never comes back.',
     },
     {
       type: 'note',
-      md: 'Now say the pattern out loud, because it is the whole module and it is two sentences. **Every gradient is (local derivative) × (upstream delta).** And **every weight gradient is (delta at this layer) × (the activation feeding into it)** — look at ∂L/∂W2 = δ_out · a1ᵀ and ∂L/∂W1 = δ_hidden · xᵀ: same shape, different names. If you can recite these two lines and point at where each factor comes from, you can derive backprop for any layer anyone puts on a whiteboard.',
+      md: 'Now say the pattern out loud, because it is the whole module in two sentences. **Every slope is (local gradient) × (delta arriving from downstream).** And **every weight slope is (delta at this layer) × (the value that fed into it)** — compare the two lines above: ∂L/∂W2 uses δ_out times a1, and ∂L/∂W1 uses δ_hidden times x. Same rule, different names. If you can recite those two sentences and point at where each factor came from, you can derive backprop for any layer anyone puts on a whiteboard.',
     },
     {
       type: 'note',
-      md: 'In the stepper below, each frame is **one chain-rule multiplication** — watch a number arrive from the right, get multiplied by a local derivative sitting on the node, and continue left. Nothing else happens; there is no other operation in backprop. The last frames switch to the SGD update: w := w − α·∂L/∂w, applied once per weight, and the loss for that input drops. Step through it twice — once watching the deltas, once watching the weights change.',
+      md: 'In the stepper below, each frame is **one chain-rule multiplication**: watch a number arrive from the right, get multiplied by a local gradient sitting on a node, and continue left. Nothing else happens — there is no second operation in backprop. The last frames switch to the update: each weight moves against its own slope, and the loss for that input drops. Step through it twice, once watching the deltas and once watching the weights change.',
     },
     { type: 'visual', component: 'BackpropStepper', props: {} },
     {
       type: 'intuition',
-      title: 'Batches: the same math, one axis wider',
-      md: `Nobody trains on one sample. Stack B samples as rows of a matrix X and the derivation barely changes.
+      title: 'Now build it, one stage at a time',
+      md: `The next seven snippets are one network and one training step, split so that no snippet holds more than a few new ideas. They run in order and share their variables, like lines typed one after another into the same Python session.
 
-- Forward becomes matrix multiplies: Z1 = XW1 + b1, A1 = relu(Z1), and so on. Every row is an independent sample.
-- Δ_out = Ŷ − Y is now (B × 1): one delta per sample, still just prediction minus truth.
-- Weight gradients become a matmul instead of an outer product: ∂L/∂W2 = A1ᵀ Δ_out. **That matmul is a sum over the batch axis.**
-- Bias gradients are a plain sum down the batch axis, because a bias is added identically to every sample.
-- Why sum, not average-by-magic: the batch loss is defined as the *mean* over samples, and the derivative of a sum is the sum of derivatives. The 1/B either sits in the loss or gets divided in once at the delta — pick one place and be consistent. (Both appear in real code; mixing them silently scales your learning rate by B.)`,
-    },
-    {
-      type: 'math',
-      intro: 'The vectorized form. B = batch size. Note where the 1/B lives.',
-      latex: [
-        '\\mathcal{L} = \\frac{1}{B}\\sum_{i=1}^{B} \\mathcal{L}_i \\quad \\Rightarrow \\quad \\Delta_{\\text{out}} = \\frac{1}{B}\\left( \\hat{Y} - Y \\right) \\in \\mathbb{R}^{B \\times 1}',
-        '\\frac{\\partial \\mathcal{L}}{\\partial W^{[2]}} = A^{[1]\\top} \\Delta_{\\text{out}} \\qquad \\frac{\\partial \\mathcal{L}}{\\partial b^{[2]}} = \\sum_{i=1}^{B} \\Delta_{\\text{out},i}',
-        '\\Delta_{\\text{hidden}} = \\left( \\Delta_{\\text{out}} W^{[2]\\top} \\right) \\odot \\mathbf{1}[Z^{[1]} > 0] \\qquad \\frac{\\partial \\mathcal{L}}{\\partial W^{[1]}} = X^\\top \\Delta_{\\text{hidden}}',
-      ],
+- Plain lists and loops. No library except \`math\`, for the exponential and the logarithm.
+- Every number matches the hand arithmetic above, so you can check the code against the maths at every stage.
+- Stage 1 and 2 are the forward pass. Stage 3 and 4 are the backward pass. Stage 5 checks the answer. Stage 6 updates the weights and stage 7 shows the loss falling.`,
     },
     {
       type: 'code',
       lang: 'python',
-      title: 'A whole neural network, from scratch, learning XOR — forward, backward, update',
-      code: `import numpy as np
+      title: 'Stage 1: the network\'s numbers, and the hidden layer',
+      code: `import math
 
-X = np.array([[0., 0.], [0., 1.], [1., 0.], [1., 1.]])   # (4, 2) one row per sample
-y = np.array([[0.], [1.], [1.], [0.]])                   # XOR: no straight line does this
+x = [1.0, 2.0]
+y = 1.0
+W1 = [[0.5, -0.5], [1.0, 0.5]]
+b1 = [0.0, 0.0]
+W2 = [1.0, -0.5]
+b2 = 0.25
 
-rng = np.random.default_rng(0)
-H = 4                                                    # hidden units
-W1 = rng.normal(0, 1.0, (2, H)); b1 = np.zeros((1, H))
-W2 = rng.normal(0, 1.0, (H, 1)); b2 = np.zeros((1, 1))
-lr, m = 0.5, X.shape[0]
+z1 = [W1[0][0] * x[0] + W1[0][1] * x[1] + b1[0],
+      W1[1][0] * x[0] + W1[1][1] * x[1] + b1[1]]
+a1 = [max(0.0, z1[0]), max(0.0, z1[1])]
+print('z1 =', z1[0], z1[1])
+print('a1 =', a1[0], a1[1])
 
-for epoch in range(1201):
-    # ---------- forward ----------
-    z1 = X @ W1 + b1                 # (4, H)
-    a1 = np.maximum(0, z1)           # relu
-    z2 = a1 @ W2 + b2                # (4, 1)
-    yh = 1 / (1 + np.exp(-z2))       # sigmoid
-    loss = -np.mean(y * np.log(yh + 1e-9) + (1 - y) * np.log(1 - yh + 1e-9))
-
-    # ---------- backward ----------
-    d2 = (yh - y) / m                # delta at the output layer
-    dW2 = a1.T @ d2                  # (activation in)^T @ delta
-    db2 = d2.sum(0, keepdims=True)   # sum over the batch axis
-    d1 = (d2 @ W2.T) * (z1 > 0)      # through W2, then through relu's gate
-    dW1 = X.T @ d1
-    db1 = d1.sum(0, keepdims=True)
-
-    # ---------- update ----------
-    W2 -= lr * dW2; b2 -= lr * db2
-    W1 -= lr * dW1; b1 -= lr * db1
-    if epoch % 200 == 0:
-        print(f"epoch {epoch:5d}  loss {loss:.4f}")
-
-print("preds", np.round(yh.ravel(), 4))
-print("labels", y.ravel())
-
-# ---------- real output ----------
-# epoch     0  loss 0.8383
-# epoch   200  loss 0.0463
-# epoch   400  loss 0.0156
-# epoch   600  loss 0.0090
-# epoch   800  loss 0.0061
-# epoch  1000  loss 0.0046
-# epoch  1200  loss 0.0037
-# preds [0.0101 0.9983 0.9983 0.0013]
-# labels [0. 1. 1. 0.]`,
+# ---- real output ----
+# z1 = -0.5 2.0
+# a1 = 0.0 2.0`,
       annotations: {
-        4: 'XOR is the classic reason hidden layers exist: no single line separates {(0,1),(1,0)} from {(0,0),(1,1)}. A network with no hidden layer is stuck at loss ~0.69 forever.',
-        8: 'Weights random, biases zero. If ALL weights started equal, every hidden unit would compute the same thing and receive the same gradient forever — random init is what breaks that symmetry.',
-        14: 'z1 and a1 are computed here and still needed on line 22 and line 24. That is why training stores activations — and why batch size hits a memory wall.',
-        20: 'Everything below is 6 lines. That is the entire backward pass for this network — no library, no magic.',
-        21: 'The whole derivation collapses to this because sigmoid + BCE cancel. Divide by m here so the gradient matches the MEAN loss on line 18.',
-        22: '(delta at this layer) × (activation feeding in). Transposed and matmul-ed because the sum over the batch axis is baked into the matmul.',
-        23: 'Bias gradient = plain sum over samples: a bias is added identically to every row, so every row votes on it.',
-        24: 'Two multiplications, exactly as derived: push delta back through W2, then multiply by relu\'s local derivative (z1 > 0), which is 1 for live units and 0 for dead ones.',
-        29: 'Gradient descent, unchanged from the linear-regression module. Backprop only supplies the numbers; the update rule was never the hard part.',
+        1: 'Imports the math module, which we need for exp (the exponential, used by sigmoid) and log (the logarithm, used by the loss). Nothing else is imported anywhere in this module.',
+        3: 'The one input example: two features, worth 1.0 and 2.0.',
+        4: 'Its true label. 1.0 means this example belongs to the positive class.',
+        5: 'The first layer\'s weights, as a list of two rows. Row 0 is hidden unit 0\'s two weights; row 1 is hidden unit 1\'s. So W1[1][0] is the weight from input feature 0 into hidden unit 1.',
+        6: 'One bias per hidden unit, both starting at zero. A bias is added to the weighted sum regardless of the input.',
+        7: 'The second layer has one output neuron reading two hidden units, so it needs just two weights — a flat list, not a list of rows.',
+        8: 'The output neuron\'s single bias.',
+        10: 'Hidden unit 0\'s weighted sum: each weight times its matching input, added up, plus the bias. That is 0.5(1.0) + (-0.5)(2.0) + 0 = -0.5.',
+        11: 'The same sum for hidden unit 1: 1.0(1.0) + 0.5(2.0) + 0 = 2.0. The two lines together build the list z1, which is why line 10 ends with a comma and no closing bracket.',
+        12: 'Apply relu to each weighted sum. relu(z) is max(0, z): keep the number if it is positive, otherwise return 0. Unit 0 gets 0.0 because its sum was negative; unit 1 keeps 2.0.',
+        13: 'Print both weighted sums. Check them against the hand arithmetic above: -0.5 and 2.0.',
+        14: 'Print both activations. The 0.0 here is unit 0 being switched off by relu, and that zero is going to matter in stage 4.',
       },
-    },
-    {
-      type: 'note',
-      md: 'Read the output once more. Loss 0.8383 → 0.0037, and the predictions are 0.01, 0.998, 0.998, 0.001 against labels 0, 1, 1, 0. Forty lines of NumPy just learned a function that a linear model provably cannot represent. Nothing in that file knows what "deep learning" is — it is a forward pass, six lines of chain rule, and a subtraction.',
-    },
-    {
-      type: 'intuition',
-      title: 'Gradient checking: the only way to know you got it right',
-      md: `A wrong backward pass does not crash. It trains — just badly — and you spend a week blaming the learning rate. So you check it, once, against the naive method.
-
-- Take one parameter. Nudge it +ε, compute the loss. Nudge it −ε, compute the loss. The slope between them is the numerical gradient.
-- Compare against your analytic gradient with a **relative** error, not an absolute one — gradients differ in scale by orders of magnitude across layers.
-- Use **central differences** ((L₊ − L₋)/2ε), not one-sided: the error is O(ε²) instead of O(ε), for one extra forward pass.
-- Use float64, ε ≈ 1e−5, and turn OFF anything random (dropout, augmentation) — otherwise you are differencing two different functions.
-- One relu gotcha: if a unit sits exactly at z = 0, the ± nudge straddles the kink and the numerical gradient is simply wrong there. Perturb away from exact zeros, or ignore those entries.
-- This is a debug tool, never a training tool: it costs two forward passes **per parameter**. Run it once on a tiny network, then delete the call.`,
-    },
-    {
-      type: 'math',
-      intro: 'The formula and the numbers you should expect. θ_k is one scalar parameter, e_k the unit vector that picks it out.',
-      latex: [
-        '\\frac{\\partial \\mathcal{L}}{\\partial \\theta_k} \\;\\approx\\; \\frac{\\mathcal{L}(\\theta + \\varepsilon e_k) - \\mathcal{L}(\\theta - \\varepsilon e_k)}{2\\varepsilon}, \\qquad \\varepsilon = 10^{-5}',
-        '\\text{rel. err} = \\frac{\\lVert g_{\\text{num}} - g_{\\text{analytic}} \\rVert_2}{\\lVert g_{\\text{num}} \\rVert_2 + \\lVert g_{\\text{analytic}} \\rVert_2}',
-        '< 10^{-7}: \\text{ correct} \\qquad 10^{-7} \\text{ to } 10^{-5}: \\text{ acceptable (relu kinks, float noise)} \\qquad > 10^{-3}: \\text{ you have a bug}',
-      ],
     },
     {
       type: 'code',
       lang: 'python',
-      title: 'Gradient checking the network above — run this once, then never again',
-      code: `import numpy as np
+      title: 'Stage 2: the output, the prediction, and the loss',
+      code: `z2 = W2[0] * a1[0] + W2[1] * a1[1] + b2
+yhat = 1.0 / (1.0 + math.exp(-z2))
+loss = -(y * math.log(yhat) + (1 - y) * math.log(1 - yhat))
+print('z2   =', round(z2, 4))
+print('yhat =', round(yhat, 4))
+print('loss =', round(loss, 4))
 
-X = np.array([[0., 0.], [0., 1.], [1., 0.], [1., 1.]])
-y = np.array([[0.], [1.], [1.], [0.]])
-rng = np.random.default_rng(0)
-P = {'W1': rng.normal(0, 1, (2, 4)), 'b1': rng.normal(0, 0.3, (1, 4)),
-     'W2': rng.normal(0, 1, (4, 1)), 'b2': rng.normal(0, 0.3, (1, 1))}
-
-def loss_of(P):                                  # forward only -> one scalar
-    a1 = np.maximum(0, X @ P['W1'] + P['b1'])
-    yh = 1 / (1 + np.exp(-(a1 @ P['W2'] + P['b2'])))
-    return -np.mean(y * np.log(yh) + (1 - y) * np.log(1 - yh))
-
-def grads(P):                                    # the analytic backward pass
-    m = X.shape[0]
-    z1 = X @ P['W1'] + P['b1']; a1 = np.maximum(0, z1)
-    yh = 1 / (1 + np.exp(-(a1 @ P['W2'] + P['b2'])))
-    d2 = (yh - y) / m
-    d1 = (d2 @ P['W2'].T) * (z1 > 0)
-    return {'W1': X.T @ d1, 'b1': d1.sum(0, keepdims=True),
-            'W2': a1.T @ d2, 'b2': d2.sum(0, keepdims=True)}
-
-eps, g = 1e-5, grads(P)
-for name, w in P.items():
-    num = np.zeros_like(w)
-    for i in np.ndindex(w.shape):                # perturb ONE scalar at a time
-        old = w[i]
-        w[i] = old + eps; lp = loss_of(P)
-        w[i] = old - eps; lm = loss_of(P)
-        w[i] = old
-        num[i] = (lp - lm) / (2 * eps)           # central difference
-    rel = np.linalg.norm(num - g[name]) / (np.linalg.norm(num) + np.linalg.norm(g[name]))
-    print(f"{name}: relative error {rel:.3e}")
-
-# ---------- real output ----------
-# W1: relative error 1.421e-11
-# b1: relative error 1.286e-11
-# W2: relative error 3.602e-12
-# b2: relative error 6.092e-12`,
+# ---- real output ----
+# z2   = -0.75
+# yhat = 0.3208
+# loss = 1.1369`,
       annotations: {
-        6: 'Biases are seeded away from zero on purpose. With b1 = 0 and the input row (0, 0), z1 lands exactly on relu\'s kink and the numerical gradient for b1 comes back off by 20% — a false alarm that has cost many people an afternoon.',
-        18: 'Same two lines as the training loop. Gradient checking tests the code you actually ship, not a re-derivation of it.',
-        26: 'Two forward passes per scalar parameter. Fine for 17 parameters, absurd for 25 million — this is the naive method from the top of the module, kept as a unit test.',
-        31: 'Central difference: error shrinks as eps^2. The one-sided version (L(x+eps) - L(x))/eps is cheaper but O(eps) and gives noisier verdicts.',
-        32: 'Relative error, not absolute. A gradient of 1e-8 that is off by 1e-9 is broken; a gradient of 1e4 off by 1e-9 is perfect.',
-        36: 'All four ~1e-11 or better, comfortably under the 1e-7 threshold. The backward pass is correct.',
+        1: 'The output neuron\'s weighted sum, built exactly like the hidden ones but reading a1 instead of x: 1.0(0.0) + (-0.5)(2.0) + 0.25 = -0.75.',
+        2: 'The sigmoid: 1 divided by (1 plus e to the minus z). It squashes any real number into the range 0 to 1, so the answer can be read as a probability. At z2 = -0.75 it returns 0.3208.',
+        3: 'Binary cross-entropy loss. Because y is 1.0 here, the second half multiplies by (1 - 1) = 0 and vanishes, leaving -log(0.3208) = 1.1369. The minus sign in front makes the whole thing positive, so smaller means better.',
+        4: 'round(value, 4) cuts a float to four decimal places so the output is readable instead of showing seventeen digits.',
+        5: 'The model says 0.3208, meaning "probably not the positive class". The truth is 1. This is a confident mistake.',
+        6: 'The loss, 1.1369. A perfect prediction of 1.0 would give a loss of 0. That gap is what the backward pass is about to attribute to individual weights.',
+      },
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Stage 3: the gradient at the output layer',
+      code: `d_out = yhat - y
+dW2 = [d_out * a1[0], d_out * a1[1]]
+db2 = d_out
+print('d_out =', round(d_out, 4))
+print('dW2   =', round(dW2[0], 4), round(dW2[1], 4))
+print('db2   =', round(db2, 4))
+
+# ---- real output ----
+# d_out = -0.6792
+# dW2   = -0.0 -1.3584
+# db2   = -0.6792`,
+      annotations: {
+        1: 'The delta at the output: prediction minus truth, 0.3208 - 1.0 = -0.6792. This one subtraction is the entire first step of the backward pass, because the sigmoid and cross-entropy factors cancelled.',
+        2: 'The two slopes for the output weights, using the rule (delta at this layer) times (the value that fed in). The values that fed in are a1[0] = 0.0 and a1[1] = 2.0, so the slopes are -0.6792(0.0) and -0.6792(2.0).',
+        3: 'The bias slope is the delta itself. A bias is added straight into the sum, so its local gradient is 1, and multiplying the delta by 1 changes nothing.',
+        4: 'Negative, which reads as: increasing z2 would decrease the loss. That makes sense — the prediction is too low and z2 controls it.',
+        5: 'Prints -0.0 and -1.3584. Python prints -0.0 when a negative number is multiplied by zero; it is plain zero, and it means that weight gets no update from this example because the hidden unit feeding it produced nothing.',
+        6: 'The bias slope, identical to d_out as expected from line 3.',
+      },
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Stage 4: pushing the delta one layer further back',
+      code: `slope1 = 1.0 if z1[0] > 0 else 0.0
+slope2 = 1.0 if z1[1] > 0 else 0.0
+d_hid = [d_out * W2[0] * slope1, d_out * W2[1] * slope2]
+dW1 = [[d_hid[0] * x[0], d_hid[0] * x[1]],
+       [d_hid[1] * x[0], d_hid[1] * x[1]]]
+db1 = [d_hid[0], d_hid[1]]
+print('relu slopes =', slope1, slope2)
+print('d_hid       =', round(d_hid[0], 4), round(d_hid[1], 4))
+print('dW1 row 0   =', round(dW1[0][0], 4), round(dW1[0][1], 4))
+print('dW1 row 1   =', round(dW1[1][0], 4), round(dW1[1][1], 4))
+
+# ---- real output ----
+# relu slopes = 0.0 1.0
+# d_hid       = -0.0 0.3396
+# dW1 row 0   = -0.0 -0.0
+# dW1 row 1   = 0.3396 0.6792`,
+      annotations: {
+        1: 'relu\'s local gradient for hidden unit 0. "1.0 if condition else 0.0" is a Python conditional expression: it checks the condition and the whole line becomes the first value when true, the second when false. relu is flat below zero, so its slope there is 0; above zero relu just copies its input, so its slope is 1.',
+        2: 'The same for hidden unit 1. Its weighted sum was 2.0, which is above zero, so this one is 1.0.',
+        3: 'Two multiplications per unit, exactly as the maths said. First the delta travels back through the output weight W2[j] — that is how much this hidden unit influenced z2. Then it is multiplied by relu\'s local gradient, which is the gate that kills it if the unit was off.',
+        4: 'The slopes for hidden unit 0\'s two incoming weights: (delta at this unit) times (the input feature that fed it). Both come out zero because d_hid[0] is zero.',
+        5: 'The same for hidden unit 1: 0.3396 times x[0] = 1.0, and 0.3396 times x[1] = 2.0. Feature 1 was twice as large, so its weight gets twice the slope.',
+        6: 'The hidden bias slopes are the deltas themselves, same reason as at the output layer. Written as a fresh list rather than reusing d_hid, so that changing one list later can never silently change the other.',
+        7: 'Prints 0.0 and 1.0 — unit 0 shut, unit 1 open.',
+        8: 'The blame that reached each hidden unit. Unit 0 gets nothing at all, because it contributed nothing.',
+        9: 'Unit 0\'s weight slopes: both zero. This whole row of the network learns nothing from this example.',
+        10: 'Unit 1\'s weight slopes: 0.3396 and 0.6792, matching the hand-computed matrix above exactly. The backward pass is now complete — every weight in the network has a slope.',
       },
     },
     {
       type: 'intuition',
-      title: 'Vanishing and exploding gradients: the bill for multiplying',
-      md: `Backprop is a chain of multiplications. Chains of multiplications do exactly two things over long distances: collapse or blow up.
+      title: 'Checking the answer: measure one slope directly',
+      md: `A wrong backward pass does not crash. It produces numbers, the network trains on them badly, and you spend a week blaming the step size. So check it once, against the slow method from the top of the module.
 
-- Each layer you cross multiplies the delta by Wᵀ and by the activation's derivative.
-- Sigmoid's derivative peaks at **0.25** and is smaller everywhere else. Cross 20 sigmoid layers and the surviving factor is at most 0.25²⁰ ≈ 10⁻¹².
-- The early layers get a gradient of essentially zero. They stop learning while the last layers train fine. That is **vanishing gradients** — the reason nobody could train deep networks before 2010.
-- The other direction: if the factors average above 1, the delta grows geometrically. 1.5²⁰ ≈ 3300, and one step later your weights are NaN. That is **exploding gradients**, and it is why RNNs were notorious.
-- The tell: gradient norms per layer. Vanishing = tiny at the input end, normal at the output end. Exploding = loss spikes to NaN in one step.
-- The fixes are the whole next module — relu (derivative exactly 1 when on), He/Xavier init, batch/layer norm, residual connections (a gradient highway that skips the multiplications), and gradient clipping for the explosive case.`,
+- Pick **one** weight. Set it to w + ε, run the forward pass, record the loss. Set it to w − ε, run the forward pass, record the loss. The slope between those two points is a direct measurement.
+- Divide the difference by **2ε**, not ε, because the two points are 2ε apart. This is the same measurement the Math module used.
+- Use ε ≈ 1e−5. Too large and you are measuring the average slope over a wide gap; too small and the two loss values are so close that floating-point rounding eats the difference.
+- The weight to check here is W1[1][0], where backprop claimed the slope is **0.3396**.
+- This is a debugging tool only. It costs two full forward passes for every single weight, which is exactly the hopeless cost from the top of the module. Run it once on a tiny network, then delete the call.
+
+One warning specific to relu: if a unit sits exactly at z = 0, nudging it by ±ε straddles relu\'s corner, where the slope jumps from 0 to 1. The measurement there is genuinely meaningless. Check a weight whose units are clearly on or clearly off.`,
     },
     {
-      type: 'math',
-      intro: 'Why depth is a product, in one line. f is the activation, ℓ indexes layers.',
-      latex: [
-        '\\delta^{[\\ell]} = \\left( W^{[\\ell+1]\\top} \\delta^{[\\ell+1]} \\right) \\odot f^{\\prime}(z^{[\\ell]}) \\quad \\Rightarrow \\quad \\lVert \\delta^{[1]} \\rVert \\;\\sim\\; \\lVert \\delta^{[L]} \\rVert \\prod_{\\ell=2}^{L} \\lVert W^{[\\ell]} \\rVert \\cdot \\lvert f^{\\prime} \\rvert',
-        '\\sigma^{\\prime}(z) = \\sigma(z)(1 - \\sigma(z)) \\le 0.25 \\quad \\Rightarrow \\quad 0.25^{20} \\approx 10^{-12} \\quad \\text{(vanished)}',
-        '\\text{factor } 1.5 \\text{ per layer} \\quad \\Rightarrow \\quad 1.5^{20} \\approx 3.3 \\times 10^{3} \\quad \\text{(exploded)}',
-      ],
+      type: 'code',
+      lang: 'python',
+      title: 'Stage 5: does backprop agree with a direct measurement?',
+      code: `def loss_for(w):
+    zA = W1[0][0] * x[0] + W1[0][1] * x[1] + b1[0]
+    zB = w * x[0] + W1[1][1] * x[1] + b1[1]
+    z = W2[0] * max(0.0, zA) + W2[1] * max(0.0, zB) + b2
+    p = 1.0 / (1.0 + math.exp(-z))
+    return -math.log(p)
+
+eps = 1e-5
+up = loss_for(W1[1][0] + eps)
+down = loss_for(W1[1][0] - eps)
+measured = (up - down) / (2 * eps)
+print('loss at w + eps =', round(up, 9))
+print('loss at w - eps =', round(down, 9))
+print('measured slope  =', round(measured, 6))
+print('backprop said   =', round(dW1[1][0], 6))
+
+# ---- real output ----
+# loss at w + eps = 1.136874402
+# loss at w - eps = 1.13686761
+# measured slope  = 0.339589
+# backprop said   = 0.339589`,
+      annotations: {
+        1: 'A function that runs the whole forward pass and returns just the loss, with one weight replaced by whatever value w you pass in. Everything else is read from the variables already defined in stage 1.',
+        2: 'Hidden unit 0\'s weighted sum, untouched — this weight is not the one being tested.',
+        3: 'Hidden unit 1\'s weighted sum, but using the passed-in w instead of W1[1][0]. This is the only line where the substitution happens, and nothing outside the function is modified.',
+        4: 'The output sum, with relu applied inline via max(0.0, ...) to keep the function short.',
+        5: 'The sigmoid, same formula as stage 2.',
+        6: 'The loss. Since y is 1, binary cross-entropy reduces to -log(p), so we write only that half.',
+        8: 'The nudge size. 1e-5 is Python for 0.00001.',
+        9: 'Loss with the weight nudged up by eps.',
+        10: 'Loss with the weight nudged down by eps. Two separate calls, so the real W1 is never altered.',
+        11: 'Rise over run. The rise is the difference between the two losses; the run is 2 * eps, because the two test points sit eps on either side of the real weight.',
+        12: 'The two losses printed to nine decimals, because they differ only in the seventh. That closeness is why eps cannot be made much smaller.',
+        13: 'The same, one nudge below.',
+        14: 'The measured slope: 0.339589.',
+        15: 'What the backward pass computed in stage 4: 0.339589. Identical to six decimal places. The backward pass is correct, and this is the only way to know that without guessing.',
+      },
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Stage 6: the parameter update',
+      code: `lr = 0.5
+for j in range(2):
+    for k in range(2):
+        W1[j][k] = W1[j][k] - lr * dW1[j][k]
+    b1[j] = b1[j] - lr * db1[j]
+    W2[j] = W2[j] - lr * dW2[j]
+b2 = b2 - lr * db2
+print('W1 row 0 =', round(W1[0][0], 4), round(W1[0][1], 4))
+print('W1 row 1 =', round(W1[1][0], 4), round(W1[1][1], 4))
+print('b1       =', round(b1[0], 4), round(b1[1], 4))
+print('W2 =', round(W2[0], 4), round(W2[1], 4), ' b2 =', round(b2, 4))
+
+# ---- real output ----
+# W1 row 0 = 0.5 -0.5
+# W1 row 1 = 0.8302 0.1604
+# b1       = 0.0 -0.1698
+# W2 = 1.0 0.1792  b2 = 0.5896`,
+      annotations: {
+        1: 'The step size, usually called the learning rate. 0.5 is large for real work but keeps the change visible in one step.',
+        2: 'Walk over the two hidden units, j = 0 then j = 1.',
+        3: 'Walk over the two input features feeding this hidden unit, k = 0 then k = 1.',
+        4: 'The update rule: new weight = old weight minus step size times its slope. The minus sign is what makes it descent — a positive slope means the loss rises as the weight rises, so the weight must go down.',
+        5: 'The same rule for this hidden unit\'s bias.',
+        6: 'The same rule for the output weight reading this hidden unit. It fits in this loop because there are exactly as many output weights as hidden units.',
+        7: 'The output bias, updated once, outside the loop, because there is only one of it.',
+        8: 'Row 0 is unchanged: 0.5 and -0.5, exactly as it started. Its slopes were zero, so the update moved it by zero.',
+        9: 'Row 1 moved: 1.0 became 0.8302 and 0.5 became 0.1604. Both went down, because both slopes were positive.',
+        10: 'The hidden biases: unit 0 stayed at zero, unit 1 dropped to -0.1698.',
+        11: 'The output layer: W2[0] unchanged for the same reason as row 0, W2[1] moved from -0.5 up to 0.1792, and the output bias rose from 0.25 to 0.5896.',
+      },
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Stage 7: run the forward pass again and watch the loss fall',
+      code: `z1 = [W1[0][0] * x[0] + W1[0][1] * x[1] + b1[0],
+      W1[1][0] * x[0] + W1[1][1] * x[1] + b1[1]]
+a1 = [max(0.0, z1[0]), max(0.0, z1[1])]
+z2 = W2[0] * a1[0] + W2[1] * a1[1] + b2
+yhat = 1.0 / (1.0 + math.exp(-z2))
+loss = -math.log(yhat)
+print('yhat was 0.3208, now', round(yhat, 4))
+print('loss was 1.1369, now', round(loss, 4))
+
+# ---- real output ----
+# yhat was 0.3208, now 0.6825
+# loss was 1.1369, now 0.382`,
+      annotations: {
+        1: 'Hidden unit 0\'s weighted sum again, with the updated weights. Same two lines as stage 1 — only the numbers inside W1 and b1 have changed.',
+        2: 'Hidden unit 1\'s weighted sum, now using the updated row 1.',
+        3: 'relu again, unchanged.',
+        4: 'The output sum, using the updated W2 and b2.',
+        5: 'The sigmoid, unchanged.',
+        6: 'The loss. Written as just -log(yhat) because y is 1, the same shortcut as stage 5.',
+        7: 'The prediction moved from 0.3208 to 0.6825 — from the wrong side of 0.5 to the right side, in a single step.',
+        8: 'The loss dropped from 1.1369 to 0.382, about a third of what it was. That is one complete training step: forward, backward, update. Repeat it a few thousand times on many examples and you have trained a neural network.',
+      },
     },
     {
       type: 'intuition',
-      title: 'What autograd actually does (spoiler: this)',
-      md: `You will never write those six lines again after this module. Here is exactly what replaces them.
+      title: 'What changes when you train on a batch',
+      md: `Nobody trains on one example at a time. Real training uses a **batch**: a group of examples, say 32 or 256, that the network processes before the weights move once. The maths barely changes.
 
-- During the **forward** pass, the framework records the graph: every operation you perform, its inputs, and the output tensor it produced. This is the "tape".
-- Every operation ships with its own local-derivative rule, written once by the library authors. Multiply knows its derivative. Relu knows its derivative.
-- \`loss.backward()\` walks that tape in reverse order, calling each local rule and multiplying by the delta that arrived — the exact procedure you just did by hand.
-- Gradients accumulate into \`.grad\` on each leaf tensor. **Accumulate**, not overwrite: that is why you call \`optimizer.zero_grad()\` every step, and also how gradient accumulation over micro-batches works for free.
-- \`torch.no_grad()\` at inference simply says "don't record the tape" — which is why inference uses far less memory than training.
-- There is no magic anywhere in this. Autograd is bookkeeping plus a table of derivatives.`,
+- Each example gets its own forward pass and its own backward pass, producing its own set of slopes.
+- The slopes for a given weight are then **added up across the batch**, and the sum is divided by the batch size B to give an average.
+- Why added? Because the batch loss is defined as the average of the individual losses, and the slope of a sum is the sum of the slopes. Each example contributes its own share of blame to the same shared weight.
+- Bias slopes are the plainest case: the same bias is added to every example, so its slope is simply the sum of every example's delta.
+- The one thing to be careful about: the 1/B belongs in exactly **one** place, either in the loss or once when the delta is computed. Putting it in both silently divides your step size by B, and the only symptom is training that is mysteriously slow.
+
+In library code this batching is done with matrix multiplications rather than an explicit loop, because a matrix multiply already contains the sum over examples. The arithmetic is identical to running the loop; it is only faster.`,
     },
     {
-      type: 'note',
-      md: 'The memory bill, since it decides your batch size. The backward pass needs the activations from the forward pass (line 22 above uses a1; line 24 uses z1) — so **every intermediate tensor stays in memory until its gradient is computed**. Activation memory scales with batch size × depth × layer width, and on big models it dwarfs the weights. That is the real reason "CUDA out of memory" arrives when you double the batch size. The escape hatch is gradient checkpointing: store only a few activations, recompute the rest during the backward pass — trading roughly 30% more compute for a large memory saving. Covered properly in Level 3, training at scale.',
+      type: 'intuition',
+      title: 'Why very deep networks were hard: vanishing gradients',
+      md: `Backprop is a chain of multiplications, one per layer crossed. Chains of multiplications do exactly two things over long distances: they collapse towards zero, or they blow up.
+
+- Each layer you cross multiplies the delta by the layer's weights and by the activation function's local gradient.
+- The sigmoid's local gradient is at most **0.25**, and usually much less. Cross 20 sigmoid layers and the delta has been multiplied by at most 0.25 twenty times, which is about 0.000000000001.
+- The early layers therefore receive a slope of essentially zero and stop learning, while the last layers train normally. That is the **vanishing gradient** problem, and it is why deep networks were considered untrainable before about 2010.
+- The opposite also happens: if the factors are consistently above 1, the delta grows geometrically and the weights become meaningless within a few steps.
+- The fixes — relu (local gradient exactly 1 when the unit is on), careful weight initialisation, normalisation layers, and skip connections — belong to the modules that follow. **Activation Functions** covers the activation half properly.
+
+The point for this module is only that the problem is a direct consequence of the one operation backprop performs. Multiply enough small numbers together and you get nothing.`,
     },
     {
-      type: 'visual',
-      component: 'PythonPlayground',
-      props: {
-        code: `import numpy as np
+      type: 'intuition',
+      title: 'Worked case: a full forward and backward pass by hand',
+      md: `Different numbers, same network shape, done entirely with pen and paper. Input x = [2, 1], label y = 0. Weights: hidden unit 0 has [1.0, −1.0] and hidden unit 1 has [0.5, 1.0], both biases 0. The output weights are [1.0, 1.0] with bias −1.0.
 
-EPS = 1e-5  # <-- change me: 1e-2, then 1e-5, then 1e-12
+- **Forward, hidden layer.** Unit 0: 1.0(2) + (−1.0)(1) + 0 = **1.0**. Unit 1: 0.5(2) + 1.0(1) + 0 = **2.0**. Both are positive, so relu keeps both: a1 = [1.0, 2.0].
+- **Forward, output.** z2 = 1.0(1.0) + 1.0(2.0) + (−1.0) = **2.0**. Sigmoid: 1/(1 + e^−2) = **0.8808**.
+- **Loss.** The label is 0, so binary cross-entropy is −log(1 − 0.8808) = −log(0.1192) = **2.1269**. Badly wrong, as expected: the model said 0.88 for something that is 0.
+- **δ_out.** Prediction minus truth: 0.8808 − 0 = **0.8808**. Positive this time, meaning the output is too high and z2 must come down.
+- **Output weight slopes.** δ_out times each incoming activation: 0.8808(1.0) = **0.8808** and 0.8808(2.0) = **1.7616**. Bias slope = **0.8808**.
+- **δ at the hidden units.** Push δ_out back through each output weight: 0.8808(1.0) = 0.8808 for both units. Then multiply by relu\'s local gradient, which is 1 for both because both sums were positive. So δ_hidden = **[0.8808, 0.8808]**.
+- **Hidden weight slopes.** Each δ times each input feature. Unit 0: 0.8808(2) = **1.7616** and 0.8808(1) = **0.8808**. Unit 1 gets the identical pair, because its delta happened to be identical.
+- **Update, step size 0.1.** Unit 0's weights: 1.0 − 0.1(1.7616) = **0.8238** and −1.0 − 0.1(0.8808) = **−1.0881**. Every weight moved down, which is right: the prediction was too high and every weight was pushing it up.
 
-x = np.array([[0.5, -1.2, 0.3], [-0.7, 0.9, 1.1], [1.4, 0.2, -0.6], [-0.3, -0.8, 0.4]])
-y = np.array([[1.0], [-0.5], [0.8], [0.1]])
-W1 = np.array([[0.4, -0.9, 0.2], [1.1, 0.3, -0.7], [-0.2, 0.6, 0.5]])
-b1 = np.array([0.1, -0.2, 0.05])
-W2 = np.array([[0.7], [-1.3], [0.4]])
-b2 = np.array([0.2])
+Check the direction rather than trusting the arithmetic: a lower z2 gives a lower sigmoid gives a lower prediction gives a lower loss for a label of 0. Everything moved the way it should.`,
+    },
+    {
+      type: 'intuition',
+      title: 'The classic mistake, walked into on purpose',
+      md: `Back to the module's own numbers. The mistake is to compute the hidden delta as *just* the delta pushed back through the output weight, and forget to multiply by the activation function's local gradient.
 
-def loss():                              # tanh net: smooth everywhere, no kinks
-    return np.mean((np.tanh(x @ W1 + b1) @ W2 + b2 - y) ** 2)
+- The wrong rule: δ_hidden = δ_out × W2[j]. That gives **[−0.6792, 0.3396]**.
+- The correct rule multiplies by relu's local gradient as well, which is 0 for unit 0 and 1 for unit 1, giving **[0, 0.3396]**.
+- Only unit 0 differs. Unit 1's number is identical, because its relu gradient was 1 and multiplying by 1 changes nothing. **Half the network still gets the exactly right answer**, which is the first reason this bug is hard to see.
+- The wrong rule claims the slope for W1[0][0] is **−0.6792**. Measure it the stage-5 way and the answer is **0.0** — unit 0 is off, and nudging its weight by a hundred-thousandth leaves it off, so the loss does not move at all. The claim and the measurement do not agree even in sign.
+- And here is the second reason it hides. Take a step with the wrong slopes: the loss for this example falls from 1.1369 to **0.0953**. With the correct slopes it falls to 0.382. The buggy version looks *better*.
 
-a1 = np.tanh(x @ W1 + b1)                # forward
-d2 = 2 * (a1 @ W2 + b2 - y) / y.size     # dL/d(output)
-d1 = (d2 @ W2.T) * (1 - a1 ** 2)         # back through tanh
-grad = x.T @ d1                          # analytic dL/dW1
+That last line is the trap, so read it slowly. The wrong number happened to switch hidden unit 0 back on, which helped this one example. That is not learning, it is a lucky nudge in an arbitrary direction. A slope that is wrong in size, or right only some of the time, still usually points somewhere downhill, so the loss curve keeps falling and nothing ever raises an error. The model just ends up worse than it should, and you have no way to tell.
 
-num = np.zeros_like(W1)
-for i, j in np.ndindex(W1.shape):
-    old = W1[i, j]
-    W1[i, j] = old + EPS; hi = loss()
-    W1[i, j] = old - EPS; lo = loss()
-    W1[i, j] = old
-    num[i, j] = (hi - lo) / (2 * EPS)     # central difference
+**The only reliable detection is stage 5.** One weight, two forward passes, compare. That is why the slow method earns its place even though it is far too slow to train with.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Practice problems',
+      md: `Do these with pen and paper before reading the solutions. All the arithmetic is small on purpose; a calculator is enough.
 
-rel = np.abs(grad - num).max() / max(np.abs(grad).max(), np.abs(num).max())
-print('EPS                =', EPS)
-print('analytic  row 0    =', ' '.join('%12.9f' % v for v in grad[0]))
-print('numerical row 0    =', ' '.join('%12.9f' % v for v in num[0]))
-print('max relative error = %.3e' % rel)
-print('verdict            =', 'PASS' if rel < 1e-7 else 'FAIL')`,
-        precomputedOutput: `EPS                = 1e-05
-analytic  row 0    =  0.255873730 -0.153540566  0.331361510
-numerical row 0    =  0.255873730 -0.153540566  0.331361510
-max relative error = 7.988e-11
-verdict            = PASS`,
-        caption: 'Gradient check: run EPS = 1e-2, then 1e-5, then 1e-12 — the error gets WORSE at both ends',
-      },
+1. A network output produced ŷ = 0.7 for an example whose label is y = 1, using sigmoid and binary cross-entropy. What is δ_out? What would it be if the label were 0 instead?
+2. A hidden unit's weighted sum was z = 3.0, it uses relu, and the delta arriving at it from downstream (after passing back through the output weight) is 0.4. What is the delta at this unit? Now answer the same question for z = −3.0.
+3. A hidden unit has delta 0.5 and its two incoming input features were 2.0 and −1.0. What are the two weight slopes and the bias slope?
+4. With step size 0.1, apply the update to a weight that is currently 1.2 and has slope −0.8. Did the weight go up or down, and why is that the correct direction?
+5. Someone claims that if the loss goes down every step, the backward pass must be correct. Give the two-sentence reason this is not sound, and say what you would run instead.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Worked solutions',
+      md: `Check every step against your own working, not only the final number.
+
+1. δ_out is prediction minus truth, so 0.7 − 1 = **−0.4**. Negative means increasing z would lower the loss, which is right: the prediction is too low. With label 0 it is 0.7 − 0 = **+0.4**, the same size in the other direction, because now the prediction is too high by the same amount.
+2. relu's local gradient is 1 when the sum is positive, so the delta is 0.4 × 1 = **0.4**, passed through unchanged. At z = −3.0 the local gradient is 0, so the delta is 0.4 × 0 = **0**. The unit contributed nothing and receives nothing.
+3. Weight slope = (delta at this unit) × (the input that fed that weight). So 0.5(2.0) = **1.0** and 0.5(−1.0) = **−0.5**. The bias slope is the delta itself, **0.5**, because a bias is added directly and its local gradient is 1.
+4. New weight = 1.2 − 0.1(−0.8) = 1.2 + 0.08 = **1.28**. The weight went **up**. That is correct because a negative slope means the loss falls as the weight rises, and the minus sign in the update rule turns that negative slope into an upward move.
+5. A slope that is wrong by a factor, or wrong on only some units, usually still points somewhere downhill, so the loss falls and nothing errors — the model simply trains to a worse result more slowly. Run a finite-difference check on a few individual weights as in stage 5, and separately try to drive the loss on a handful of examples to nearly zero; a network that cannot memorise eight examples has a real bug somewhere in forward, backward, or update.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Beyond the basics - skip this on your first read',
+      md: `Everything above stands on its own. This section names ideas you will meet later, so the words are not new when you get there.
+
+- **What autograd does.** You will not write those stages again after this module. During the forward pass, a framework such as PyTorch records every operation it performs, its inputs, and its output — a list called the tape. Every operation ships with its own local-gradient rule, written once by the library authors. Calling backward() walks the tape in reverse, applying each rule and multiplying by the delta that arrived. It is exactly the procedure you just did by hand, generated automatically. Slopes accumulate rather than overwrite, which is why training loops call zero_grad() before each step.
+- **The memory bill.** The backward pass needs the forward pass's intermediates — stage 4 used z1, stage 3 used a1 — so every intermediate value stays in memory until its slope has been computed. That memory grows with batch size, depth, and layer width, and on large models it dwarfs the weights themselves. It is the real reason an out-of-memory error appears the moment you double the batch size.
+- **Why the ordering matters.** The chain rule says the slopes exist; it does not say in which order to multiply them. Multiplying from the input end forwards costs one sweep per *input*. Multiplying from the loss end backwards costs one sweep per *output*, and a loss has exactly one output — so every weight's slope falls out of one sweep. That asymmetry is the actual algorithm, and it is why the method is called reverse-mode.
+- **Softmax and multi-class labels.** For more than two classes, sigmoid is replaced by softmax and binary cross-entropy by its multi-class version. The same cancellation happens, and δ_out is again prediction minus truth, with the truth written as a list of zeros with a single 1 in the correct class position.
+- **A relative error, when checking many weights at once.** Stage 5 compared two numbers by eye. For a whole layer, compare the size of the difference against the size of the two gradients added together, rather than looking at the raw difference — slopes in different layers differ in scale by many orders of magnitude, so a fixed absolute threshold would flag the large ones and miss the small ones.`,
     },
   ],
   quiz: [
     {
-      question: 'Why is estimating gradients by perturbing each weight and re-running the forward pass hopeless for real networks?',
+      question: 'Why is finding gradients by nudging each weight and re-running the network hopeless for real networks?',
       options: [
         {
-          text: 'It is numerically inaccurate, so the gradients would be wrong',
-          explanation:
-            'Accuracy is actually fine with central differences — that is exactly why we use it as a correctness check. The problem is cost, not correctness.',
+          text: 'It is too inaccurate, so the gradients would be wrong',
+          explanation: 'Accuracy is fine — that is exactly why stage 5 uses it as a correctness check and got six matching decimals. The problem is cost, not correctness.',
         },
         {
-          text: 'It costs a forward pass per weight, so the cost scales with parameter count — millions of forward passes per single step',
-          explanation:
-            'Correct. Backprop gets ALL gradients in one backward pass, roughly the cost of one forward pass, independent of how many weights there are.',
+          text: 'It costs a full forward pass per weight, so the cost grows with the number of weights — millions of passes for one step',
+          explanation: 'Correct. Backprop gets every slope in one backward sweep costing about as much as a single forward pass, no matter how many weights there are.',
         },
         {
-          text: 'It only works for linear models',
-          explanation: 'It works for any model you can evaluate — it is model-agnostic. It is just unaffordable.',
+          text: 'It only works on networks with one hidden layer',
+          explanation: 'It works on anything you can run forwards, of any depth. It is simply unaffordable.',
         },
       ],
       correct: 1,
     },
     {
-      question: 'What does a node in the computational graph need in order to compute the gradient it passes backwards?',
+      question: 'What two things does one spot in the network need in order to compute the delta it passes further back?',
       options: [
         {
-          text: 'Its own local derivative and the gradient arriving from downstream',
-          explanation:
-            'Correct — and nothing else. That locality is why one implementation scales from a 3-neuron toy to a 175B-parameter model.',
+          text: 'Its own local gradient, and the delta arriving from downstream',
+          explanation: 'Correct, and nothing else. That locality is why the same procedure runs on a two-neuron toy and on a model with billions of weights.',
         },
-        { text: 'The full architecture of the network', explanation: 'No node ever knows the architecture. A relu node has never heard of the loss function.' },
-        { text: 'The learning rate and the optimizer state', explanation: 'Those belong to the update step, which happens after all gradients exist. Backprop does not know them.' },
+        { text: 'The full architecture of the network', explanation: 'No operation ever sees the architecture. A relu has never heard of the loss function; it only knows its own slope.' },
+        { text: 'The step size and the label', explanation: 'The step size belongs to the update, which happens after all slopes exist. The label enters once, at the very output, and after that it travels as part of the delta.' },
       ],
       correct: 0,
     },
     {
-      question: 'With sigmoid output and binary cross-entropy loss, ∂L/∂z (the delta at the output) simplifies to…',
+      question: 'With a sigmoid output and binary cross-entropy loss, the delta at the output simplifies to which expression?',
       options: [
-        { text: 'ŷ(1 − ŷ)', explanation: 'That is the sigmoid derivative alone — it is one of the two factors, and it cancels against the loss derivative.' },
-        { text: '−y/ŷ', explanation: 'That is a piece of ∂L/∂ŷ before the sigmoid derivative multiplies in.' },
+        { text: 'yhat times (1 − yhat)', explanation: 'That is the sigmoid\'s local gradient on its own. It is one of the two factors, and it cancels against the denominator of the loss derivative.' },
+        { text: 'minus y divided by yhat', explanation: 'That is a piece of the loss derivative before the sigmoid factor multiplies in. The cancellation has not happened yet.' },
         {
-          text: 'ŷ − y',
-          explanation:
-            'Correct. The ŷ(1−ŷ) in the denominator of ∂L/∂ŷ cancels the ŷ(1−ŷ) from the sigmoid derivative. Softmax + categorical cross-entropy does the same thing.',
+          text: 'yhat minus y — prediction minus truth',
+          explanation: 'Correct. The yhat(1−yhat) in the denominator of the loss derivative cancels the identical factor from the sigmoid, and only the raw error survives. In stage 3 that was 0.3208 − 1 = −0.6792.',
         },
       ],
       correct: 2,
     },
     {
-      question: 'You have δ (the delta) at some layer. What is the gradient with respect to that layer\'s weight matrix?',
+      question: 'You have the delta at some layer. What is the slope for that layer\'s weights?',
       options: [
-        { text: 'δ times the layer\'s output', explanation: 'The output is downstream of W — the gradient uses what fed IN, not what came out.' },
+        { text: 'The delta times that layer\'s output', explanation: 'The output is downstream of the weight. The rule uses what fed IN to the weight, not what came out of the layer.' },
         {
-          text: 'δ times the activation feeding into that layer (as an outer product / transposed matmul)',
-          explanation:
-            'Correct: ∂L/∂W = δ · a_inᵀ. Both ∂L/∂W2 = δ_out·a1ᵀ and ∂L/∂W1 = δ_hidden·xᵀ are the same rule with different names.',
+          text: 'The delta times the value that fed into that weight',
+          explanation: 'Correct. In stage 3 that was d_out times a1; in stage 4 it was d_hid times x. Same rule, different names — which is the whole pattern.',
         },
-        { text: 'δ times the weight matrix itself', explanation: 'Wᵀδ is how the delta travels to the PREVIOUS layer — a different quantity from ∂L/∂W.' },
+        { text: 'The delta times the weight itself', explanation: 'Multiplying the delta by the weight is how the delta travels to the previous layer. That is a different quantity from the slope for the weight.' },
       ],
       correct: 1,
     },
     {
-      question: 'A hidden relu unit had z = −0.5 for a sample. What gradient do its incoming weights receive from that sample?',
+      question: 'A hidden relu unit had a weighted sum of −0.5 for an example. What slope do its incoming weights get from that example?',
       options: [
         {
-          text: 'Zero — relu\'s local derivative is 0 when z < 0, so the delta is killed at that gate',
-          explanation:
-            'Correct. No contribution to the prediction means no blame. If a unit is off for EVERY sample it never recovers — that is the dying-relu problem.',
+          text: 'Zero, because relu\'s local gradient is 0 below zero, so the delta is killed at that gate',
+          explanation: 'Correct — this is exactly what happened to row 0 in stage 4, and why row 0 of W1 came out of stage 6 completely unchanged. No contribution means no blame.',
         },
-        { text: 'The same as any other unit — relu only affects the forward pass', explanation: 'Relu is a node in the graph like any other, and its local derivative gates the backward pass too.' },
-        { text: 'A negative gradient proportional to −0.5', explanation: 'Relu outputs 0 there and its derivative is 0 — the magnitude of the negative z is irrelevant.' },
+        { text: 'The same as any other unit — relu only affects the forward pass', explanation: 'relu is an operation in the chain like any other, so its local gradient multiplies into the backward pass too.' },
+        { text: 'A negative slope proportional to −0.5', explanation: 'relu output 0 there and its slope is 0. How far below zero the sum was makes no difference at all.' },
       ],
       correct: 0,
     },
     {
-      question: 'In the batched backward pass, why does the bias gradient sum over the batch dimension?',
+      question: 'Your finite-difference check says a weight\'s slope is 0.339589 and backprop says −0.6792. What is the correct conclusion?',
       options: [
-        { text: 'To keep the numbers large enough to avoid underflow', explanation: 'Numerical range is not the reason; the math forces it.' },
-        { text: 'Because summing is faster than averaging on a GPU', explanation: 'Both are a single reduction — speed is not the argument.' },
+        { text: 'Normal floating-point noise — carry on', explanation: 'Floating-point noise shows up around the sixth or seventh decimal place. These two numbers do not even share a sign.' },
         {
-          text: 'The same bias is added to every sample, so the derivative of the total loss with respect to it is the sum of every sample\'s contribution',
-          explanation:
-            'Correct. A shared parameter collects gradient from every place it was used. The 1/B for a mean loss sits either in the loss or once in the delta — never both.',
+          text: 'The backward pass has a bug, and it must be found before training anything',
+          explanation: 'Correct. A disagreement this large means a real error — a forgotten activation gradient, a wrong factor, a mixed-up value. And note that the network would still appear to train, which is why the check exists.',
         },
-      ],
-      correct: 2,
-    },
-    {
-      question: 'Your gradient check returns a relative error of 4e-2. What is the correct conclusion?',
-      options: [
-        { text: 'Normal float noise — proceed', explanation: 'Float64 noise lives around 1e-10. 4e-2 is four percent — that is a wrong derivative, not noise.' },
-        {
-          text: 'Your analytic backward pass has a bug — find it before training anything',
-          explanation:
-            'Correct. Above ~1e-3 means a real error: a missing transpose, a forgotten activation derivative, a wrong 1/B. A wrong backward pass still trains, just badly — which is why it hides for weeks.',
-        },
-        { text: 'Epsilon is too small — raise it to 1e-2 and re-check', explanation: 'Raising eps makes the numerical estimate WORSE (larger truncation error). It would hide the bug, not fix it.' },
+        { text: 'The nudge size is too small — raise it to 0.1 and re-check', explanation: 'A larger nudge measures the average slope over a wide gap instead of the slope at the point, which makes the measurement worse. It would blur the disagreement, not resolve it.' },
       ],
       correct: 1,
-    },
-    {
-      question: 'A 20-layer sigmoid network trains its last layers but the first layers barely move. Most likely cause?',
-      options: [
-        {
-          text: 'Vanishing gradients — sigmoid\'s derivative is ≤ 0.25, and 20 such factors multiply to ~1e-12',
-          explanation:
-            'Correct. Backprop multiplies a local derivative per layer; factors below 1 compound geometrically. Relu, He init, normalization and residual connections exist for exactly this.',
-        },
-        { text: 'The learning rate is too high', explanation: 'Too high shows up as oscillation or NaN across ALL layers, not as a depth-dependent gradient of zero.' },
-        { text: 'Not enough training data', explanation: 'Data volume does not produce a gradient magnitude that depends on layer depth.' },
-      ],
-      correct: 0,
     },
   ],
   interviewQuestions: [
     {
       question: 'Derive backprop for one layer. Whiteboard, out loud.',
       answer:
-        'Set it up: z = Wa_in + b, a_out = f(z), and assume the gradient arriving from downstream is δ_out = ∂L/∂a_out. Three steps. (1) Through the activation: ∂L/∂z = δ_out ⊙ f′(z) — call it δ. (2) Through the weights: z = Wa_in + b, so ∂z/∂W is a_in, giving ∂L/∂W = δ · a_inᵀ, and ∂L/∂b = δ because b\'s local derivative is 1. (3) Onwards to the previous layer: ∂L/∂a_in = Wᵀδ — the transpose is the same connections read in the other direction. Then state the pattern: every gradient is a local derivative times an upstream delta, and every weight gradient is (delta at this layer) × (activation feeding in). Finish with the shape check — ∂L/∂W must have W\'s shape — which is how you catch a wrong transpose live at the board.',
+        'Set it up: z = W a_in + b, then a_out = f(z), and assume the delta arriving from downstream is known. Three steps. (1) Through the activation: multiply the arriving delta by f prime of z — that gives the delta at this layer. (2) Through the weights: because z is a weighted sum of a_in, the slope for W is that delta times a_in, and the slope for b is the delta itself, since a bias has local gradient 1. (3) Onwards: the delta for the previous layer is the delta pushed back through W, which is the same connections read in the other direction. Then state the pattern: every slope is a local gradient times an arriving delta, and every weight slope is the delta at this layer times the value that fed in. Finish with the shape check — the slope for W must have the same shape as W — which catches a flipped matrix on the spot.',
       isCaseBased: false,
     },
     {
-      question: 'Why does ∂L/∂z at the output collapse to ŷ − y for sigmoid + cross-entropy? Is that a coincidence?',
+      question: 'Why does the delta at the output collapse to prediction minus truth for sigmoid with cross-entropy? Is that a coincidence?',
       answer:
-        'Not a coincidence — it is the design goal. ∂L/∂ŷ for BCE is (ŷ−y)/(ŷ(1−ŷ)); ∂ŷ/∂z for sigmoid is ŷ(1−ŷ). Their product is ŷ−y. The point of choosing that pair is that sigmoid saturates: for a confident-and-wrong prediction, ŷ(1−ŷ) is near zero, so with MSE the gradient would be near zero exactly when the model is most wrong — learning stalls. Cross-entropy\'s denominator cancels the squashing, so the gradient is proportional to the error itself: badly wrong means big update. Same structure for softmax + categorical cross-entropy. This is the gradient argument for "why cross-entropy over MSE for classification".',
+        'It is the design goal, not a coincidence. The loss derivative has yhat(1−yhat) in its denominator and the sigmoid\'s local gradient is exactly yhat(1−yhat), so the product is just yhat − y. The reason to want that: sigmoid is nearly flat when the prediction is close to 0 or 1, so its local gradient is tiny there. With a squared-error loss the update would be smallest exactly when the model is most confidently wrong, and learning stalls. Cross-entropy has that flatness in its denominator so it cancels, leaving an update proportional to the size of the error itself — badly wrong means a big correction. Softmax with multi-class cross-entropy has the same structure and the same result.',
       isCaseBased: false,
     },
     {
-      question: 'Case: a colleague\'s hand-written network trains but converges much slower than the equivalent PyTorch model on the same data and learning rate. How do you find the problem?',
+      question: 'Case: a colleague\'s hand-written network trains, but converges much more slowly than an equivalent library model on the same data and the same step size. How do you find the problem?',
       answer:
-        'Assume the backward pass, not the hyperparameters. (1) Gradient-check it — central differences, float64, tiny network; anything above 1e-3 relative error is your answer, and the layer that fails tells you where. (2) If it passes, look for a scale bug: dividing by batch size in the loss AND in the delta divides the effective learning rate by B — a classic silent slowdown. (3) Check the activation derivative is applied to the right quantity — f′(z), not f′(a). (4) Compare per-layer gradient norms against PyTorch on the same inputs and weights; the first layer that diverges is the culprit. (5) Only then consider real differences: init scheme, whether PyTorch uses a different default (e.g. Kaiming init), and optimizer (Adam vs plain SGD is not a fair comparison). Tradeoff worth naming: gradient checking is expensive but definitive; eyeballing loss curves is cheap and has cost people weeks.',
+        'Suspect the backward pass before the hyperparameters. (1) Run a finite-difference check: pick a handful of individual weights across different layers, nudge each by 1e-5 either way, and compare against the analytic slope. A layer where the check fails tells you where the bug is. (2) If the check passes, look for a scale bug — dividing by the batch size both in the loss and again in the delta divides the effective step size by the batch size, and the only symptom is exactly this, silent slowness. (3) Verify the activation gradient is being applied to the pre-activation sum, not to the activation\'s output; that mix-up is easy and quiet. (4) Feed both implementations identical weights and identical inputs, then compare the size of the slopes layer by layer; the first layer that disagrees is the culprit. (5) Only after all that, consider fair-comparison issues: the library may use a different initialisation scheme, and comparing a plain gradient-descent update against an adaptive optimiser is not a like-for-like test. The tradeoff worth naming: the finite-difference check is slow but decisive, whereas watching loss curves is free and has cost people weeks.',
       isCaseBased: true,
     },
     {
-      question: 'Case: loss goes 0.69, 0.68, 0.71, NaN. What happened, and what is your fix order?',
+      question: 'Case: the loss reads 0.69, 0.68, 0.71, then NaN. What happened, and in what order do you fix it?',
       answer:
-        'NaN in one step is an explosion, not a plateau. Order: (1) Learning rate — cut 10× and re-run; if the NaN moves later, it was the step size. (2) Numerical stability in the loss — log(0) is −inf, so log(ŷ) needs either an epsilon or, better, a log-sum-exp / logits-based loss (BCEWithLogits instead of sigmoid-then-BCE). (3) Exploding gradients from depth or from an RNN\'s repeated multiplication — check the gradient norm per step; clip to a max norm around 1.0. (4) Bad init — weights initialized too large make the first delta huge. (5) Data — an inf or NaN in the inputs propagates instantly; assert on the batch. Name the tradeoff: clipping is a band-aid that keeps a run alive; correct init, normalization, and a logits-based loss are the actual fix.',
+        'A NaN in one step is an explosion, not a plateau. Order of attack: (1) Step size — cut it tenfold and re-run; if the NaN simply arrives later, the step size was the cause. (2) Numerical stability in the loss — the logarithm of zero is negative infinity, so a prediction that saturates to exactly 0 or 1 poisons the loss; use a loss that takes the raw pre-sigmoid number and does the squashing internally, rather than sigmoid followed by a separate log. (3) Slopes growing across depth — log the total size of the slopes each step, and cap it at a fixed maximum if it climbs. (4) Initialisation — weights started too large make the very first delta enormous. (5) The data itself — a single infinity or missing value in an input propagates instantly, so check the batch before blaming the model. The tradeoff to state: capping the slope size keeps a run alive but hides the cause, whereas correct initialisation, normalisation and a numerically safe loss are the actual fix.',
       isCaseBased: true,
     },
     {
-      question: 'Explain vanishing gradients in terms of the backprop equations, and rank the fixes.',
+      question: 'Explain vanishing gradients using the backward pass, and rank the fixes.',
       answer:
-        'δ at layer ℓ equals (W^{ℓ+1}ᵀ δ^{ℓ+1}) ⊙ f′(z^ℓ). Crossing a layer multiplies by two things, so the gradient reaching layer 1 carries a product of L−1 factors. Sigmoid caps f′ at 0.25, so 20 layers gives at most 0.25²⁰ ≈ 1e−12: the early layers receive nothing and freeze while the late layers learn. Fixes, most to least load-bearing: (1) residual connections — the identity path gives the gradient a route with derivative exactly 1, which is why 100+ layer networks became trainable; (2) relu-family activations — derivative is exactly 1 on the positive side instead of ≤0.25; (3) normalization (batch/layer norm) — keeps z in the non-saturated region and conditions the loss surface; (4) careful init (He for relu, Xavier for tanh) — sets the initial product near 1; (5) for RNNs specifically, gated units (LSTM/GRU) whose cell state is an additive path. Diagnose by logging gradient norm per layer.',
+        'Crossing one layer backwards multiplies the delta by two things: the layer\'s weights, and the activation function\'s local gradient. So the delta reaching the first layer carries a product of one such pair per layer above it. The sigmoid\'s local gradient never exceeds 0.25, so across twenty layers the surviving factor is at most 0.25 to the twentieth, around one part in a trillion. The early layers receive essentially nothing and freeze while the last layers train normally. Fixes, most to least load-bearing: skip connections, which give the delta a route whose local gradient is exactly 1 and are why very deep networks became trainable; relu-family activations, whose local gradient is exactly 1 on the positive side rather than at most 0.25; normalisation layers, which keep the weighted sums in the region where the activation is not flat; and careful initialisation, which sets the initial product near 1. Diagnose it by logging the size of the slopes per layer and looking for a value that shrinks steadily towards the input end.',
       isCaseBased: false,
     },
     {
-      question: 'What exactly does loss.backward() do? Answer as if the interviewer suspects you think it is magic.',
+      question: 'What exactly does a framework\'s backward() call do? Answer as if the interviewer suspects you think it is magic.',
       answer:
-        'During the forward pass the framework builds a DAG on the fly: each tensor produced by a differentiable op stores a reference to the op and its inputs (grad_fn). backward() does a reverse topological walk of that graph starting from the loss with an incoming gradient of 1.0. At each node it calls that op\'s registered backward rule — the local derivative — multiplies by the incoming gradient, and routes the result to that node\'s inputs. Leaf tensors with requires_grad=True accumulate into .grad. Three consequences worth stating: gradients ACCUMULATE, hence zero_grad() each step (and hence free gradient accumulation across micro-batches); the graph is freed after backward unless you pass retain_graph; and no_grad() skips recording entirely, which is why inference is much lighter on memory. It is the same six lines you write by hand, generated from a tape.',
+        'During the forward pass the framework records each operation it performs together with its inputs and its output, building a graph on the fly. backward() walks that graph in reverse from the loss, starting with an arriving delta of 1.0. At each recorded operation it applies that operation\'s registered local-gradient rule, multiplies by the delta that arrived, and routes the result to that operation\'s inputs. Weights that were marked as trainable accumulate their slopes into a field on the tensor. Three consequences worth stating: slopes accumulate rather than overwrite, which is why the loop clears them before each step and why splitting a large batch into several small ones works for free; the recorded graph is discarded after the walk unless you ask to keep it; and switching recording off at prediction time is why inference needs far less memory than training. It is the same stages you write by hand, replayed from a recording.',
       isCaseBased: false,
     },
     {
-      question: 'How would you gradient-check a network, and what exactly counts as a pass?',
+      question: 'Case: a 12-layer model fits at batch size 64 but runs out of memory at 128, even though the weights themselves are only a couple of hundred megabytes. Where is the memory going?',
       answer:
-        'Take a tiny version — a few units, a handful of samples — in float64. For each scalar parameter, compute (L(θ+ε) − L(θ−ε))/2ε with ε = 1e−5 (central difference: O(ε²) error for one extra forward pass). Compare with the analytic gradient using the relative error ‖g_num − g_ana‖ / (‖g_num‖ + ‖g_ana‖), never absolute error, because gradient magnitudes vary wildly across layers. Below 1e−7 is correct; 1e−7 to 1e−5 is acceptable with relu kinks and float noise; above 1e−3 is a bug. Practical rules: disable dropout and any randomness first, or you are differencing two different functions; avoid parameters that put a relu exactly at z = 0, since the kink makes the numerical estimate genuinely wrong there; and never leave it in the training loop — it costs two forward passes per parameter.',
-      isCaseBased: false,
-    },
-    {
-      question: 'Case: training a 12-layer model, batch size 64 fits, 128 gives CUDA OOM — but the model has only 40M parameters, which is under 200MB. Where is the memory going, and what are your options?',
-      answer:
-        'Weights are not the bill — activations are. The backward pass needs the forward pass\'s intermediates (every z and a), so activation memory scales with batch × depth × width, and doubling batch size doubles it while the weights stay fixed. Options, ranked: (1) gradient accumulation — run two micro-batches of 64 and step once, mathematically identical to batch 128, costs nothing but wall-clock; (2) mixed precision (bf16/fp16) — roughly halves activation memory and is usually free performance; (3) gradient checkpointing — store activations only at a few boundaries and recompute the rest during backward, about +30% compute for a large memory win; (4) reduce sequence length / resolution if the task allows; (5) shard across devices (ZeRO/FSDP) if you have them. Tradeoff to state: accumulation costs time, checkpointing costs compute, sharding costs communication — pick the resource you have spare.',
+        'The weights are not the bill; the stored intermediates are. The backward pass needs the forward pass\'s intermediate values at every layer, so that memory grows with batch size times depth times layer width, and doubling the batch size doubles it while the weights stay fixed. Options, ranked: (1) split the batch — run two groups of 64, add up their slopes, and update once; this is mathematically identical to a batch of 128 and costs only wall-clock time; (2) use a lower-precision number format for the intermediates, which roughly halves that memory and is usually free; (3) store intermediates only at a few chosen points and recompute the rest during the backward pass, trading roughly a third more compute for a large memory saving; (4) shorten the input — fewer tokens, smaller images — if the task tolerates it; (5) spread the model across several devices if you have them. The tradeoff to state plainly: splitting the batch costs time, recomputing costs compute, spreading across devices costs communication. Pick whichever resource you actually have spare.',
       isCaseBased: true,
     },
     {
-      question: 'Why do we initialize weights randomly instead of at zero? Answer with the backward pass.',
+      question: 'Case: an intern reports "my training loss is going down, so my backward pass must be working". What do you tell them?',
       answer:
-        'With all weights zero (or all equal), every hidden unit in a layer computes the same z, so it produces the same activation, so Wᵀδ hands each of them an identical delta, so each receives an identical gradient and they update identically — forever. The layer has the representational capacity of one neuron regardless of its width. This is the symmetry-breaking argument, and it is a statement about the backward pass, not the forward one. Biases can safely be zero because their gradients differ as soon as the weights differ. The follow-up is scale: too small and activations and gradients shrink layer by layer; too large and they explode — which is what He (relu) and Xavier (tanh) initialization compute for you from fan-in and fan-out.',
-      isCaseBased: false,
-    },
-    {
-      question: 'Backprop is "just the chain rule". So why was it a research result rather than an obvious application of calculus?',
-      answer:
-        'The chain rule tells you the derivative exists; it does not tell you a cheap ordering for computing it. A network\'s Jacobian chain can be multiplied left-to-right (forward mode) or right-to-left (reverse mode). Forward mode costs one pass per INPUT — fine when inputs are few, useless here. Reverse mode costs one pass per OUTPUT, and a loss has exactly one output — so all N parameter gradients fall out of a single sweep. That asymmetry, plus the insight that intermediate activations can be cached and reused rather than recomputed, is the actual algorithm. The historical version of this answer: reverse-mode automatic differentiation existed before neural networks; the contribution was recognizing it made training multi-layer networks affordable.',
-      isCaseBased: false,
-    },
-    {
-      question: 'Case: an intern reports "my model\'s training loss is decreasing, so backprop is working". What do you tell them?',
-      answer:
-        'That a decreasing loss is weak evidence. A backward pass with a wrong constant factor, a missing activation derivative on one layer, or a wrong 1/B still produces a direction that is often correlated with downhill — the model trains, slower and to a worse optimum, and nothing ever errors. Real checks, in order: (1) gradient check against central differences on a small instance — this is the only definitive test; (2) overfit a single batch to near-zero loss — if the model cannot memorize 8 samples, something in forward, backward, or the update is broken; (3) compare per-layer gradient norms to a reference implementation on identical weights and inputs. Then the diagnostic mindset: the dangerous bugs in ML are the ones that degrade quality without crashing, so build tests that assert correctness rather than watching curves.',
+        'That a falling loss is weak evidence. A backward pass with a wrong constant factor, a missing activation gradient on one layer, or a batch-size division applied twice still produces a direction that is usually correlated with downhill — so the model trains, more slowly and to a worse result, and nothing ever errors. In this module\'s own example the buggy version made the loss fall further on the first step than the correct one did, purely by luck. Real checks, in order: (1) a finite-difference check on individual weights, which is the only decisive test; (2) try to drive the loss on eight examples to almost zero, because a network that cannot memorise eight examples has a genuine bug in forward, backward, or the update; (3) compare the size of the slopes layer by layer against a reference implementation given identical weights and inputs. The general lesson: the dangerous bugs in machine learning are the ones that quietly degrade quality without crashing, so write checks that assert correctness instead of watching curves.',
       isCaseBased: true,
     },
   ],
   flashcards: [
-    { front: 'Backprop in one sentence', back: 'One backward pass computes ∂L/∂w for EVERY weight, by multiplying each node\'s local derivative with the gradient arriving from downstream.' },
-    { front: 'Cost of the naive (perturb-each-weight) method', back: 'One forward pass per weight. 25M params = 25M forward passes per step. Backprop: one backward pass, ~1 forward pass of cost, total.' },
-    { front: 'The blame-assignment picture', back: 'Loss is measured at the output; each layer asks the one before it "how much of this error was yours?" and passes back its share.' },
-    { front: 'The two-sentence pattern', back: 'Every gradient = (local derivative) × (upstream delta). Every weight gradient = (delta at this layer) × (activation feeding into it).' },
-    { front: 'δ_out for sigmoid + BCE', back: 'ŷ − y. The ŷ(1−ŷ) from ∂L/∂ŷ cancels the sigmoid derivative — by design, so saturation cannot kill the gradient. Same for softmax + CE.' },
-    { front: 'One-hidden-layer backward pass', back: 'δ_out = ŷ−y · ∂L/∂W2 = δ_out a1ᵀ · δ_hidden = (W2ᵀδ_out) ⊙ relu′(z1) · ∂L/∂W1 = δ_hidden xᵀ' },
-    { front: 'Why the batch axis sums', back: 'A shared parameter (weight or bias) is used once per sample, so it collects gradient from every sample. The 1/B of a mean loss goes in exactly one place.' },
-    { front: 'Gradient checking', back: '(L(θ+ε) − L(θ−ε))/2ε vs analytic; relative error ‖diff‖/(‖num‖+‖ana‖). <1e-7 correct, >1e-3 bug. float64, ε=1e-5, no dropout, debug-only.' },
-    { front: 'Vanishing / exploding gradients', back: 'Crossing L layers multiplies L local derivatives. σ′ ≤ 0.25 → 0.25²⁰ ≈ 1e-12 (early layers freeze). Factors > 1 → NaN. Fixes: residuals, relu, norm, He init, clipping.' },
-    { front: 'What autograd is', back: 'A tape: the forward pass records ops + inputs, backward() replays it in reverse calling each op\'s local-derivative rule. Grads accumulate — hence zero_grad(). Activations must be kept, hence the memory wall.' },
+    { front: 'Backprop in one sentence', back: 'One sweep backwards computes the slope of the loss for EVERY weight, by multiplying each operation\'s local gradient with the delta arriving from downstream.' },
+    { front: 'Forward pass vs backward pass', back: 'Forward: input to output, producing a prediction and a loss, keeping every intermediate value. Backward: loss back to input, producing one slope per weight.' },
+    { front: 'Cost of the nudge-each-weight method', back: 'Two forward passes per weight. 25 million weights means 50 million passes for one step. Backprop: one backward sweep for all of them. Kept only as a correctness check.' },
+    { front: 'The two-sentence pattern', back: 'Every slope = (local gradient) x (delta arriving from downstream). Every weight slope = (delta at this layer) x (the value that fed into that weight).' },
+    { front: 'Delta at the output, sigmoid + cross-entropy', back: 'Prediction minus truth. The yhat(1-yhat) in the loss derivative\'s denominator cancels the sigmoid\'s own gradient — by design, so saturation cannot kill the update.' },
+    { front: 'Why a dead relu unit never updates', back: 'relu\'s local gradient is 0 below zero, so the delta is multiplied by 0 and the whole row of weight slopes is zero. Off for every example means no slope, ever.' },
+    { front: 'Finite-difference gradient check', back: 'Set one weight to w+eps and w-eps, run forward twice, divide the loss difference by 2*eps. eps around 1e-5. Compare with backprop. Debug tool only — two passes per weight.' },
+    { front: 'Vanishing gradient', back: 'Crossing L layers multiplies L local gradients. Sigmoid\'s never exceeds 0.25, so 20 layers leaves about 1e-12 and the early layers freeze. Fixes: relu, skip connections, normalisation, careful init.' },
   ],
   mindmapMarkdown: `- Backpropagation: Chain Rule on a Graph
   - The problem
-    - L is ONE number, millions of weights
-    - need dL/dw for every weight
-    - naive: 1 forward pass per weight
-    - 25M params = hopeless
+    - loss is ONE number, many weights
+    - need a slope for every weight
+    - naive: one forward pass per weight
+    - 25M weights = hopeless
   - Blame assignment
     - complaint at the door = loss
     - each station splits its share backwards
-    - layer asks previous: how much was you?
-  - Computational graph
-    - nodes = operations
-    - edges: values forward, gradients backward
-    - needs only local derivative + upstream gradient
-    - locality = scales from toy to 175B
+    - layer asks the previous one: how much was you?
+  - The five words
+    - forward pass: input to output
+    - backward pass: loss to input
+    - local gradient: one operation's own slope
+    - delta: blame arriving at a spot
+    - parameter update: w = w - lr * slope
   - One-layer derivation
-    - forward: z1=W1x+b1, a1=relu, z2=W2a1+b2, y=sigmoid, L=BCE
-    - delta_out = yhat - y (sigmoid+BCE cancel)
-    - dL/dW2 = delta_out a1'
-    - delta_hidden = (W2' delta_out) * relu'(z1)
-    - dL/dW1 = delta_hidden x'
-    - dead relu gets zero gradient
-  - The pattern
-    - gradient = local derivative x upstream delta
-    - weight grad = delta x activation-in
-    - shape check catches transposes
-  - Batched form
-    - stack samples as rows
-    - matmul = sum over batch axis
-    - bias grad = sum down batch
-    - 1/B in exactly one place
-  - From-scratch NumPy
-    - XOR: not linearly separable
-    - 6 lines of backward
-    - loss 0.84 to 0.004
+    - forward: z1=W1x+b1, a1=relu, z2=W2a1+b2, yhat=sigmoid, L=BCE
+    - delta_out = yhat - y (sigmoid + BCE cancel)
+    - weight slope = delta x value that fed in
+    - delta_hidden = (delta through W2) x relu slope
+    - dead relu unit gets zero
+  - Built in stages, plain Python
+    - stage 1-2 forward: yhat 0.3208, loss 1.1369
+    - stage 3-4 backward: d_out -0.6792, dW1 row 1 = 0.3396, 0.6792
+    - stage 5 check: measured 0.339589 = backprop 0.339589
+    - stage 6-7 update: loss 1.1369 to 0.382
   - Gradient checking
-    - central difference, eps=1e-5
-    - relative error, not absolute
-    - <1e-7 pass, >1e-3 bug
-    - relu kink at z=0 = false alarm
-    - debug tool only
-  - Vanishing / exploding
-    - chain of multiplications
-    - sigmoid' <= 0.25 -> 0.25^20 ~ 1e-12
-    - factor 1.5^20 ~ 3300 -> NaN
-    - fixes: relu, He init, norm, residuals, clipping
-  - Autograd
-    - forward records the tape
-    - backward() replays it in reverse
-    - grads accumulate -> zero_grad()
-    - no_grad() skips recording
-  - Memory
-    - activations kept for backward
-    - batch size hits the wall first
-    - gradient checkpointing: recompute vs store`,
+    - two forward passes, divide by 2*eps
+    - eps about 1e-5
+    - relu corner at z=0 gives a meaningless reading
+    - debug only, never in training
+  - Batches
+    - each example gives its own slopes
+    - add across the batch, divide by B once
+    - bias slope = sum of the deltas
+  - Vanishing gradients
+    - backprop is a chain of multiplications
+    - sigmoid slope <= 0.25, 20 layers ~ 1e-12
+    - early layers freeze
+    - fixes belong to Activations and later modules
+  - Beyond the basics
+    - autograd = a recorded tape replayed in reverse
+    - intermediates kept in memory, hence the batch-size wall
+    - reverse order is cheap because there is one output`,
 }
 
 export default m

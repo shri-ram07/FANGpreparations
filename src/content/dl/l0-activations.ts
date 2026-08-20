@@ -6,657 +6,511 @@ const m: Module = {
   level: 0,
   title: 'Activation Functions: Sigmoid, Tanh, ReLU, GELU & Softmax',
   whyItMatters:
-    'One function choice decides whether a 50-layer network trains or sits dead for a week. Deep learning was stuck for two decades largely because everyone used sigmoid; swapping in ReLU unstuck it. Interviewers ask "why ReLU?" and "what is a dying ReLU?" because the answers prove you understand gradients, not just APIs.',
-  estMinutes: 45,
+    'A neural network is layers of multiply-and-add stacked on top of each other. Multiply-and-add stacked on multiply-and-add is still just one multiply-and-add, no matter how many layers you use. The activation function is the one small thing you put between the layers so that depth actually buys you something. Pick the wrong one and a deep network sits at the same loss for a week; that really happened to the whole field for about twenty years. This module builds the reason from arithmetic you can check on paper, then computes each activation and its slope by hand.',
+  assumes: [
+    'You have seen a Python for loop, a function definition, and print',
+    'You remember from school maths that a straight line is y = a*x + b, and that the slope is how much y moves when x moves one step',
+    'Read the Math module *Slopes, Derivatives & the Gradient* and the ML module *Gradient Descent + Linear Regression* first: this module leans on the idea that training moves each weight by (slope) x (step size)',
+    'No deep learning background is needed. Every term used here is defined here.',
+  ],
+  estMinutes: 38,
   sections: [
     {
       type: 'intuition',
-      title: 'The one job an activation has',
-      md: `Last module ended with a proof: stack linear layers and they **collapse**. W₂(W₁x) = (W₂W₁)x — one matrix. A hundred layers, still a straight line.
+      title: 'Why an activation has to exist at all',
+      md: `A layer of a neural network does one thing to a number: multiply it by a weight and add a bias. Take x = 2 and push it through two such layers.
 
-- The activation is the bend you put between layers so the collapse cannot happen.
-- Analogy: layers are folds in paper. Linear folds keep it flat. One crease per fold and you can make any shape.
-- That crease is all it is: a **cheap non-linear function applied to every neuron, element by element**.
-- No shared parameters (mostly), no mixing between neurons — just f(z) on each pre-activation z.
-- Which crease you pick is one of the highest-leverage one-line decisions in the whole field.`,
-    },
-    {
-      type: 'intuition',
-      title: 'Four properties that decide the winner',
-      md: `Every activation debate reduces to these four. Learn to name them and you can reason about a function you have never seen.
+- **Layer 1** multiplies by 3 and adds 1: 3 x 2 + 1 = **7**.
+- **Layer 2** multiplies that by -2 and adds 5: -2 x 7 + 5 = **-9**.
+- Now do it with algebra instead of numbers: -2 x (3x + 1) + 5 = -6x - 2 + 5 = **-6x + 3**.
+- Check the single line -6x + 3 at x = 2: -6 x 2 + 3 = **-9**. Identical answer.
 
-- **Range** — what values can come out? Bounded (0,1) is a probability; unbounded is a free-form feature.
-- **Zero-centred** — does the output average around 0, or is it always positive? Always-positive outputs bias the next layer's gradients all one direction.
-- **Gradient behaviour** — this is the big one. How large is f′(z), and where does it go to ~0? A near-zero derivative **kills** the signal passing back through it.
-- **Cost** — you run this on billions of neurons per forward pass. exp() is not free; max(0, z) is.
-- Rule of thumb: gradient behaviour decides hidden layers; range decides the output layer.`,
-    },
-    {
-      type: 'intuition',
-      title: 'Sigmoid: the one that broke deep learning',
-      md: `The squasher. Take any number, get something between 0 and 1. Big negative → ~0. Big positive → ~1.
-
-- Feels perfect: it looks like a neuron firing, and the output reads as a probability.
-- **The kill switch is its derivative.** σ′(z) = σ(z)(1 − σ(z)), which is a hill peaking at **0.25** when z = 0.
-- 0.25 is its *best day*. At z = 3, σ′ = 0.045. At z = 6, σ′ = 0.0025.
-- Backprop multiplies these derivatives together, one per layer. Multiplying numbers ≤ 0.25 repeatedly is how you get to zero fast.
-- That is the **vanishing gradient**: early layers receive a gradient so small their weights never move.`,
-    },
-    {
-      type: 'math',
-      intro: 'Sigmoid, its derivative, and the arithmetic that ended the first deep-learning era.',
-      latex: [
-        '\\sigma(z) = \\frac{1}{1 + e^{-z}} \\in (0, 1) \\qquad \\sigma^{\\prime}(z) = \\sigma(z)\\bigl(1 - \\sigma(z)\\bigr)',
-        '\\max_z \\sigma^{\\prime}(z) = \\sigma(0)\\bigl(1 - \\sigma(0)\\bigr) = 0.5 \\times 0.5 = 0.25',
-        '\\frac{\\partial L}{\\partial z^{(1)}} \\;=\\; \\frac{\\partial L}{\\partial z^{(L)}} \\prod_{l=2}^{L} W^{(l)}\\, \\sigma^{\\prime}\\bigl(z^{(l)}\\bigr) \\;\\;\\Rightarrow\\;\\; \\text{best case } 0.25^{\\,L-1}',
-        '0.25^{10} = \\frac{1}{4^{10}} = \\frac{1}{1{,}048{,}576} \\approx 9.5 \\times 10^{-7}',
-      ],
-    },
-    {
-      type: 'note',
-      md: 'Read that last line slowly. Ten sigmoid layers, each behaving **as well as it possibly can**, shrink the gradient by a factor of a million. A learning rate of 0.01 then moves the first layer by ~10⁻⁸ per step. Realistically σ′ sits nearer 0.1, so 0.1¹⁰ = 10⁻¹⁰ — the first layers are frozen at initialization while the last layer learns fine.',
-    },
-    {
-      type: 'visual',
-      component: 'PointerBoxDiagram',
-      props: {
-        title: 'The vanishing-gradient chain, step by step',
-        notice: 'Left: the gradient as it walks backward, layer by layer. Right: what each layer multiplies it by. Step through the sigmoid stack, then the same stack with ReLU.',
-        leftLabel: 'gradient walking back',
-        rightLabel: 'multiplier at that layer',
-        frames: [
-          {
-            note: 'A gradient of 1.0 leaves the loss and starts walking back through a 6-layer sigmoid stack.',
-            stack: [{ name: 'grad -> L6', value: '1.000000' }],
-            heap: [{ id: 'mul', value: 'x 0.25 max', label: 'sigmoid f-prime' }],
-          },
-          {
-            note: 'Layer 6 passes it on: 1.0 x 0.25 = 0.25. And 0.25 is the BEST case, reached only where z = 0.',
-            stack: [
-              { name: 'grad -> L6', value: '1.000000' },
-              { name: 'grad -> L5', value: '0.250000' },
-            ],
-            heap: [{ id: 'mul', value: 'x 0.25 max', label: 'sigmoid f-prime' }],
-          },
-          {
-            note: 'Layer 5: 0.25 x 0.25 = 0.0625. Two layers in and 94% of the learning signal is already gone.',
-            stack: [
-              { name: 'grad -> L6', value: '1.000000' },
-              { name: 'grad -> L5', value: '0.250000' },
-              { name: 'grad -> L4', value: '0.062500' },
-            ],
-            heap: [{ id: 'mul', value: 'x 0.25 max', label: 'sigmoid f-prime' }],
-          },
-          {
-            note: 'Layer 4: 0.015625. Layer 4 now learns 64x slower than layer 6 on the exact same batch.',
-            stack: [
-              { name: 'grad -> L6', value: '1.000000' },
-              { name: 'grad -> L5', value: '0.250000' },
-              { name: 'grad -> L4', value: '0.062500' },
-              { name: 'grad -> L3', value: '0.015625' },
-            ],
-            heap: [{ id: 'mul', value: 'x 0.25 max', label: 'sigmoid f-prime' }],
-          },
-          {
-            note: 'Layer 3: 0.003906. Notice the pattern is exponential in depth, not linear.',
-            stack: [
-              { name: 'grad -> L6', value: '1.000000' },
-              { name: 'grad -> L5', value: '0.250000' },
-              { name: 'grad -> L4', value: '0.062500' },
-              { name: 'grad -> L3', value: '0.015625' },
-              { name: 'grad -> L2', value: '0.003906' },
-            ],
-            heap: [{ id: 'mul', value: 'x 0.25 max', label: 'sigmoid f-prime' }],
-          },
-          {
-            note: 'Layer 2: 0.000977. Under one thousandth of what left the loss function.',
-            stack: [
-              { name: 'grad -> L6', value: '1.000000' },
-              { name: 'grad -> L5', value: '0.250000' },
-              { name: 'grad -> L4', value: '0.062500' },
-              { name: 'grad -> L3', value: '0.015625' },
-              { name: 'grad -> L2', value: '0.003906' },
-              { name: 'grad -> L1', value: '0.000977' },
-            ],
-            heap: [{ id: 'mul', value: 'x 0.25 max', label: 'sigmoid f-prime' }],
-          },
-          {
-            note: 'W1 receives 0.25^6 = 0.000244. At 10 layers it is 0.25^10 = 0.00000095. This is why deep sigmoid nets did not train.',
-            stack: [
-              { name: 'grad -> L6', value: '1.000000' },
-              { name: 'grad -> L5', value: '0.250000' },
-              { name: 'grad -> L4', value: '0.062500' },
-              { name: 'grad -> L3', value: '0.015625' },
-              { name: 'grad -> L2', value: '0.003906' },
-              { name: 'grad -> L1', value: '0.000977' },
-              { name: 'grad -> W1', value: '0.000244', to: 'dead', danger: true },
-            ],
-            heap: [
-              { id: 'mul', value: 'x 0.25 max', label: 'sigmoid f-prime' },
-              { id: 'dead', value: 'update ~ 0', label: 'layer 1 frozen' },
-            ],
-          },
-          {
-            note: 'Now the same 6 layers with ReLU. For every unit that is active (z > 0) the multiplier is exactly 1.',
-            stack: [
-              { name: 'grad -> L6', value: '1.000000' },
-              { name: 'grad -> L5', value: '1.000000' },
-            ],
-            heap: [{ id: 'one', value: 'x 1.0  if z > 0', label: 'relu f-prime' }],
-          },
-          {
-            note: 'Six layers later the gradient is still 1.0. Nothing shrank it. Depth suddenly became trainable.',
-            stack: [
-              { name: 'grad -> L6', value: '1.000000' },
-              { name: 'grad -> L5', value: '1.000000' },
-              { name: 'grad -> L4', value: '1.000000' },
-              { name: 'grad -> L3', value: '1.000000' },
-              { name: 'grad -> L2', value: '1.000000' },
-              { name: 'grad -> L1', value: '1.000000' },
-              { name: 'grad -> W1', value: '1.000000' },
-            ],
-            heap: [{ id: 'one', value: 'x 1.0  if z > 0', label: 'relu f-prime' }],
-          },
-          {
-            note: 'The catch: for a unit stuck at z < 0 the multiplier is exactly 0 — not small, ZERO. That unit is dead forever. Meet the dying ReLU.',
-            stack: [
-              { name: 'grad -> L6', value: '1.000000' },
-              { name: 'grad -> L5', value: '0.000000', to: 'zero', danger: true },
-            ],
-            heap: [
-              { id: 'one', value: 'x 1.0  if z > 0', label: 'relu f-prime' },
-              { id: 'zero', value: 'x 0    if z < 0', label: 'dead unit' },
-            ],
-          },
-        ],
-      },
-    },
-    {
-      type: 'intuition',
-      title: 'Sigmoid, second problem: it is not zero-centred',
-      md: `Sigmoid outputs are always positive. Those outputs are the *inputs* to the next layer, and the gradient for a weight is **error × input**.
-
-- Input always positive ⇒ every weight in that neuron gets a gradient with the **same sign** as the shared error term.
-- So all weights of a neuron must go up together, or all down together. There is no "raise w₁, lower w₂" in one step.
-- Wanted a diagonal move? You get a staircase: up-up-up, down-down-down. This is the classic **zig-zag** path.
-- Cost is convergence speed, not correctness — but it stacks on top of vanishing gradients.
-- **Verdict on sigmoid:** output layer for binary probability, yes. Hidden layers, never.`,
-    },
-    {
-      type: 'intuition',
-      title: 'Tanh: sigmoid that fixed one of the two bugs',
-      md: `Same S-shape, rescaled to (−1, 1). Literally tanh(z) = 2σ(2z) − 1.
-
-- **Zero-centred** — outputs spread either side of 0, so the zig-zag problem disappears.
-- Derivative peaks at **1.0** (at z = 0), four times better than sigmoid's 0.25.
-- So a tanh stack does not vanish nearly as fast — this is why tanh beat sigmoid in the 1990s and still lives inside LSTM gates.
-- **But it still saturates.** At z = 3, tanh′ = 0.0099. Push activations away from 0 and the flat tails return.
-- Verdict: strictly better than sigmoid for hidden layers, strictly worse than ReLU. A stepping stone.`,
-    },
-    {
-      type: 'math',
-      intro: 'Tanh, and the identity that shows it is a stretched sigmoid.',
-      latex: [
-        '\\tanh(z) = \\frac{e^{z} - e^{-z}}{e^{z} + e^{-z}} = 2\\sigma(2z) - 1 \\;\\in\\; (-1, 1)',
-        '\\tanh^{\\prime}(z) = 1 - \\tanh^{2}(z) \\qquad \\max_z \\tanh^{\\prime}(z) = \\tanh^{\\prime}(0) = 1',
-      ],
-    },
-    {
-      type: 'intuition',
-      title: 'ReLU: max(0, z), and why it won everything',
-      md: `The whole function is: if the number is negative, make it 0; otherwise leave it alone. That is it. And it beat two decades of cleverer ideas.
-
-- **No saturation on the positive side.** f′(z) = 1 for all z > 0 — the gradient passes through *unchanged*, forever, at any depth.
-- **Free to compute.** One comparison. No exp, no division. On billions of activations this is a real wall-clock win.
-- **Sparsity.** Roughly half the units output exactly 0, so each layer's representation is sparse — cheaper, and often better-conditioned.
-- **The derivative is trivially cheap too:** 1 or 0, no extra math for the backward pass.
-- Not fashionable, not smooth, not differentiable at 0 (frameworks just define f′(0) = 0 and move on). It works.`,
-    },
-    {
-      type: 'intuition',
-      title: 'The dying ReLU — the price of that hard zero',
-      md: `A unit whose pre-activation z is negative outputs 0 **and** passes gradient 0. If z is negative for *every* input in the dataset, that unit is done.
-
-- Gradient 0 ⇒ its weights never update ⇒ z stays negative ⇒ gradient stays 0. A closed loop with no exit.
-- It is not "learning slowly". The unit is permanently removed from the network. 40% of a layer can die this way.
-- **Cause 1: learning rate too high.** One giant update knocks the bias hugely negative; the unit never comes back.
-- **Cause 2: a large negative bias**, from a bad init or accumulated updates, pushing z below 0 for all inputs.
-- Symptom to recognise in an interview: loss plateaus early and a chunk of activations are *exactly* zero for every batch.`,
-    },
-    {
-      type: 'intuition',
-      title: 'The fixes: Leaky ReLU, PReLU, ELU',
-      md: `All three do the same thing — refuse to let the negative side have exactly zero gradient.
-
-- **Leaky ReLU:** f(z) = z for z > 0, else αz with α = 0.01. Tiny slope, but non-zero, so a dead unit can crawl back.
-- **PReLU:** same shape, but α is a **learned parameter** per channel. More power, more parameters, slight overfit risk on small data.
-- **ELU:** smooth, and saturates to −α on the far negative side. Pushes mean activation toward 0 (a poor man's normalization) at the cost of an exp().
-- Honest ranking: none of these reliably beat plain ReLU on benchmarks. Reach for Leaky **when you have diagnosed dead units**, not by default.
-- Fixing the learning rate usually beats swapping the activation.`,
-    },
-    {
-      type: 'math',
-      intro: 'The ReLU family, written out. Note where each one is and is not zero.',
-      latex: [
-        '\\mathrm{ReLU}(z) = \\max(0, z) \\qquad \\mathrm{ReLU}^{\\prime}(z) = \\begin{cases} 1 & z > 0 \\\\ 0 & z < 0 \\end{cases}',
-        '\\mathrm{LeakyReLU}(z) = \\begin{cases} z & z > 0 \\\\ \\alpha z & z \\le 0 \\end{cases} \\quad \\alpha = 0.01 \\;\\; (\\text{learned in PReLU})',
-        '\\mathrm{ELU}(z) = \\begin{cases} z & z > 0 \\\\ \\alpha\\bigl(e^{z} - 1\\bigr) & z \\le 0 \\end{cases}',
-      ],
-    },
-    {
-      type: 'intuition',
-      title: 'GELU: what every modern transformer actually uses',
-      md: `BERT, GPT, ViT, Llama-family MLP blocks — none of them use plain ReLU. They use **GELU** (or its sibling SiLU/Swish).
-
-- Idea: instead of a hard on/off gate, weight the input by **how likely it is to be positive**. f(z) = z · Φ(z), where Φ is the standard-normal CDF.
-- Φ(z) is a smooth probability in (0,1): Φ(−3) ≈ 0.001 (kill it), Φ(0) = 0.5 (halve it), Φ(3) ≈ 0.999 (keep it).
-- So it is a **soft, probabilistic ReLU**. Smooth everywhere, no hard kink, and a small negative dip that lets a little gradient through below zero.
-- **SiLU / Swish:** f(z) = z·σ(z). Same shape, sigmoid instead of the normal CDF, marginally cheaper. Used in Llama-family models as SwiGLU.
-- Be honest in interviews: the gain over ReLU is **modest — a fraction of a point** — but it is real and it repeats at scale, which is enough when a training run costs millions.`,
-    },
-    {
-      type: 'math',
-      intro: 'GELU exactly, GELU as everyone actually implements it, and SiLU.',
-      latex: [
-        '\\mathrm{GELU}(z) = z \\cdot \\Phi(z), \\qquad \\Phi(z) = P(Z \\le z), \\;\\; Z \\sim \\mathcal{N}(0, 1)',
-        '\\mathrm{GELU}(z) \\approx 0.5\\,z\\left(1 + \\tanh\\!\\left[\\sqrt{\\tfrac{2}{\\pi}}\\bigl(z + 0.044715\\, z^{3}\\bigr)\\right]\\right)',
-        '\\mathrm{SiLU}(z) = z \\cdot \\sigma(z) \\qquad \\text{(a.k.a. Swish)}',
-      ],
+Two layers, four numbers of settings, and the whole thing is exactly the same as one layer with weight -6 and bias 3. Add a hundred more layers and it is still one line, just with different numbers. **Depth bought nothing.** That is the problem the rest of this module exists to fix.`,
     },
     {
       type: 'code',
       lang: 'python',
-      title: 'All five activations and their derivatives on one input vector — real output pasted',
-      code: `import numpy as np
-from math import erf, sqrt, pi
+      title: 'The collapse, run',
+      code: `x = 2.0
+h = 3.0 * x + 1.0
+y = -2.0 * h + 5.0
+print('two layers stacked :', y)
+print('one layer -6x + 3  :', -6.0 * x + 3.0)
 
-x = np.array([-3.0, -1.0, -0.1, 0.0, 0.1, 1.0, 3.0])
-
-def sigmoid(z):   return 1 / (1 + np.exp(-z))
-def d_sigmoid(z):
-    s = sigmoid(z); return s * (1 - s)                # sigma * (1 - sigma)
-
-def tanh(z):      return np.tanh(z)
-def d_tanh(z):    return 1 - np.tanh(z) ** 2
-
-def relu(z):      return np.maximum(0.0, z)
-def d_relu(z):    return (z > 0).astype(float)        # f'(0) := 0 by convention
-
-def lrelu(z, a=0.01):    return np.where(z > 0, z, a * z)
-def d_lrelu(z, a=0.01):  return np.where(z > 0, 1.0, a)
-
-Phi = np.vectorize(lambda t: 0.5 * (1 + erf(t / sqrt(2))))   # standard normal CDF
-def phi(z):       return np.exp(-z ** 2 / 2) / sqrt(2 * pi)  # its density
-def gelu(z):      return z * Phi(z)
-def d_gelu(z):    return Phi(z) + z * phi(z)                 # product rule
-
-rows = [('sigmoid', sigmoid, d_sigmoid), ('tanh', tanh, d_tanh),
-        ('relu', relu, d_relu), ('leaky', lrelu, d_lrelu), ('gelu', gelu, d_gelu)]
-
-print('x           ' + ' '.join(f'{v:>7.1f}' for v in x))
-print('-' * 68)
-for name, f, _ in rows:
-    print(f'{name:<8} f  ' + ' '.join(f'{v:>7.3f}' for v in f(x)))
-print('-' * 68)
-for name, _, d in rows:
-    print(f"{name:<8} f' " + ' '.join(f'{v:>7.3f}' for v in d(x)))
-print('-' * 68)
-for name, _, d in rows:
-    print(f'{name:<8} max derivative on this grid: {d(x).max():.3f}')
-
-# ------------------------------ real output ------------------------------
-# x              -3.0    -1.0    -0.1     0.0     0.1     1.0     3.0
-# --------------------------------------------------------------------
-# sigmoid  f    0.047   0.269   0.475   0.500   0.525   0.731   0.953
-# tanh     f   -0.995  -0.762  -0.100   0.000   0.100   0.762   0.995
-# relu     f    0.000   0.000   0.000   0.000   0.100   1.000   3.000
-# leaky    f   -0.030  -0.010  -0.001   0.000   0.100   1.000   3.000
-# gelu     f   -0.004  -0.159  -0.046   0.000   0.054   0.841   2.996
-# --------------------------------------------------------------------
-# sigmoid  f'   0.045   0.197   0.249   0.250   0.249   0.197   0.045
-# tanh     f'   0.010   0.420   0.990   1.000   0.990   0.420   0.010
-# relu     f'   0.000   0.000   0.000   0.000   1.000   1.000   1.000
-# leaky    f'   0.010   0.010   0.010   0.010   1.000   1.000   1.000
-# gelu     f'  -0.012  -0.083   0.420   0.500   0.580   1.083   1.012
-# --------------------------------------------------------------------
-# sigmoid  max derivative on this grid: 0.250
-# tanh     max derivative on this grid: 1.000
-# relu     max derivative on this grid: 1.000
-# leaky    max derivative on this grid: 1.000
-# gelu     max derivative on this grid: 1.083`,
+# ---- real output ----
+# two layers stacked : -9.0
+# one layer -6x + 3  : -9.0`,
       annotations: {
-        8: 'The famous shortcut: sigmoid\'s derivative is expressible in its own output, so backprop reuses the forward value for free.',
-        14: 'ReLU is not differentiable at z = 0. Every framework just picks a subgradient — PyTorch and TensorFlow both return 0. It has never mattered in practice.',
-        17: 'Leaky ReLU\'s whole fix is right here: 0.01 instead of 0.0. Small, but never exactly zero, so a dead unit can climb back.',
-        19: 'Exact GELU via the stdlib error function — no scipy needed. Frameworks ship the tanh approximation because erf used to be slow on GPU.',
-        22: 'GELU derivative can exceed 1 (peaks at ~1.08) and dips NEGATIVE near z = -1. Look at the gelu f-prime row: -0.012 and -0.083.',
-        47: 'This row IS the vanishing gradient: every entry <= 0.25, already down to 0.045 by z = +/-3. Compare the tanh row below it (max 1.000) and the relu row (exactly 1 or exactly 0).',
+        1: 'The input. One number, so we can follow it by eye.',
+        2: 'Layer 1: multiply by the weight 3.0, add the bias 1.0. h is the number handed to the next layer, and it is 7.0.',
+        3: 'Layer 2: multiply h by the weight -2.0 and add the bias 5.0. This is the network output.',
+        4: 'Print what the two-layer network produced.',
+        5: 'Print what a single layer with weight -6.0 and bias 3.0 produces on the same input. The two lines print the same number, which is the collapse: two layers were never more than one.',
       },
     },
     {
-      type: 'note',
-      md: 'Two things worth staring at in that table. **Row `sigmoid f\'`:** the whole row is ≤ 0.25, and it has already fallen to 0.045 by z = ±3 — sigmoid is nearly flat over most of its domain. **Row `relu f\'`:** every entry is exactly 1.0 or exactly 0.0. There is no in-between, which is both why gradients survive depth and why dead units are permanent.',
+      type: 'intuition',
+      title: 'The three words you need before going further',
+      md: `Definitions first, in plain English, because everything below uses them.
+
+- **Non-linear** — a function whose graph is not a straight line. Straight lines are exactly the things that collapse when you stack them, so anything not straight breaks the collapse.
+- **Activation function** — a small non-linear function applied to *each number* coming out of a layer, one at a time, before the next layer sees it. It has no weights of its own to learn. Its whole job is to bend the straight line.
+- **Derivative of the activation** — the slope of that small function at a given input. If the activation is f and the input is z, we write the slope as f'(z), read "f prime of z".
+
+Why the derivative and not the function value? Because of how training works. From *Gradient Descent + Linear Regression*: every weight is updated by (step size) x (slope of the loss with respect to that weight). To get that slope, the training loop multiplies together one slope per layer on the way back through the network, and the activation contributes one f'(z) at each layer. So each activation's slope is a factor in the update for every weight below it. If a slope is 0.1, the update below it is ten times smaller. If a slope is 0, the update below it is zero and nothing learns.`,
     },
     {
       type: 'intuition',
-      title: 'Softmax: the multi-class output layer',
-      md: `Different job entirely. The others map one number to one number. Softmax maps a **vector of K scores to a probability distribution over K classes**.
+      title: 'Sigmoid, computed by hand',
+      md: `The oldest activation. It takes any number and squashes it into the range 0 to 1. The formula is 1 / (1 + e^-z), where e is about 2.71828.
 
-- Two steps: exponentiate every score (makes everything positive, amplifies the leader), then divide by the total (makes them sum to 1).
-- Scores are called **logits** — raw, unbounded, meaningless in isolation. Only their *differences* matter.
-- Why exp and not just "divide by the sum"? Logits can be negative, which would make negative "probabilities"; exp fixes that and gives a clean, differentiable gradient with cross-entropy.
-- Softmax is **shift-invariant**: adding the same constant c to every logit changes nothing. That freedom is what makes the stability trick legal.
-- Pair it with cross-entropy loss and the gradient collapses to a beautiful **(prediction − truth)** — the same "error" shape from linear regression.`,
-    },
-    {
-      type: 'math',
-      intro: 'Softmax, the shift-invariance that licenses the max trick, and the overflow it prevents.',
-      latex: [
-        '\\mathrm{softmax}(z)_i = \\frac{e^{z_i}}{\\sum_{j=1}^{K} e^{z_j}} \\qquad \\sum_{i=1}^{K} \\mathrm{softmax}(z)_i = 1',
-        '\\frac{e^{z_i}}{\\sum_j e^{z_j}} = \\frac{e^{z_i - c}\\,e^{c}}{e^{c}\\sum_j e^{z_j - c}} = \\frac{e^{z_i - c}}{\\sum_j e^{z_j - c}} \\quad \\forall c \\;\\;\\Rightarrow\\;\\; \\text{take } c = \\max_j z_j',
-        '\\text{float64 overflows at } e^{709.8}: \\;\\; e^{1000} = \\infty, \\;\\; \\tfrac{\\infty}{\\infty} = \\mathrm{NaN}. \\;\\; \\text{After the shift the largest term is } e^{0} = 1.',
-        '\\mathrm{softmax}(z / T)_i \\;:\\quad T \\to 0 \\Rightarrow \\text{argmax}, \\quad T = 1 \\Rightarrow \\text{the model}, \\quad T > 1 \\Rightarrow \\text{flatter, more random}',
-      ],
+- At **z = 2**: e^-2 = 0.135335, so the bottom is 1.135335, and 1 / 1.135335 = **0.880797**.
+- Its slope has a very tidy form: f'(z) = f(z) x (1 - f(z)). No new arithmetic needed, just reuse the value you already computed.
+- At z = 2: 0.880797 x (1 - 0.880797) = 0.880797 x 0.119203 = **0.104994**.
+- At **z = 0**: the value is 1/2 = 0.5, so the slope is 0.5 x 0.5 = **0.25**. That is the largest slope sigmoid ever has, anywhere.
+- At **z = 6**: the value is 0.997527, so the slope is 0.997527 x 0.002473 = **0.002467**.
+
+Read those three slopes in order: 0.25, then 0.105, then 0.0025. The further you move from zero, the flatter the function gets.`,
     },
     {
       type: 'code',
       lang: 'python',
-      title: 'Softmax: the overflow, the one-line fix, and temperature — real output pasted',
-      code: `import numpy as np
+      title: 'Sigmoid and its slope at three inputs',
+      code: `import math
 
-def softmax(z):
-    e = np.exp(z - z.max())        # THE trick: shift by the max
-    return e / e.sum()
+def sigmoid(z):
+    return 1.0 / (1.0 + math.exp(-z))
 
-logits = np.array([1000.0, 1001.0, 1002.0])
-naive = np.exp(logits) / np.exp(logits).sum()   # overflow -> inf / inf
+for z in (0.0, 2.0, 6.0):
+    s = sigmoid(z)
+    d = s * (1.0 - s)
+    print('z =', z, ' sigmoid =', round(s, 6), ' slope =', round(d, 6))
 
-print('naive :', naive)
-print('stable:', softmax(logits))
-print('shifted logits:', logits - logits.max())
-print('sums to       :', softmax(logits).sum())
-
-small = np.array([2.0, 1.0, 0.1])
-for T in (0.5, 1.0, 2.0):
-    print(f'T={T}:', np.round(softmax(small / T), 3))
-
-# ---------------- real output (stderr RuntimeWarnings omitted) ----------------
-# naive : [nan nan nan]
-# stable: [0.09003057 0.24472847 0.66524096]
-# shifted logits: [-2. -1.  0.]
-# sums to       : 0.9999999999999999
-# T=0.5: [0.864 0.117 0.019]
-# T=1.0: [0.659 0.242 0.099]
-# T=2.0: [0.502 0.304 0.194]`,
+# ---- real output ----
+# z = 0.0  sigmoid = 0.5  slope = 0.25
+# z = 2.0  sigmoid = 0.880797  slope = 0.104994
+# z = 6.0  sigmoid = 0.997527  slope = 0.002467`,
       annotations: {
-        4: 'One subtraction. Largest shifted logit is 0, so the largest exp is exactly 1 — overflow is now impossible. Every real softmax implementation does this.',
-        8: 'exp(1000) = inf in float64, and inf/inf = nan. The model was fine; the arithmetic killed it. NaN loss with healthy gradients is often this.',
-        12: 'Proof the trick is free, not approximate: the shifted logits are just [-2, -1, 0] and the probabilities are identical to the exact math.',
-        13: 'Sums to 0.9999999999999999, not 1.0 — floating point, not a bug. Never test softmax output with ==.',
-        17: 'Temperature: divide logits BEFORE softmax. T=0.5 sharpens the leader from 0.659 to 0.864; T=2.0 flattens it to 0.502. This one knob is the creativity slider in GenAI sampling.',
+        1: 'The math module from the Python standard library. It gives us math.exp (the number e raised to a power), and later math.tanh and math.erf. No numpy anywhere in this module.',
+        3: 'Define the function. z is the number arriving from the layer; the usual name for it is the pre-activation.',
+        4: 'The formula, written exactly as above: e to the power minus z, plus one, then one divided by that.',
+        6: 'Loop over three inputs. The round brackets make a tuple, which is a fixed list; a for loop reads it the same way it reads a list.',
+        7: 'The activation value at this z.',
+        8: 'The slope, using the shortcut f(z) x (1 - f(z)). It costs one multiply because the value s is already computed.',
+        9: 'Print both. round(s, 6) cuts the float to 6 decimal places so the columns stay readable. Compare the last column down the three rows: 0.25, then 0.105, then 0.0025.',
       },
     },
     {
-      type: 'note',
-      md: 'Why softmax never goes in hidden layers: it **couples every neuron in the layer** — raising one output must lower the others, because they are forced to sum to 1. A hidden layer needs independent features that can all be active at once, not a competition with a fixed budget. Softmax also caps every unit at 1 and, by normalizing, throws away the magnitude information the next layer wanted. Use it exactly once: the final layer of a multi-class classifier.',
+      type: 'intuition',
+      title: 'Saturation, and why a small slope stops learning',
+      md: `Two more words, both visible in the numbers you just computed.
+
+- **Saturation** — a function saturates when its output stops responding to its input. Sigmoid at z = 6 gives 0.997527; at z = 10 it gives 0.999955. The input moved by 4 and the output moved by 0.00002. The function has flattened out, and a flat function has a slope near zero.
+- **Vanishing gradient** — the slopes of all the layers get multiplied together on the way back, so many small numbers multiplied become an unimaginably small number. That tiny number is the gradient, and a tiny gradient means a tiny weight update.
+
+Put real numbers on it. Suppose a 6-layer network where every unit sits at z = 2, so every activation slope is 0.104994. The factor reaching the first layer is 0.104994 multiplied by itself six times:
+
+- After 1 layer: 0.104994. After 2: 0.011024. After 3: 0.001157.
+- After 4: 0.000122. After 5: 0.0000128. After 6: **0.00000134**.
+
+With a step size of 0.01, the first layer's weights move by about a hundred-millionth per training step. That is not slow learning, it is no learning: the number is smaller than the rounding noise. Meanwhile the last layer, which only got multiplied once, trains fine — so the loss does drop a little and then sticks.`,
+    },
+    {
+      type: 'math',
+      intro: 'Sigmoid, its slope, and the multiplication that kills a deep stack. e is the constant 2.71828, and the prime mark means slope.',
+      latex: [
+        '\\sigma(z) = \\frac{1}{1 + e^{-z}} \\qquad \\sigma^{\\prime}(z) = \\sigma(z)\\bigl(1 - \\sigma(z)\\bigr) \\qquad \\sigma^{\\prime}(0) = 0.5 \\times 0.5 = 0.25',
+        '\\text{6 layers, each with slope } 0.104994: \\quad (0.104994)^{6} = 0.00000134',
+        '\\text{even at the best slope sigmoid ever has: } \\quad (0.25)^{10} = \\frac{1}{1048576} = 0.00000095',
+      ],
     },
     {
       type: 'intuition',
-      title: 'The decision list — memorise this, not the graphs',
-      md: `Ninety percent of real choices are covered by six lines.
+      title: 'Tanh: the same S-shape, centred on zero',
+      md: `Tanh squashes into the range -1 to 1 instead of 0 to 1, and its slope is 1 - f(z) x f(z).
 
-- **Hidden layers, default:** ReLU. Fast, deep-friendly, boring, correct.
-- **Hidden layers, transformer:** GELU (or SiLU/SwiGLU). Match whatever the architecture you are copying uses.
-- **Hidden layers, you have diagnosed dead units:** Leaky ReLU — *after* you have checked the learning rate.
-- **Output, binary classification:** sigmoid → one probability in (0,1).
-- **Output, multi-class (one label):** softmax over K logits. **Multi-label** (several can be true): K independent sigmoids, not softmax.
-- **Output, regression:** none. A raw linear output; squashing it would cap what the model can predict.`,
+- At **z = 0**: tanh(0) = 0, so the slope is 1 - 0 = **1.0**. Four times better than sigmoid's best.
+- At **z = 2**: tanh(2) = 0.964028, so the slope is 1 - 0.929 = **0.070651**.
+- At **z = 6**: tanh(6) = 0.999988, so the slope is **0.000025**.
+
+So tanh starts better and saturates *harder*. At z = 2 its slope has already fallen below sigmoid's. There is one genuine extra advantage: tanh outputs sit either side of zero, while sigmoid outputs are always positive. A layer whose outputs are all positive feeds all-positive inputs to the next layer, and every weight there then gets an update pointing the same direction, which makes the optimiser zig-zag instead of going straight. Tanh removes that. It is still an S-shape with flat tails, which is the part that matters.`,
     },
     {
-      type: 'note',
-      md: 'One line to file away for the normalization module: the canonical order is **Linear → BatchNorm → activation**. Normalizing before the non-linearity centres the pre-activations where the derivative is largest, which is precisely where sigmoid/tanh do not saturate and where ReLU units are least likely to die. The original ResNet put BN after the conv and before ReLU; "pre-activation" ResNet later moved BN and ReLU before the conv and trained even deeper. Both work — the point is that this ordering is a real decision, not a formality.',
+      type: 'code',
+      lang: 'python',
+      title: 'Tanh and its slope at the same three inputs',
+      code: `import math
+
+for z in (0.0, 2.0, 6.0):
+    t = math.tanh(z)
+    d = 1.0 - t * t
+    print('z =', z, ' tanh =', round(t, 6), ' slope =', round(d, 6))
+
+# ---- real output ----
+# z = 0.0  tanh = 0.0  slope = 1.0
+# z = 2.0  tanh = 0.964028  slope = 0.070651
+# z = 6.0  tanh = 0.999988  slope = 2.5e-05`,
+      annotations: {
+        1: 'math.tanh ships with Python, so there is nothing to write ourselves.',
+        3: 'The same three inputs as the sigmoid run, so the two output tables can be read side by side.',
+        4: 'The activation value.',
+        5: 'The slope, using 1 minus the value squared. Again the forward value is reused, so the slope is nearly free.',
+        6: 'Print both. The last row prints 2.5e-05, which is Python\'s shorthand for 0.000025 — that is saturation showing up as scientific notation.',
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'ReLU: the function that fixed it',
+      md: `ReLU is the whole of: if the number is negative, output 0; otherwise output the number unchanged. Written max(0, z). It looks too simple to be an improvement on a smooth S-curve, and it is what made deep networks trainable.
+
+- At **z = 3**: output 3. At **z = 0.5**: output 0.5. At **z = -2**: output 0.
+- Its slope is 1 for every positive z, because output = input there and a line of the form y = z has slope 1.
+- Its slope is 0 for every negative z, because the output is the constant 0 and a constant does not move.
+- **Nothing saturates on the positive side.** Six layers of active ReLU units multiply 1 x 1 x 1 x 1 x 1 x 1 = **1**. The gradient reaching layer 1 is exactly what left the loss. Compare with 0.00000134 for the sigmoid stack.
+- Bonus: it costs one comparison. No e^z, no division. On billions of numbers per pass that is real wall-clock time.
+
+At exactly z = 0 the function has a corner and no single slope. Every framework just declares f'(0) = 0 and moves on; a pre-activation being bit-exactly zero essentially never happens.`,
+    },
+    {
+      type: 'intuition',
+      title: 'The dead neuron, and the one-character fix',
+      md: `A **dead neuron** is a unit whose pre-activation z is negative for *every* example in the dataset. Follow the loop:
+
+- Its ReLU slope is 0, so the gradient for its weights is 0.
+- A gradient of 0 means the update is (step size) x 0 = 0, so its weights do not change.
+- Weights unchanged means z stays negative for every example, so the slope stays 0. Nothing can ever get it out. The unit is permanently gone from the network.
+- **Why it happens.** Mostly a step size that is too big: one oversized update drives the bias far negative in a single step and it never comes back. A badly chosen starting bias does the same thing more slowly.
+- **LeakyReLU** replaces the flat 0 on the negative side with a gentle slope, usually 0.01 x z. Output at z = -2 is -0.02 instead of 0, and the slope there is 0.01 instead of 0.
+- 0.01 is small, but it is not zero, so a unit sitting on the negative side still receives a small update every step and can crawl back. That single change is the entire fix.
+
+Honest advice: fix the step size first. LeakyReLU is what you reach for once you have measured dead units, not a default.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'ReLU and LeakyReLU, values and slopes',
+      code: `def relu(z):
+    return max(0.0, z)
+
+def leaky(z):
+    return z if z > 0.0 else 0.01 * z
+
+for z in (-2.0, 0.5, 3.0):
+    dr = 1.0 if z > 0.0 else 0.0
+    dl = 1.0 if z > 0.0 else 0.01
+    print('z =', z, ' relu =', relu(z), 'slope', dr, ' leaky =', round(leaky(z), 4), 'slope', dl)
+
+# ---- real output ----
+# z = -2.0  relu = 0.0 slope 0.0  leaky = -0.02 slope 0.01
+# z = 0.5  relu = 0.5 slope 1.0  leaky = 0.5 slope 1.0
+# z = 3.0  relu = 3.0 slope 1.0  leaky = 3.0 slope 1.0`,
+      annotations: {
+        1: 'Define ReLU.',
+        2: 'max(0.0, z) returns whichever of the two is larger, which is exactly "negative becomes zero, positive stays put".',
+        4: 'Define LeakyReLU.',
+        5: '"z if z > 0.0 else 0.01 * z" is a Python conditional expression: it checks the test in the middle and the whole line becomes the left value when the test passes, the right value when it fails. So positives pass through and negatives are shrunk to a hundredth.',
+        7: 'One negative input, one small positive, one larger positive.',
+        8: 'ReLU\'s slope, written out by the same conditional-expression rule: 1.0 on the positive side, 0.0 on the negative side.',
+        9: 'LeakyReLU\'s slope: 1.0 on the positive side, 0.01 on the negative side. This single line is the difference between a unit that can recover and one that cannot.',
+        10: 'Print all four columns. On the top row, look at the two slopes: ReLU gives exactly 0.0 (no update, ever) and LeakyReLU gives 0.01 (small, but alive).',
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'GELU, briefly: a smooth ReLU',
+      md: `GELU is what most transformer models use today, and the plain description is enough: **it is a smooth version of ReLU**. Instead of a hard corner at zero it curves, and instead of chopping negatives to exactly 0 it shrinks them toward 0 while letting a little through.
+
+- The formula is f(z) = z x P(z), where P(z) is a number between 0 and 1 that grows as z grows. P(-2) = 0.023, P(0) = 0.5, P(3) = 0.999. So GELU keeps almost all of a big positive number, halves the input at zero, and keeps almost nothing of a big negative one.
+- At **z = 3**: 3 x 0.99865 = **2.99595**, essentially the ReLU answer.
+- At **z = -2**: -2 x 0.02275 = **-0.0455**, slightly negative rather than exactly 0.
+- Its slope at z = -2 is **-0.085232** — small and non-zero, so there are no permanently dead units.
+- The measured gain over ReLU is small: a fraction of a percentage point on large models. It is real and it repeats at scale, which is enough when a training run is expensive. For your own networks, ReLU is the right default.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'GELU and its slope',
+      code: `import math
+
+def gelu(z):
+    return z * 0.5 * (1.0 + math.erf(z / math.sqrt(2.0)))
+
+for z in (-2.0, 0.0, 0.5, 3.0):
+    p = 0.5 * (1.0 + math.erf(z / math.sqrt(2.0)))
+    bell = math.exp(-z * z / 2.0) / math.sqrt(2.0 * math.pi)
+    print('z =', z, ' gelu =', round(gelu(z), 6), ' slope =', round(p + z * bell, 6))
+
+# ---- real output ----
+# z = -2.0  gelu = -0.0455  slope = -0.085232
+# z = 0.0  gelu = 0.0  slope = 0.5
+# z = 0.5  gelu = 0.345731  slope = 0.867495
+# z = 3.0  gelu = 2.99595  slope = 1.011946`,
+      annotations: {
+        1: 'math again, for erf, exp and sqrt.',
+        3: 'Define GELU.',
+        4: 'math.erf is a standard-library function whose only job here is to build P(z): the expression 0.5 * (1 + erf(z / sqrt(2))) rises smoothly from 0 to 1 as z rises. Multiply the input by it and you have GELU.',
+        6: 'Four inputs, including a negative one so the small non-zero output is visible.',
+        7: 'P(z) on its own, so the print line can use it.',
+        8: 'The bell-shaped curve that tells us how fast P is rising at this z. It is needed because GELU is a product of two things that both change, so its slope is (first x rate of second) + (second x rate of first).',
+        9: 'Print value and slope. Read the slope column: -0.085 at z = -2 (small but not zero, so no dead units), and 1.01 at z = 3, which is the ReLU behaviour of passing the gradient straight through.',
+      },
     },
     {
       type: 'visual',
       component: 'PythonPlayground',
       props: {
-        code: `import numpy as np
+        code: `import math
 
-SCALE = 1.0  # <-- change me: 1.0, then 3.0, then 10.0
+SCALE = 1.0
 
-z = np.array([-2.0, -0.5, 0.5, 2.0]) * SCALE
-sig = lambda v: 1 / (1 + np.exp(-v))
-gelu = lambda v: 0.5 * v * (1 + np.tanh(0.7978845608 * (v + 0.044715 * v ** 3)))
-h = 1e-6
-
-fns = {
-    'sigmoid':   (sig(z),                        sig(z) * (1 - sig(z))),
-    'tanh':      (np.tanh(z),                    1 - np.tanh(z) ** 2),
-    'relu':      (np.maximum(0.0, z),            (z > 0) * 1.0),
-    'leakyrelu': (np.where(z > 0, z, 0.01 * z),  np.where(z > 0, 1.0, 0.01)),
-    'gelu':      (gelu(z),                       (gelu(z + h) - gelu(z - h)) / (2 * h)),
-}
-
-row = lambda v, w: ' '.join(('%' + w) % t for t in v)
-print('SCALE =', SCALE, '  z =', row(z, '8.2f'))
-print()
-for name, (a, d) in fns.items():
-    print('%-10s f  = %s' % (name, row(a, '10.5f')))
-    print("%-10s f' = %s" % ('', row(d, '10.6f')))`,
-        precomputedOutput: `SCALE = 1.0   z =    -2.00    -0.50     0.50     2.00
-
-sigmoid    f  =    0.11920    0.37754    0.62246    0.88080
-           f' =   0.104994   0.235004   0.235004   0.104994
-tanh       f  =   -0.96403   -0.46212    0.46212    0.96403
-           f' =   0.070651   0.786448   0.786448   0.070651
-relu       f  =    0.00000    0.00000    0.50000    2.00000
-           f' =   0.000000   0.000000   1.000000   1.000000
-leakyrelu  f  =   -0.02000   -0.00500    0.50000    2.00000
-           f' =   0.010000   0.010000   1.000000   1.000000
-gelu       f  =   -0.04540   -0.15429    0.34571    1.95460
-           f' =  -0.086099   0.132630   0.867370   1.086099`,
-        caption: 'Saturation, seen not asserted: push SCALE to 3.0 then 10.0 and watch sigmoid and tanh derivatives print 0.000000 while ReLU holds 1.0',
+z = 2.0 * SCALE
+s = 1.0 / (1.0 + math.exp(-z))
+t = math.tanh(z)
+print('z             =', z)
+print('sigmoid slope = %.6f' % (s * (1.0 - s)))
+print('tanh slope    = %.6f' % (1.0 - t * t))
+print('relu slope    = %.6f' % (1.0 if z > 0.0 else 0.0))`,
+        precomputedOutput: `z             = 2.0
+sigmoid slope = 0.104994
+tanh slope    = 0.070651
+relu slope    = 1.000000`,
+        caption: 'Change SCALE to 3.0, then to 10.0, and run. At 3.0 the slopes are 0.002467 and 0.000025; at 10.0 both print 0.000000 while ReLU still prints 1.000000. That is saturation, measured rather than asserted.',
+        annotations: {
+          1: 'The standard-library math module, for math.exp and math.tanh.',
+          3: 'The knob. Edit this one number and press run: 1.0, then 3.0, then 10.0.',
+          5: 'The pre-activation we test. At SCALE = 1.0 it is z = 2.0; at SCALE = 10.0 it is z = 20.0, far out in the flat tail.',
+          6: 'The sigmoid value at that z, from the same formula as before.',
+          7: 'The tanh value at that z.',
+          8: 'Print which z we are at, so the numbers below have a label.',
+          9: 'The sigmoid slope, value x (1 - value). The %.6f is a formatting instruction meaning "print as a decimal with six digits after the point", and the % between the text and the brackets is what pastes the number into the text.',
+          10: 'The tanh slope, 1 minus the value squared, printed the same way.',
+          11: 'The ReLU slope: 1.0 whenever z is positive. It does not depend on how large z is, which is the whole point — turn SCALE up as far as you like and this line never changes.',
+        },
       },
+    },
+    {
+      type: 'intuition',
+      title: 'Softmax belongs on the output, not in the middle',
+      md: `Softmax is the odd one out, and it is not a hidden-layer activation at all. The activations above each take one number and return one number. Softmax takes a whole list of K scores and turns them into K probabilities that add up to 1 — one probability per class.
+
+- Use it exactly once, on the final layer of a classifier that must pick one of K classes.
+- Never in a hidden layer, because it forces the units to compete: they must sum to 1, so raising one output mathematically requires lowering the others. A hidden layer needs features that can all be strongly active at the same time.
+- The details — the formula, the subtract-the-maximum trick that stops the arithmetic overflowing, and how it pairs with cross-entropy loss — are worked through with numbers in the Metrics module *Classification Losses: Cross-Entropy, Focal & Hinge*. That is the right place for it, because softmax only makes sense alongside the loss it is used with.
+
+For this module, one line is enough: hidden layers get ReLU; the output layer gets whatever matches the answer shape, which is softmax for one-of-K classification, a single sigmoid for a yes/no question, and no activation at all for predicting a number.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Worked case: the same 4-layer network, three activations, by hand',
+      md: `A 4-layer network. Every hidden unit happens to sit at pre-activation z = 2, and the gradient arriving from the loss is 1.0. We want the factor that reaches the first layer's weights, which is the product of one activation slope per layer. The step size is 0.01.
+
+- **Sigmoid.** Slope at z = 2 is 0.104994. Four layers: 0.104994 x 0.104994 = 0.011024, x 0.104994 = 0.001157, x 0.104994 = **0.000122**. First-layer update: 0.01 x 0.000122 = 0.0000012.
+- **Tanh.** Slope at z = 2 is 0.070651. Four layers: 0.070651 squared is 0.004992, squared again is **0.0000249**. Worse than sigmoid here, because at z = 2 tanh has already saturated further.
+- **ReLU.** z = 2 is positive, so every slope is exactly 1. Four layers: 1 x 1 x 1 x 1 = **1.0**. First-layer update: 0.01 x 1.0 = 0.01.
+
+The ReLU network moves its first layer about 8,000 times further per step than the sigmoid one, on exactly the same data with exactly the same step size. Now note what changes the sigmoid story: if every unit had sat at z = 0 instead of z = 2, the slope would be 0.25 and four layers would give 0.25^4 = 0.0039 — thirty times better. This is why keeping pre-activations near zero matters so much, and it is the whole motivation for the normalization layers in *Weight Init, BatchNorm vs LayerNorm*.`,
+    },
+    {
+      type: 'intuition',
+      title: 'The classic mistake, walked into on purpose',
+      md: `A student builds a 10-layer network to classify images and puts sigmoid on every hidden layer, reasoning that sigmoid outputs look like probabilities and probabilities are easy to interpret. Training runs. Here is what the logs show and what it means.
+
+- The loss falls quickly for the first few hundred steps, then flattens well above where it should be. Accuracy stops improving.
+- They print the size of the gradient at each layer. Layer 10 shows about 0.01. Layer 1 shows about 0.000000001.
+- **The diagnosis is in that gap.** Nine sigmoid slopes were multiplied together on the way back. Even in the impossible best case where every one of them is 0.25, that is 0.25^9 = 0.0000038. In reality the pre-activations drift away from zero, the slopes fall to around 0.1, and 0.1^9 = 0.000000001, which is exactly what the log shows.
+- So the last two layers are training normally on top of the first eight layers, which are still at their random starting values and never move. The network is effectively a 2-layer model sitting on random noise, which is why the loss plateaus high rather than failing outright.
+- **The reasoning was wrong too.** A hidden unit outputting 0.87 is not the probability of anything. It is a squashed intermediate number with no meaning attached. Probabilities are the job of the output layer.
+- **The fix:** ReLU on all ten hidden layers. Every active unit contributes a slope of exactly 1, the product stays at 1 through any depth, and layer 1 receives the same gradient magnitude as layer 10.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Practice problems',
+      md: `Pen and paper. All the arithmetic is small on purpose; e^-1 = 0.367879 and e^-3 = 0.049787 are the only two constants you need.
+
+1. Two layers, no activation: layer 1 multiplies by 4 and adds 2, layer 2 multiplies by 0.5 and subtracts 3. Write the single equivalent layer, then check both forms at x = 6.
+2. Compute sigmoid at z = 1 and its slope there. Then compute the slope at z = 3. By what factor did the slope shrink?
+3. A 5-layer network, every activation slope equal to 0.2. What factor reaches layer 1? Repeat for ReLU with every unit active. How many times larger is the ReLU update?
+4. A ReLU unit has weight 0.5 and bias -4, and every input in the dataset lies between 0 and 6. Is this unit dead? Show why, and state what LeakyReLU would give as its slope.
+5. Someone puts softmax on a hidden layer of 3 units and reports that whenever one feature grows the other two shrink. Explain in two sentences why that is guaranteed, not a coincidence.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Worked solutions',
+      md: `Check every step, not just the final number.
+
+1. 0.5 x (4x + 2) - 3 = 2x + 1 - 3 = **2x - 2**. At x = 6: layer 1 gives 26, layer 2 gives 0.5 x 26 - 3 = **10**; the single layer gives 2 x 6 - 2 = **10**. Same answer, so the second layer added no new behaviour.
+2. At z = 1: 1 / (1 + 0.367879) = 1 / 1.367879 = **0.731059**, slope = 0.731059 x 0.268941 = **0.196612**. At z = 3: 1 / 1.049787 = **0.952574**, slope = 0.952574 x 0.047426 = **0.045177**. The slope shrank by 0.196612 / 0.045177 = about **4.4 times**, from moving the input just two steps to the right.
+3. 0.2^5 = 0.00032. ReLU gives 1^5 = 1. The ReLU update is 1 / 0.00032 = **3,125 times larger** on the same data with the same step size.
+4. The pre-activation is z = 0.5 x input - 4. The largest input is 6, giving z = 3 - 4 = **-1**, and the smallest gives -4. So z is negative for every input, the ReLU slope is 0 every time, the weights never update, and the unit is **dead** — permanently, because nothing can change z. LeakyReLU would give slope **0.01** there, small but non-zero, so the unit keeps receiving updates and can climb back above zero.
+5. Softmax divides every output by the sum of all the outputs, so the three are forced to add to exactly 1. That is a fixed budget: one of them can only take a larger share if the others give up the same amount, which makes the units compete instead of representing independent features.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Beyond the basics - skip this on your first read',
+      md: `Everything above stands alone. This section only names things so the words are familiar when you meet them later.
+
+- **PReLU and ELU.** Two more variations on the same idea as LeakyReLU. PReLU makes the 0.01 slope a value the network learns instead of a fixed constant. ELU uses a smooth curve on the negative side that flattens out at a small negative value. Neither reliably beats plain ReLU on benchmarks.
+- **SiLU, also called Swish.** f(z) = z x sigmoid(z). Almost the same shape as GELU and slightly cheaper, used in the Llama family of models. If you understand GELU as a smooth ReLU, you understand this one too.
+- **Exploding gradients.** The opposite failure. If the per-layer factors are larger than 1 instead of smaller, the product grows instead of shrinking, and the weights jump to enormous values or to NaN. The standard fix is gradient clipping: cap the size of the update before applying it.
+- **Where the pre-activations sit is a decision, not luck.** The worked case showed sigmoid doing thirty times better at z = 0 than at z = 2. Normalization layers exist to keep pre-activations near zero on purpose, and the usual ordering is linear layer, then normalization, then activation. That is the subject of *Weight Init, BatchNorm vs LayerNorm*.
+- **Residual connections.** A different escape route from vanishing gradients: give the gradient a path that skips the layers entirely, so it arrives at depth undiminished no matter what the activations did. This is why networks with hundreds of layers became possible.`,
     },
   ],
   quiz: [
     {
-      question: 'A 10-layer network uses sigmoid in every hidden layer. Assume every unit sits exactly at its best case for gradient flow. By roughly what factor is the gradient reaching layer 1 reduced?',
+      question: 'Layer 1 computes 3x + 1 and layer 2 computes -2h + 5, with no activation between them. What is the network?',
       options: [
-        { text: 'About 10x — one factor per layer', explanation: 'The shrinkage is multiplicative, not additive. Ten factors of 0.25 multiply, they do not sum.' },
-        { text: 'About 10⁻⁶ — 0.25 raised to the 10th power', explanation: 'Correct. 0.25¹⁰ = 1/1,048,576 ≈ 9.5×10⁻⁷. And that is the BEST case; typical σ′ near 0.1 gives 10⁻¹⁰.' },
-        { text: 'No reduction — sigmoid preserves gradient magnitude', explanation: 'Sigmoid\'s derivative never exceeds 0.25, so it can only ever shrink the gradient, never preserve it.' },
-        { text: 'About 0.25 — the max derivative applies once', explanation: 'It applies once per layer. Ten layers means the factor appears ten times.' },
+        { text: 'A curve, because two layers can bend the input', explanation: 'Bending requires something non-linear. Both layers only multiply and add, and doing that twice still only multiplies and adds.' },
+        { text: 'The single layer -6x + 3', explanation: 'Correct. -2(3x + 1) + 5 = -6x + 3, and both forms give -9 at x = 2. The second layer added no behaviour the first did not already have.' },
+        { text: 'Twice as expressive as one layer, because it has twice the parameters', explanation: 'It has four numbers of settings but only two of them are independent — every setting of the pair is reachable by some single layer.' },
+        { text: 'Undefined without an activation function', explanation: 'It computes perfectly well. The problem is not that it fails, it is that it is no more powerful than one layer.' },
       ],
       correct: 1,
     },
     {
-      question: 'What makes a ReLU unit "dead", and why can it never recover on its own?',
+      question: 'Sigmoid\'s slope is 0.25 at z = 0, 0.104994 at z = 2, and 0.002467 at z = 6. What is this pattern called and why does it matter?',
       options: [
-        { text: 'Its output saturates near 1, so the derivative approaches 0', explanation: 'That is sigmoid/tanh saturation. ReLU has no upper bound and never saturates on the positive side.' },
-        { text: 'Its weights became NaN', explanation: 'NaN weights break the whole network, not one unit, and that is a numerical bug rather than the dying-ReLU phenomenon.' },
-        { text: 'Its pre-activation is negative for every input, so its gradient is exactly 0 — and zero gradient means the weights never change, which keeps the pre-activation negative', explanation: 'Correct, and the closed loop is the key insight: no gradient means no update means no gradient. Usual causes are a too-high learning rate or a large negative bias.' },
-        { text: 'It outputs the same constant for every input, so the loss ignores it', explanation: 'Outputting a constant is the symptom; the mechanism that locks it in is the exactly-zero gradient below 0.' },
-      ],
-      correct: 2,
-    },
-    {
-      question: 'Why subtract the maximum logit before exponentiating in softmax?',
-      options: [
-        { text: 'Softmax is shift-invariant, so it changes nothing mathematically but keeps the largest exponent at e⁰ = 1, preventing overflow', explanation: 'Correct. The e^c factor cancels between numerator and denominator, so the result is exact — this is a free fix, not an approximation.' },
-        { text: 'It makes the probabilities sum to 1', explanation: 'The division by the sum already guarantees that, with or without the shift.' },
-        { text: 'It speeds up the exponential', explanation: 'exp() costs the same on any input. The concern is overflow, not speed.' },
-        { text: 'It makes the output sharper, like a low temperature', explanation: 'Sharpening requires scaling the logits (dividing by T), not shifting them. A shift provably changes nothing.' },
+        { text: 'Saturation: the function flattens away from zero, so its slope approaches zero, and those slopes multiply together across layers', explanation: 'Correct. Six layers at slope 0.104994 give a factor of 0.00000134 reaching layer 1, so its weights barely move.' },
+        { text: 'Overfitting: the model has memorised the training data', explanation: 'Overfitting is about how a trained model behaves on new data. This is a property of the activation function itself, before any data is involved.' },
+        { text: 'Normalisation: the outputs are being rescaled into a fixed range', explanation: 'Sigmoid does map into 0 to 1, but the name for the flat tails and their near-zero slopes is saturation.' },
+        { text: 'A dead neuron: the unit has stopped responding', explanation: 'A dead neuron is the ReLU failure, where the slope is exactly 0 and can never recover. Sigmoid slopes are small but never exactly zero.' },
       ],
       correct: 0,
     },
     {
-      question: 'Tanh is preferred over sigmoid for hidden layers primarily because…',
+      question: 'Why does a near-zero activation slope stop a layer from learning?',
       options: [
-        { text: 'Tanh is cheaper to compute', explanation: 'Both use exponentials — tanh is if anything marginally more expensive. Cost is not the argument.' },
-        { text: 'Tanh never saturates', explanation: 'It absolutely does. At z = 3, tanh′ ≈ 0.0099, even flatter than sigmoid there.' },
-        { text: 'Tanh outputs are unbounded', explanation: 'Tanh is bounded to (−1, 1). ReLU is the unbounded one.' },
-        { text: 'It is zero-centred, and its derivative peaks at 1.0 instead of 0.25', explanation: 'Correct on both counts: no all-same-sign gradient zig-zag, and 4x more gradient survives each layer. Still saturating, so ReLU still wins.' },
+        { text: 'It makes the loss function undefined', explanation: 'The loss computes fine. The problem is in the size of the update, not in whether it can be computed.' },
+        { text: 'It makes the model output zero', explanation: 'The slope and the output are different numbers. Sigmoid at z = 6 outputs 0.997527 while its slope is 0.002467.' },
+        { text: 'Each weight moves by (step size) x (gradient), and that gradient is a product of one slope per layer, so near-zero slopes multiply into a near-zero update', explanation: 'Correct. With slopes of 0.1 across nine layers the factor is 0.000000001, and multiplying that by a step size of 0.01 gives an update indistinguishable from zero.' },
+        { text: 'Small slopes make training unstable and the loss jumps around', explanation: 'That is the opposite failure, caused by factors larger than 1 (exploding gradients) or too large a step size.' },
       ],
-      correct: 3,
+      correct: 2,
     },
     {
-      question: 'Your last layer must predict, for one image, which of {has_cat, has_dog, is_outdoors} apply — any number of them can be true. What goes on the output?',
+      question: 'A ReLU unit has weight 0.5 and bias -4, and every input lies between 0 and 6. What happens to it during training?',
       options: [
-        { text: 'Softmax over the 3 logits', explanation: 'Softmax forces the three to compete for a budget of 1.0. If a cat and a dog are both present, it cannot say so.' },
-        { text: 'Three independent sigmoids, one per label', explanation: 'Correct. Multi-label needs independent probabilities; each sigmoid answers its own yes/no question, and they need not sum to anything.' },
-        { text: 'ReLU on each logit', explanation: 'ReLU is unbounded above and gives 0 for all negatives — those are not probabilities.' },
-        { text: 'No activation — use raw logits', explanation: 'That is the regression answer. Here you need calibrated probabilities per label.' },
+        { text: 'It learns slowly but recovers, because the gradient is small rather than zero', explanation: 'That describes sigmoid saturation. ReLU\'s slope below zero is exactly 0.0, not small.' },
+        { text: 'Its pre-activation is at most -1, so its slope is always exactly 0, its weights never update, and it stays that way forever', explanation: 'Correct. z = 0.5 x 6 - 4 = -1 at best. Zero gradient means zero update means z stays negative: a closed loop with no exit. That is a dead neuron.' },
+        { text: 'It saturates near 1 and stops responding', explanation: 'ReLU has no upper limit and never saturates on the positive side. The failure is on the negative side.' },
+        { text: 'It outputs a negative number that the next layer corrects', explanation: 'ReLU outputs exactly 0 for negative inputs, never a negative number.' },
       ],
       correct: 1,
     },
     {
-      question: 'Why is softmax a bad choice for a hidden layer?',
+      question: 'What exactly does LeakyReLU change, and what does that buy?',
       options: [
-        { text: 'It is too expensive to compute', explanation: 'Cost is a minor issue compared to the structural problem, and softmax runs fine on output layers of 50,000 classes.' },
-        { text: 'It couples the neurons — outputs must sum to 1, so raising one forces others down, and normalization discards magnitude the next layer needs', explanation: 'Correct. A hidden layer wants independent features that can all fire at once, not a fixed-budget competition.' },
-        { text: 'Its gradient is always zero', explanation: 'Softmax has a perfectly well-defined non-zero Jacobian; that is not the problem.' },
-        { text: 'It is not differentiable', explanation: 'It is smooth and differentiable everywhere — that is one of its main virtues.' },
+        { text: 'It bounds the output to the range -1 to 1, so activations cannot explode', explanation: 'That is tanh. LeakyReLU is unbounded above, exactly like ReLU.' },
+        { text: 'It smooths the corner at zero, so the function is differentiable everywhere', explanation: 'It still has a corner at zero — the slope jumps from 0.01 to 1.0. Smoothing the corner is what GELU does.' },
+        { text: 'It replaces the slope of 0 below zero with 0.01, so a unit on the negative side still receives a small update every step and can recover', explanation: 'Correct, and that is the whole change: one constant. It is a fix to reach for after measuring dead units, not a default — check the step size first.' },
+        { text: 'It learns the negative slope from the data instead of fixing it', explanation: 'That is PReLU. LeakyReLU\'s 0.01 is a fixed constant.' },
       ],
-      correct: 1,
+      correct: 2,
     },
     {
-      question: 'From the code table: GELU\'s derivative is −0.083 at z = −1 and 1.083 at z = 1. What does the negative value tell you?',
+      question: 'Where does softmax belong, and why not in a hidden layer?',
       options: [
-        { text: 'The implementation is wrong — derivatives cannot be negative', explanation: 'They certainly can. GELU is non-monotonic: it dips slightly below zero around z ≈ −1 before rising, so its slope there is negative.' },
-        { text: 'GELU is non-monotonic — it dips below zero near z ≈ −1, so gradient can flow (with a sign flip) on the negative side, unlike ReLU\'s hard 0', explanation: 'Correct. That small negative region is exactly the smoothness that lets sub-zero units keep receiving signal, and it is why GELU has no dying-unit problem.' },
-        { text: 'GELU saturates like sigmoid', explanation: 'GELU\'s derivative tends to 1 for large positive z — the opposite of saturating on the useful side.' },
-        { text: 'GELU cannot be used with backprop', explanation: 'It is smooth and differentiable everywhere, which makes it strictly friendlier to backprop than ReLU\'s kink.' },
+        { text: 'On the output layer only, because it forces the units to sum to 1, so raising one output requires lowering the others', explanation: 'Correct. Hidden layers need features that can all be strongly active at once, not units competing for a fixed budget of 1.0.' },
+        { text: 'Anywhere, since it is smooth and differentiable everywhere', explanation: 'It is smooth, which is not the objection. The objection is that it couples all the units in the layer together.' },
+        { text: 'On hidden layers, because it makes the features interpretable as probabilities', explanation: 'A hidden number between 0 and 1 is not the probability of anything, and forcing the units to compete removes information the next layer needed.' },
+        { text: 'On the output layer, because it is the only activation with a non-zero slope there', explanation: 'Plenty of activations have non-zero slopes. Softmax is used on the output because it produces one probability per class that add to 1.' },
       ],
-      correct: 1,
-    },
-    {
-      question: 'You are choosing an activation for the hidden layers of a plain image classifier with no other information. Best default?',
-      options: [
-        { text: 'GELU, because transformers use it', explanation: 'GELU is a fine choice, but it is the transformer convention, and its gain over ReLU is a fraction of a point. It is not the reflex answer for a generic net.' },
-        { text: 'Leaky ReLU, to be safe against dead units', explanation: 'Pre-emptive Leaky is a common instinct but not the default: it adds a hyperparameter to fix a problem you have not observed. Reach for it after diagnosing dead units.' },
-        { text: 'Sigmoid, since it is the classic neuron model', explanation: 'The classic model is exactly what stopped deep nets from training — ≤0.25 gradient per layer plus a zig-zag from non-zero-centred outputs.' },
-        { text: 'ReLU', explanation: 'Correct. Fastest, no positive-side saturation, sparse, and the baseline everything else is measured against. Change only when you have a measured reason.' },
-      ],
-      correct: 3,
+      correct: 0,
     },
   ],
   interviewQuestions: [
     {
       question: 'Why do we need activation functions at all? Prove it.',
       answer:
-        'Without them a network is one big linear map. Two layers give W₂(W₁x + b₁) + b₂ = (W₂W₁)x + (W₂b₁ + b₂) — a single matrix and a single vector, i.e. exactly the expressive power of one linear layer. Induction extends this to any depth: composing linear maps yields a linear map. So a 100-layer linear net cannot represent XOR, which a 2-layer net with one non-linearity can. The activation is the element-wise non-linearity that breaks the collapse; everything else — the depth, the parameter count — only buys you capacity because that crease is in between.',
+        'Without one, a stack of layers is exactly one layer. Take layer 1 as 3x + 1 and layer 2 as -2h + 5. Substituting gives -2(3x + 1) + 5 = -6x + 3, a single weight and a single bias. At x = 2 both forms give -9. The same substitution works for matrices: layer 2 applied to layer 1 is (W2 W1)x + (W2 b1 + b2), which is one matrix and one vector, so any depth collapses to one linear map. That means a hundred-layer network with no activations can only draw straight-line decision boundaries and cannot represent XOR, which a two-layer network with one non-linearity can. The activation is a small non-linear function applied to each number between layers, and it is the only reason depth adds expressive power.',
       isCaseBased: false,
     },
     {
       question: 'Walk me through the vanishing-gradient problem with actual numbers.',
       answer:
-        'Backprop multiplies one factor per layer: ∂L/∂z⁽¹⁾ = ∂L/∂z⁽ᴸ⁾ · Π W⁽ˡ⁾σ′(z⁽ˡ⁾). For sigmoid, σ′ = σ(1−σ) peaks at 0.25 (at z = 0) and falls off fast — 0.045 at z = 3. Take the absolute best case of 0.25 every layer: after 10 layers the factor is 0.25¹⁰ = 1/1,048,576 ≈ 9.5×10⁻⁷. With a learning rate of 0.01 the first layer moves by ~10⁻⁸ per step, which is indistinguishable from frozen. Realistic σ′ around 0.1 gives 10⁻¹⁰. Meanwhile the last layer sees a healthy gradient and trains fine — so the loss does fall, just to a bad plateau. ReLU fixes it because f′ = 1 exactly for active units: the product is 1×1×…×1 and depth costs nothing.',
+        'The gradient reaching an early layer is a product with one activation slope per layer. Sigmoid\'s slope is f(z)(1 - f(z)), which is 0.25 at its very best (z = 0) and 0.104994 at z = 2. Take a 6-layer stack with every unit at z = 2: the factor reaching layer 1 is 0.104994 to the sixth power, which is 0.00000134. With a step size of 0.01 the first layer moves by about a hundred-millionth per step, which is no learning. Even the impossible best case of 0.25 every layer gives 0.25^10 = 0.00000095 at ten layers. Meanwhile the last layer is multiplied by only one such factor and trains normally, so the loss falls a little and then plateaus. ReLU fixes it because an active unit has slope exactly 1, so the product is 1 at any depth.',
       isCaseBased: false,
     },
     {
-      question: 'Case: you inherit a 30-layer MLP. Training loss drops for 200 steps then flatlines high. You log per-layer gradient norms and see 1e-2 at the last layer, 1e-9 at the first. Diagnose and fix, in order.',
+      question: 'Case: you inherit a 30-layer network. Training loss drops for 200 steps then flatlines high. Per-layer gradient sizes read 1e-2 at the last layer and 1e-9 at the first. Diagnose and fix, in order.',
       answer:
-        'That gradient-norm gradient IS the diagnosis: vanishing gradients, seven orders of magnitude across depth. Order of attack: (1) check the activations — if hidden layers are sigmoid or tanh, swap to ReLU; that alone usually fixes it and costs nothing. (2) Check weight init: default/small-variance init compounds the shrinkage; use He init for ReLU (variance 2/fan_in), Xavier for tanh. (3) Add normalization — BatchNorm or LayerNorm keeps pre-activations near the high-derivative region and is the standard structural fix. (4) Add residual connections: they give the gradient an identity path with derivative 1 straight to layer 1, which is why 30+ layers became routine after ResNet. (5) Only then consider fewer layers. Tradeoff to name: residuals and normalization add compute and, for BatchNorm, a train/test behaviour split — but at 30 layers you are not getting there without them.',
+        'That spread across depth is the diagnosis: vanishing gradients, seven orders of magnitude. Fix in cost order. First, check the activations — if the hidden layers use sigmoid or tanh, swap to ReLU. That alone usually fixes it and costs nothing, because an active ReLU unit contributes a slope of exactly 1 instead of something at or below 0.25. Second, check the starting weights: if they are drawn too small, each layer shrinks the signal on the way forward and the gradient on the way back, so use an initialisation scaled to the layer width. Third, add normalization so pre-activations stay near zero, which is where every activation has its largest slope — the same numbers show sigmoid being thirty times better at z = 0 than at z = 2. Fourth, add residual connections, which give the gradient a path that skips layers entirely and arrive at layer 1 undiminished; that is what made networks of this depth routine. Only then consider using fewer layers. Tradeoff to state: normalization and residuals add compute, and normalization behaves differently at training and test time, but at 30 layers you are not training without them.',
       isCaseBased: true,
     },
     {
-      question: 'Case: dying-ReLU debugging. After an aggressive LR sweep, your best run has 45% of layer-2 activations exactly 0.0 on every batch and validation accuracy stuck 6 points below baseline. Walk through it.',
+      question: 'Case: after an aggressive step-size sweep, 45% of one layer\'s units output exactly 0.0 on every batch and validation accuracy sits 6 points below baseline. Walk through it.',
       answer:
-        'Confirm first: log the fraction of units with zero output across many batches. A unit that is zero for *every* batch is dead; a unit zero for half the batches is just sparse and healthy. Then find the cause. (1) Learning rate — "aggressive sweep" is the smoking gun: one oversized step drives the bias strongly negative and the unit never returns, since its gradient is then exactly 0. Retrain at 1/10th LR and re-measure the dead fraction; this usually recovers most of it. (2) Inspect the biases of dead units — large negative values confirm the mechanism. (3) Warmup + gradient clipping stops the single catastrophic early step that kills them. (4) Structural fallbacks if it persists: Leaky ReLU (α = 0.01) or ELU so the negative side has non-zero gradient, He initialization so pre-activations start centred, BatchNorm before the activation to keep them there. Tradeoffs: Leaky adds a hyperparameter and no measured accuracy win on healthy nets, so it is a fix, not a default; lowering LR costs wall-clock; BatchNorm adds train/test divergence. The senior move is to fix the LR first and only change the activation if dead units survive that.',
+        'First confirm it is really dead units and not healthy sparsity. Log, per unit, the fraction of batches where the output is zero: a unit that is zero on every batch is dead, a unit that is zero on half of them is doing its job. Then find the cause. The aggressive step-size sweep is the prime suspect: one oversized update drives a bias far negative, the pre-activation is then negative for every input, ReLU\'s slope there is exactly 0, so the update is zero and the unit can never climb back. Confirm by inspecting the biases of the zero units — large negative values are the signature. Retrain at a tenth of the step size and re-measure the dead fraction; that usually recovers most of the capacity. A warmup period, where the step size starts tiny and grows, prevents the single catastrophic early step. If dead units survive all that, switch to LeakyReLU so the negative side has slope 0.01 instead of 0, and add normalization before the activation to keep pre-activations centred. State the tradeoff honestly: LeakyReLU adds a constant to tune and shows no reliable accuracy gain on healthy networks, so it is a repair and not a default, while a smaller step size costs wall-clock time. Fix the step size first.',
       isCaseBased: true,
     },
     {
-      question: 'ReLU is not differentiable at 0 and has zero gradient for all negative inputs. Why is it still the default?',
+      question: 'ReLU has no slope at zero and zero slope for all negative inputs. Why is it still the default?',
       answer:
-        'Both objections are theoretically real and practically irrelevant. Non-differentiability at exactly 0: the pre-activation being bit-exactly 0.0 has effectively zero probability in floating point, and frameworks simply define f′(0) = 0 — a valid subgradient. Zero gradient below 0: it is a genuine cost (dying units) but it buys sparsity, which is cheap and often helps conditioning, and it is bounded — the units that matter for a given input are the active ones, and for those the gradient passes through at exactly 1. That perfect gradient preservation at depth, plus a single comparison instruction on billions of activations, outweighs the theoretical blemishes. Smoothed alternatives (ELU, GELU, softplus) fix the math and win a fraction of a point at best.',
+        'Both objections are real and both are cheap to live with. The corner at exactly zero: a pre-activation being bit-exactly 0.0 in floating point essentially never happens, and every framework simply defines the slope there as 0, which is a valid choice. The zero slope below zero: it does cause dead units, but that is usually a symptom of too large a step size rather than of ReLU, and it buys something in exchange — roughly half the units output exactly 0, which is cheap to compute and store. Against those costs, an active ReLU unit passes the gradient through at exactly 1, so depth costs nothing, and the forward pass is one comparison rather than an exponential and a division. Smoother alternatives such as GELU and ELU remove the theoretical blemishes and buy a fraction of a percentage point at best.',
       isCaseBased: false,
     },
     {
-      question: 'Explain the numerical-stability trick in softmax and prove it is exact, not an approximation.',
+      question: 'What is a dead neuron, exactly, and why can it not recover?',
       answer:
-        'Compute softmax(z − max(z)) instead of softmax(z). Proof: e^(zᵢ−c)/Σⱼe^(zⱼ−c) = (e^zᵢ·e^−c)/(e^−c·Σⱼe^zⱼ) = e^zᵢ/Σⱼe^zⱼ for any constant c. The e^−c cancels, so the result is identical — softmax is shift-invariant, only logit *differences* matter. Choosing c = max(z) makes the largest exponent e⁰ = 1, so nothing can overflow, and the worst underflow (a very negative shifted logit) yields 0, which is the correct answer anyway. Without it, float64 overflows at e^709.8: logits of 1000 give inf/inf = NaN. In practice you go further and use log-softmax / a fused cross-entropy that never materializes the probabilities, avoiding log(0) as well.',
+        'A ReLU unit whose pre-activation is negative for every example in the dataset. Its output is 0 for every example, and more importantly its slope is exactly 0 for every example. The weight update is step size times gradient, the gradient contains that slope as a factor, so the update is exactly zero. The weights therefore never change, so the pre-activation stays negative, so the slope stays zero. It is a closed loop with no exit, and the unit is permanently removed from the network — this is different from sigmoid saturation, where the slope is tiny but non-zero and recovery is merely slow. The usual causes are a step size large enough that one update drives the bias far negative, or a starting bias already too negative. Concrete check: weight 0.5 and bias -4 with inputs in the range 0 to 6 gives a pre-activation of at most -1, so that unit is dead from the start.',
       isCaseBased: false,
     },
     {
       question: 'Why do transformers use GELU rather than ReLU? Be honest about the size of the effect.',
       answer:
-        'GELU(z) = z·Φ(z) gates the input by the probability that a standard normal is below it — a smooth, stochastic-flavoured version of ReLU\'s hard on/off. Practical differences: it is smooth everywhere (no kink), it lets a little gradient through for slightly-negative inputs so units cannot die, and it is non-monotonic with a small dip near z ≈ −1. Empirically the gain over ReLU on transformer benchmarks is small — commonly a fraction of a point of perplexity or accuracy — but it is consistent and it holds at scale, and when a run costs seven figures a consistent fraction of a point is worth an extra exp(). SiLU/Swish (z·σ(z)) is the near-identical sibling used in Llama-family SwiGLU blocks. The honest interview answer is "smoothness and no dead units, for a modest but real and repeatable gain" — not "GELU is much better".',
+        'GELU is a smooth ReLU. It multiplies the input by a number between 0 and 1 that grows with the input, so a large positive value passes through nearly untouched (at z = 3 it gives 2.99595), zero is halved, and a negative value is shrunk but not chopped off (at z = -2 it gives -0.0455 rather than 0). Two practical consequences: there is no corner in the function, and the slope on the negative side is small but non-zero — -0.085 at z = -2 — so units cannot die the way ReLU units do. Empirically the gain over ReLU on transformer benchmarks is small, commonly a fraction of a point, but it is consistent and it holds at scale, which is worth an extra exponential when a training run is expensive. SiLU, also called Swish, is z times sigmoid(z) and is the near-identical, slightly cheaper sibling. For a network you are writing yourself, ReLU remains the right default.',
       isCaseBased: false,
     },
     {
-      question: 'What does "not zero-centred" cost you, concretely?',
+      question: 'Case: a colleague swaps every hidden ReLU for sigmoid in a 4-layer network "because probabilities are more interpretable". Training accuracy drops from 94% to 78%. Explain what happened, and what interpretability they actually gained.',
       answer:
-        'Sigmoid outputs are all positive, and those outputs are the inputs to the next layer. The weight gradient is (upstream error)·(input); with every input positive, every weight feeding a given neuron receives a gradient of the same sign in a single step. So all of that neuron\'s weights must increase together or decrease together — the optimizer cannot make a diagonal move and instead zig-zags toward it, taking more steps. Tanh removes this because its outputs straddle zero. ReLU is technically also non-negative and so shares the flaw, which is one reason BatchNorm/LayerNorm — which re-centre activations — pair so well with it. Cost is convergence speed, not final accuracy, but it compounds with the vanishing-gradient problem in sigmoid nets.',
-      isCaseBased: false,
-    },
-    {
-      question: 'Someone proposes softmax on a hidden layer to "make the features interpretable". What do you say?',
-      answer:
-        'Two structural objections. First, softmax couples the units: they are forced to sum to 1, so increasing one feature mathematically requires decreasing others. Hidden layers need features that can be simultaneously and independently active — "this is furry" and "this is outdoors" are not in competition. Second, normalizing throws away magnitude: [1, 2, 3] and [100, 200, 300] give different results, but [1,2,3] and [11,12,13] give very different results too, while all scale information the next layer might use is destroyed. Also the Jacobian is dense and K×K rather than diagonal, so it is more expensive. If the goal is genuinely interpretable competing features, attention weights or a sparsity penalty are the right tools; softmax belongs on the final layer of a single-label classifier.',
-      isCaseBased: false,
-    },
-    {
-      question: 'How does temperature change a softmax, and where does it show up in practice?',
-      answer:
-        'Divide the logits by T before softmax. T < 1 magnifies the differences between logits and sharpens the distribution toward the argmax; T > 1 shrinks them and flattens toward uniform; T → 0 is a hard argmax and T → ∞ is uniform. In the module\'s numbers, logits [2, 1, 0.1] give 0.659 for the leader at T = 1, 0.864 at T = 0.5, 0.502 at T = 2.0. In practice: it is the creativity/randomness knob in LLM sampling (low T for code and factual answers, higher T for brainstorming), the softening term in knowledge distillation (a high-T teacher distribution carries far more information than a one-hot label), and the learned scale in contrastive losses like CLIP. Note it changes only the sampling distribution, never the ranking.',
-      isCaseBased: false,
-    },
-    {
-      question: 'For a regression model predicting house prices, what activation goes on the output layer?',
-      answer:
-        'None — a plain linear output. Any squashing function caps the range: sigmoid could never predict above 1, tanh could never exceed 1, and ReLU would clamp every negative prediction to exactly 0, which destroys the gradient for those examples and is wrong for any target that can go negative. Prices are non-negative, so ReLU is tempting, but a better route is to keep the output linear and either predict log(price) (which enforces positivity after exponentiating, and makes the error multiplicative — usually the right assumption for prices) or use softplus if you truly need smooth positivity. The mistake to avoid: reaching for an activation on the output out of habit. Hidden layers need non-linearity; the output layer needs to match the *range of the target*.',
-      isCaseBased: false,
-    },
-    {
-      question: 'Case: a colleague swaps every hidden ReLU for sigmoid in a 4-layer net "because probabilities are more interpretable". Training accuracy drops from 94% to 78%. Explain what happened and what interpretability they actually lost.',
-      answer:
-        'What happened: four layers of σ′ ≤ 0.25 shrink the gradient reaching layer 1 by up to 0.25³ ≈ 0.016, and realistically far more since σ′ collapses once pre-activations leave a narrow band around 0 — the early layers barely train, so the net effectively becomes a shallow model sitting on frozen random features. On top of that, all-positive activations force same-sign weight gradients and zig-zag convergence, so even the layers that do train converge slower within the same budget. Four layers is not deep enough to freeze them completely, which is exactly why the result is a degradation rather than a total failure. The interpretability argument is also confused: a hidden-unit output in (0,1) is not a probability of anything — it is an arbitrary squashed feature with no calibration and no semantics. Real interpretability comes from probing, attribution, or attention weights. Fix: revert to ReLU; if they want probabilities, that is the job of the *output* layer.',
+        'Three sigmoid slopes now multiply on the way back to layer 1. Even at sigmoid\'s best slope of 0.25 that is 0.0156, and realistically the pre-activations drift away from zero — at z = 2 the slope is 0.105, giving 0.00116 — so the early layers receive roughly a thousandth of the gradient the late layers get and barely move within the same training budget. The network becomes a shallow model sitting on nearly untrained early features. Four layers is shallow enough that the early layers are slowed rather than frozen, which is exactly why the result is a 16-point degradation instead of total failure. There is a second, smaller cost: sigmoid outputs are always positive, so every weight in the next layer receives an update in the same direction and the optimiser zig-zags toward the answer instead of going straight. As for interpretability, they gained none. A hidden unit outputting 0.87 is not the probability of anything — it is an intermediate number that happens to have been squashed into a range, with no calibration and no meaning attached. Probabilities are the job of the output layer. Fix: revert to ReLU on all hidden layers, and if probabilities are wanted, put a sigmoid or softmax on the output.',
       isCaseBased: true,
     },
   ],
   flashcards: [
-    { front: 'Why any activation at all?', back: 'Stacked linear layers collapse: W₂(W₁x) = (W₂W₁)x. The element-wise non-linearity is the only thing that makes depth add expressive power.' },
-    { front: 'Sigmoid: formula and its two bugs', back: 'σ(z) = 1/(1+e⁻ᶻ) ∈ (0,1); σ′ = σ(1−σ), max 0.25 at z = 0. Bug 1: that ≤0.25 vanishes gradients. Bug 2: all-positive outputs → same-sign weight gradients → zig-zag. Verdict: binary output only.' },
-    { front: 'The vanishing-gradient arithmetic', back: 'Best case 0.25 per sigmoid layer. 10 layers → 0.25¹⁰ = 1/1,048,576 ≈ 9.5×10⁻⁷. Layer 1 is frozen while layer 10 trains fine.' },
-    { front: 'Tanh', back: '(−1,1), zero-centred, tanh′ = 1 − tanh², peaking at 1.0. Beats sigmoid in hidden layers, still saturates (tanh′(3) ≈ 0.01). Loses to ReLU.' },
-    { front: 'Why ReLU won', back: 'max(0,z). f′ = 1 for z > 0 so gradients survive any depth; one comparison to compute; ~half the units output 0 (sparsity).' },
-    { front: 'Dying ReLU', back: 'z negative for every input → gradient exactly 0 → weights never update → z stays negative. Permanent. Causes: LR too high, big negative bias.' },
-    { front: 'The ReLU-family fixes', back: 'Leaky (fixed α = 0.01 slope below 0), PReLU (learned α), ELU (smooth, saturates to −α). Use after diagnosing dead units — fix the LR first.' },
-    { front: 'GELU', back: 'z·Φ(z) — gate the input by the probability it is positive. Smooth, slightly non-monotonic, no dead units. SiLU/Swish = z·σ(z). Modest but real gain over ReLU at scale.' },
-    { front: 'Softmax + the stability trick', back: 'eᶻⁱ/Σeᶻʲ → positive, sums to 1. Subtract max(z) first: shift-invariant so it is exact, and it stops e¹⁰⁰⁰ = inf → NaN. Output layer only.' },
-    { front: 'Output-layer decision list', back: 'Binary → sigmoid. Multi-class single label → softmax. Multi-label → K independent sigmoids. Regression → no activation.' },
+    { front: 'Why any activation at all?', back: 'Two layers with no activation collapse: -2(3x + 1) + 5 = -6x + 3, one weight and one bias. Any depth of linear layers is one linear layer. The activation is the non-linear bend that makes depth worth having.' },
+    { front: 'Sigmoid: value and slope', back: 'f(z) = 1 / (1 + e^-z), range 0 to 1. Slope = f(z)(1 - f(z)). At z = 0: 0.5 and slope 0.25 (its largest ever). At z = 2: 0.880797, slope 0.104994. At z = 6: slope 0.002467.' },
+    { front: 'Saturation', back: 'The function flattens, so its output stops responding to its input and its slope approaches zero. Sigmoid and tanh both saturate in their tails; ReLU never does on the positive side.' },
+    { front: 'Vanishing gradient, with numbers', back: 'The gradient is a product of one activation slope per layer. Six layers at slope 0.104994 give 0.00000134. Times a step size of 0.01, the first layer moves by a hundred-millionth per step: no learning.' },
+    { front: 'Tanh', back: 'Range -1 to 1, slope = 1 - f(z)^2. Slope 1.0 at z = 0 (four times sigmoid\'s best) but only 0.070651 at z = 2 — it saturates harder. Outputs straddle zero, which removes sigmoid\'s zig-zag problem.' },
+    { front: 'Why ReLU won', back: 'max(0, z). Slope is exactly 1 for every positive input, so six layers multiply to 1 and depth costs nothing. Costs one comparison — no exponential, no division. Slope is exactly 0 for negatives.' },
+    { front: 'Dead neuron + LeakyReLU', back: 'Pre-activation negative for every example, so slope 0, so update 0, so it stays negative — permanent. Cause: step size too large. LeakyReLU uses 0.01 x z below zero, so the slope is 0.01 not 0 and the unit can crawl back.' },
+    { front: 'GELU, and where softmax goes', back: 'GELU is a smooth ReLU: at z = 3 it gives 2.99595, at z = -2 it gives -0.0455 with slope -0.085, so no dead units. Gain over ReLU is a fraction of a point. Softmax is an output-layer function only — it forces the units to sum to 1, so they compete.' },
   ],
   mindmapMarkdown: `- Activation Functions
   - Why they exist
-    - Linear stack collapses to one matrix, so add a crease
-  - Judge by four properties
-    - Range, zero-centredness, gradient behaviour, cost
+    - -2(3x + 1) + 5 = -6x + 3, so stacked linear layers are one layer
+    - the activation is the non-linear bend between layers
+  - The slope is what matters
+    - update = step size x gradient
+    - gradient = product of one activation slope per layer
   - Sigmoid
-    - 1/(1+e^-z), range (0,1)
-    - derivative sigma(1-sigma), max 0.25
-    - 0.25^10 = 9.5e-7 -> vanishing gradient
-    - not zero-centred -> zig-zag; binary output only
+    - 1/(1+e^-z), range 0 to 1
+    - slope f(1-f): 0.25 at z=0, 0.105 at z=2, 0.0025 at z=6
+    - six layers at 0.105 -> 0.00000134, vanishing gradient
   - Tanh
-    - (-1,1), zero-centred, derivative max 1.0, still saturates
+    - range -1 to 1, slope 1 - f^2
+    - 1.0 at z=0 but 0.0707 at z=2, saturates harder
+    - outputs straddle zero, no zig-zag
   - ReLU
-    - max(0, z): one comparison, sparse, the default
-    - f' = 1 when active -> depth is free
-    - dying ReLU: z<0 always -> grad 0 forever
-    - causes: LR too high, big negative bias
-  - ReLU family fixes
-    - Leaky (alpha), PReLU (learned), ELU (smooth)
+    - max(0, z), slope exactly 1 when active
+    - six layers -> 1.0, depth is free
+    - one comparison to compute
+    - dead neuron: z<0 always -> slope 0 -> update 0 -> forever
+    - cause: step size too large
+  - LeakyReLU
+    - 0.01 x z below zero, slope 0.01 not 0
+    - dead unit can crawl back
+    - use after measuring dead units, not by default
   - GELU
-    - z * Phi(z), smooth probabilistic gate
-    - SiLU / Swish = z * sigmoid(z); modest real gain
+    - smooth ReLU: 2.99595 at z=3, -0.0455 at z=-2
+    - slope -0.085 at z=-2, so no dead units
+    - fraction of a point better, used in transformers
   - Softmax
-    - exponentiate then normalize, sums to 1
-    - subtract max: exact, stops overflow
-    - temperature T sharpens or flattens
-  - Decision list
-    - hidden: ReLU, GELU in transformers, Leaky if dead
-    - output: sigmoid / softmax / none
-    - order: Linear -> BatchNorm -> activation`,
+    - output layer only, K scores to K probabilities summing to 1
+    - hidden layers would be forced to compete
+    - details in Classification Losses`,
 }
 
 export default m

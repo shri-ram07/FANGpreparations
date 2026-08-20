@@ -6,207 +6,248 @@ const m: Module = {
   level: 3,
   title: 'Generative Models: Autoencoders, VAEs, GANs & Diffusion',
   whyItMatters:
-    'Everything that makes something new — Midjourney, Sora, Stable Diffusion — is one of the four models in this module, and the modern ones are two of them stacked. Interviewers ask for the reparameterization trick by name, they ask why GANs collapse, and they ask why diffusion won. Four ideas, one sitting, and the entire generative stack stops being magic.',
-  estMinutes: 60,
+    'Every model you have built so far answers a question about something that already exists: is this spam, is this a cat. The models in this module do something different. They make a new thing that was never in the data. Four designs do it, and each one is a small change to the one before. By the end you will be able to say, in plain words, what an autoencoder squeezes, what a VAE changes, why a GAN fights itself, and what the image tools you actually use are doing when the progress bar moves.',
+  assumes: [
+    'You have seen a neural network that takes numbers in and produces numbers out, and knows it is trained by nudging its internal numbers to make an error smaller',
+    'You know what a Python list, a for loop and a function are',
+    'You know what an average is, and what "squared error" means: take the difference, square it',
+    'Helpful but not required: the Metrics module *Generative Model Objectives: Reconstruction, ELBO & GANs*, which owns the loss functions these models are trained with',
+  ],
+  estMinutes: 40,
   sections: [
     {
       type: 'intuition',
-      title: 'Two ways to look at data',
-      md: `A bouncer checks IDs at a club door. A forger makes IDs in a basement. Both know exactly what a real ID looks like — only one of them can produce a new one.
+      title: 'What "generative" actually means: one output, side by side',
+      md: `Two models, both looking at pictures of handwritten digits. Watch what comes out of each one.
 
-- **Discriminative** models learn **p(y | x)**: given this input, which label? That is every classifier you have built so far.
-- They only need the **boundary** between classes. Enough to judge, useless for making.
-- **Generative** models learn **p(x)** — the shape of the data itself: what a plausible face, sentence or molecule looks like.
-- Once you have p(x) you can **sample** from it. That one verb is the whole subject.
-- The test for which one you are holding: *can it produce a brand-new example that was never in the training set?*
-- Four routes to that, oldest to newest: autoencoder → VAE → GAN → diffusion.`,
+- **Model A is a classifier.** You feed it a picture. It outputs ten numbers, one per digit: 0.01, 0.02, 0.90, 0.01, and so on. You read off the biggest and say "this is a 2". The output is a **label** — a verdict about the picture you handed in.
+- **Model B is a generator.** You feed it nothing meaningful, just some random numbers. It outputs **784 numbers**, one per pixel of a 28-by-28 picture. You arrange them into a grid and look at it. It is a 2. It is a 2 that nobody ever wrote, that was not in the training data, that did not exist five milliseconds ago.
+- That is the whole difference. A classifier consumes a thing and produces a judgement. A **generator** produces a thing.
+- The test, whenever you are unsure which kind of model you are holding: *can it hand me a brand-new example?* If it only ever scores or labels what you give it, it is not generative.
+- Four designs do this, and they build on each other in order: **autoencoder → VAE → GAN → diffusion**. Learn them in that order; each is one change to the previous one.`,
     },
     {
       type: 'intuition',
-      title: 'Autoencoder: squeeze, then rebuild',
-      md: `Describe a photo to a friend over the phone in ten words, then have them redraw it. Whatever survives those ten words is what actually mattered.
+      title: 'The autoencoder: squeeze it small, then rebuild it',
+      md: `Describe a photo to a friend on the phone using only ten words. Then ask them to draw it. Whatever survives those ten words is what actually mattered about the photo.
 
-- An **autoencoder** is two networks glued back to back. The **encoder** squeezes input x into a small vector z; the **decoder** expands z back into a reconstruction x̂.
-- z is the **bottleneck** (the "latent code"), deliberately much smaller than x. 784 pixels in → 32 numbers → 784 pixels out.
-- Loss = **reconstruction error**, usually MSE between x and x̂. That is the entire objective.
-- The label IS the input. Nobody annotated anything — this is **self-supervised** learning, and it is why autoencoders can train on unlimited unlabeled data.
-- The narrowness does the teaching: you cannot store 784 numbers in 32, so the network is forced to find structure instead of copying.`,
-    },
-    {
-      type: 'note',
-      md: `Three jobs autoencoders are genuinely good at, none of them "generate images". **Dimensionality reduction:** an autoencoder with linear layers and MSE learns essentially the same subspace as PCA — so think of it as *nonlinear PCA*, able to unroll curved manifolds that PCA's straight axes cannot (see the ML L3 module, *PCA, t-SNE & Anomaly Detection*, for the linear original). **Denoising autoencoder:** corrupt the input, ask for the clean version back. The bottleneck can no longer copy, so it must learn what the data really looks like — and this idea comes back at the end of this module wearing a different hat. **Anomaly detection:** train only on normal data, then score new inputs by reconstruction error. Normal things rebuild well; a fraudulent transaction or a cracked part rebuilds badly, because the decoder never learned that shape. Same ML L3 cross-reference for the thresholding discipline that decides *how* bad is bad.`,
+That is an **autoencoder**: two networks glued back to back, trained together.
+
+- The **encoder** is the first network. It takes the input and produces a much shorter list of numbers. Squeezing.
+- That short list is called the **latent vector**, usually written **z**. "Latent" just means hidden — these numbers are not pixels and not labels, they are the network's private summary of the input.
+- The **decoder** is the second network. It takes z and produces something the same size and shape as the original input. Rebuilding.
+- The output of the decoder is called the **reconstruction**. Training pushes the reconstruction to match the original input, measured by squared error per pixel.
+- Notice what the training data is: the input is also the answer. Nobody labelled anything. That is why autoencoders can be trained on any pile of unlabelled data you have lying around.`,
     },
     {
       type: 'intuition',
-      title: 'Why a plain autoencoder is a terrible generator',
-      md: `You now own a decoder that turns 32 numbers into an image. So type in 32 random numbers and get a free image? No. You get garbage.
+      title: 'The shape journey, with real numbers',
+      md: `Take one 28-by-28 greyscale image of a digit. Flatten it into a plain list of 784 numbers, each one a pixel brightness.
 
-- The decoder was only ever shown the exact z values the encoder produced. Nothing else was ever asked of it.
-- Those z values sit in scattered clumps with **holes** between them — vast regions of latent space no training example ever landed in.
-- A random draw almost certainly lands in a hole. The decoder has no idea what lives there and emits noise.
-- Walk in a straight line from the z of a "3" to the z of an "8" and the midpoints are usually not digits at all.
-- None of this is a bug. The loss asked for good reconstruction of each point, and got exactly that.
-- What generation actually needs: a latent space that is **continuous** (nearby z decode to similar things) and **complete** (every z decodes to something plausible).`,
-    },
-    {
-      type: 'intuition',
-      title: 'VAE: encode a cloud, not a point',
-      md: `Instead of pinning each photo to one dot on a map, give it a fuzzy circle. Circles overlap, and a map made of overlapping circles has no gaps.
-
-- The encoder now outputs **two** vectors: a mean **μ** and a standard deviation **σ**. Together they define a small Gaussian — that input's cloud.
-- Each training step draws a random z from that cloud. So the decoder must make *every* point in the cloud decode sensibly → **continuity**.
-- Second ingredient: a **KL term** that pulls every cloud toward the standard normal N(0, I). Clouds get centred and packed, no far-flung islands → **completeness**.
-- Now sampling works: draw z ~ N(0, I), run the decoder, get a new image. That is the entire reason VAEs exist.
-- One sentence: *the autoencoder learns where each input goes; the VAE learns where everything goes, and leaves no gaps.*`,
-    },
-    {
-      type: 'math',
-      intro:
-        'One line of theory, then the two terms you actually code. q(z|x) is the encoder\'s cloud, p(z) is the N(0, I) prior, and β is the knob weighting the second term. The ELBO (evidence lower bound) is what a VAE really maximizes — see the Metrics L3 module for KL divergence itself.',
-      latex: [
-        '\\log p(x) \\;\\ge\\; \\underbrace{\\mathbb{E}_{q(z|x)}\\big[\\log p(x|z)\\big]}_{\\text{reconstruction}} \\;-\\; \\underbrace{D_{KL}\\big(q(z|x)\\,\\|\\,p(z)\\big)}_{\\text{keep the space packed}} \\;=\\; \\text{ELBO}',
-        '\\mathcal{L}_{\\text{VAE}} = \\underbrace{\\|x - \\hat{x}\\|^2}_{\\text{reconstruction}} \\;+\\; \\beta \\underbrace{\\left(-\\tfrac{1}{2}\\sum_{j=1}^{d}\\left(1 + \\log \\sigma_j^2 - \\mu_j^2 - \\sigma_j^2\\right)\\right)}_{\\text{KL to } \\mathcal{N}(0,\\,I),\\ \\text{closed form}}',
-        '\\text{Maximize the ELBO} \\iff \\text{minimize } \\mathcal{L}_{\\text{VAE}}. \\quad \\text{The KL term is } 0 \\text{ exactly when } \\mu = 0 \\text{ and } \\sigma = 1.',
-      ],
-    },
-    {
-      type: 'intuition',
-      title: 'The two losses, and their tug-of-war',
-      md: `- **Reconstruction loss** wants each cloud tiny and far from every other cloud — that is how you rebuild an input perfectly. Let it win alone and you have rebuilt the plain autoencoder, holes included.
-- **KL loss** wants every cloud to be exactly N(0, I) — same centre, unit width. Let it win alone and every input encodes identically; z carries no information and the decoder ignores it.
-- Training is that fight. A good latent space sits at the truce: clouds overlapping just enough to fill the space, separated just enough to stay distinguishable.
-- Turn β up (that is **β-VAE**) → more disentangled, more blurry. Turn it down → sharper, holier.
-- Set β to exactly 0 and you get the plain autoencoder back. That is the cleanest way to remember what KL buys.
-- The named failure when KL wins: **posterior collapse** — KL ≈ 0, the latent is pure noise, and the decoder generates the dataset average regardless of z.`,
-    },
-    {
-      type: 'intuition',
-      title: 'The reparameterization trick',
-      md: `Sampling is a wall for backprop. "How would the dice roll have changed if μ were slightly larger?" has no answer — a random draw has no derivative.
-
-- **Broken version:** draw z ~ N(μ, σ²) directly. μ and σ walk into a random number generator and vanish. No expression links z back to them, so no gradient ever reaches the encoder.
-- **The trick:** move the randomness outside. Draw **ε ~ N(0, 1)** first — a fixed input for this step — then compute **z = μ + σ ⊙ ε**.
-- Identical distribution. Completely different graph: z is now plain arithmetic on μ and σ, and arithmetic differentiates.
-- ∂z/∂μ = 1 and ∂z/∂σ = ε. Gradients flow straight into the encoder; ε is a constant leaf that never needs one.
-- Interview sentence: *"you cannot differentiate a sample, so you rewrite the sample as a deterministic function of the parameters plus parameter-free noise."*
-- This is asked by name constantly. Say the words "the randomness is moved into an input that carries no gradient" and you are done.`,
+- **Into the encoder: 784 numbers.** Out of the encoder: **32 numbers**. That is the latent vector z.
+- **Into the decoder: those 32 numbers.** Out of the decoder: **784 numbers** again, the reconstruction.
+- So the journey is **784 → 32 → 784**. The narrow middle is called the **bottleneck**.
+- 784 divided by 32 is 24.5. Everything about that image has to fit through a pipe 24.5 times too small.
+- Here is what that forces. The network cannot memorise and copy — there is nowhere to put 784 numbers. To get low error it must find the *patterns* that let 32 numbers stand in for 784: this digit is roughly round, the stroke is thick, it leans right.
+- Make the bottleneck 784 wide and the whole thing collapses into a copying machine. Zero error, nothing learned. The squeeze is not a limitation of the design; the squeeze **is** the design.`,
     },
     {
       type: 'code',
       lang: 'python',
-      title: 'The reparameterization trick, numerically — right distribution AND real gradients',
-      code: `import numpy as np
+      title: 'An autoencoder small enough to check by hand: 6 numbers to 3 and back',
+      code: `x = [8.0, 6.0, 1.0, 3.0, 9.0, 7.0]
 
-rng = np.random.default_rng(0)
-mu, sigma = 2.0, 0.5          # what the encoder predicted for one latent dim
-N = 200_000                   # many draws, so Monte-Carlo error stays small
+def encode(v):
+    return [(v[0] + v[1]) / 2, (v[2] + v[3]) / 2, (v[4] + v[5]) / 2]
 
-eps = rng.standard_normal(N)  # the ONLY random node. Nobody wants a gradient here.
-z = mu + sigma * eps          # the reparameterization trick, one line
+def decode(z):
+    return [z[0], z[0], z[1], z[1], z[2], z[2]]
 
-print('asked for   mean/std :', mu, sigma)
-print('sampled z   mean/std :', round(float(z.mean()), 4), round(float(z.std()), 4))
-
-# Pretend everything downstream collapses to L = mean(z^2). Backprop it by hand.
-L = float((z ** 2).mean())
-dL_dz = 2 * z / N                       # dL/dz_i
-dL_dmu = float(dL_dz.sum())             # dz_i/dmu    = 1
-dL_dsigma = float((dL_dz * eps).sum())  # dz_i/dsigma = eps_i
-
-print('loss E[z^2]  got/exact:', round(L, 4), mu ** 2 + sigma ** 2)
-print('dL/dmu       got/exact:', round(dL_dmu, 4), 2 * mu)
-print('dL/dsigma    got/exact:', round(dL_dsigma, 4), 2 * sigma)
-
-z_bad = rng.normal(mu, sigma, N)   # same distribution, drawn the naive way...
-print('z_bad        mean/std :', round(float(z_bad.mean()), 4), round(float(z_bad.std()), 4))
+z = encode(x)
+x_hat = decode(z)
+print('x     :', x)
+print('z     :', z)
+print('x_hat :', x_hat)
+error = 0.0
+for i in range(6):
+    error = error + (x[i] - x_hat[i]) ** 2
+print('mean squared error :', round(error / 6, 3))
 
 # ---- real output ----
-# asked for   mean/std : 2.0 0.5
-# sampled z   mean/std : 2.0001 0.5006
-# loss E[z^2]  got/exact: 4.2509 4.25
-# dL/dmu       got/exact: 4.0001 4.0
-# dL/dsigma    got/exact: 1.0029 1.0
-# z_bad        mean/std : 2.0001 0.5008`,
+# x     : [8.0, 6.0, 1.0, 3.0, 9.0, 7.0]
+# z     : [7.0, 2.0, 8.0]
+# x_hat : [7.0, 7.0, 2.0, 2.0, 8.0, 8.0]
+# mean squared error : 1.0`,
       annotations: {
-        7: 'Drawn once, from a fixed standard normal, with no learnable parameter anywhere in the call. It is data for this step, not a node to differentiate.',
-        8: 'The whole trick. z now depends on mu and sigma through multiplication and addition, so an autograd graph exists all the way back to the encoder.',
-        11: 'Sanity check on the distribution: 2.0001 and 0.5006. Shifting and scaling unit noise really does give N(mu, sigma^2).',
-        17: 'dz/dsigma = eps, so sigma\'s gradient is a noise-weighted average of the downstream gradient. That factor is exactly what the naive sampler destroys.',
-        21: 'Got 1.0029 against the exact 2*sigma = 1.0. Not an approximation of the gradient — an unbiased Monte-Carlo estimate of it, tightening as N grows.',
-        23: 'The trap. Identical distribution, but mu and sigma went in as ARGUMENTS to the RNG. No expression, no graph, no gradient — the encoder would never learn a thing.',
+        1: 'One fake "image": six numbers instead of 784. Small enough that you can check every step with a pen.',
+        3: 'The encoder, written as a plain function. v is the input list. A real encoder is a neural network whose numbers are learned; this one is hand-written so you can see what it does.',
+        4: 'Squeezes 6 numbers into 3 by averaging each neighbouring pair: (8+6)/2 = 7, (1+3)/2 = 2, (9+7)/2 = 8. This returned list is the latent vector z. The bottleneck is 3 wide.',
+        6: 'The decoder. It takes z, the 3-number summary, and must produce 6 numbers again.',
+        7: 'It rebuilds by repeating each latent number twice. z[0] is the guess for both of the first two originals. This is the decoder committing to its best single answer where it only stored one.',
+        9: 'Run the encoder on x. z is now [7.0, 2.0, 8.0].',
+        10: 'Run the decoder on z. x_hat (read "x-hat") is the standard name for a reconstruction of x.',
+        11: 'Print the original so you can compare it with the reconstruction line by line.',
+        12: 'Print the latent vector. Three numbers now stand in for six. That is the compression.',
+        13: 'Print the reconstruction. Compare against x: 8 and 6 both came back as 7, 1 and 3 both came back as 2. The pair average survived; the difference inside each pair was thrown away.',
+        14: 'A running total for the error, starting at zero. Plain float.',
+        15: 'range(6) gives 0,1,2,3,4,5 — the six positions. i is the position we are checking.',
+        16: 'Add the squared difference at position i. Squaring makes every gap positive, so errors cannot cancel each other out.',
+        17: 'Divide by 6 to get the average squared error per number. It prints 1.0: each of the six numbers was off by exactly 1. That 1.0 is what training a real autoencoder is trying to push down.',
       },
     },
     {
       type: 'note',
-      md: `Read the gradients, not just the samples. Because E[z²] = μ² + σ², the true derivatives of the expected loss are 2μ = 4.0 and 2σ = 1.0 — and hand-backpropping through the reparameterized sample recovered 4.0001 and 1.0029 from noise alone. That is the point people miss: the trick does not approximate the gradient, it gives an **unbiased estimate of the exact one**, which is why a single ε draw per input is enough in practice. The final line is the version that silently kills training: same numbers out, but μ and σ were consumed by the sampler, so the encoder sits downstream of a dead end and never receives a gradient.`,
+      md: `Read the output once more, because it shows the whole trade in miniature. The pairs were 8-and-6, 1-and-3, 9-and-7. Every pair differs by 2, and every pair came back as its average. The bottleneck kept "roughly where each pair sits" and dropped "which of the two was bigger". A real 784-to-32 encoder makes the same kind of choice on a much larger scale: it keeps stroke shape and thickness, and throws away the exact grey value of pixel 431. Whether that is a good trade depends entirely on what you wanted, which is why the loss function — the thing that defines "good" here — is a topic of its own, in the Metrics module *Generative Model Objectives: Reconstruction, ELBO & GANs*.`,
     },
     {
       type: 'intuition',
-      title: 'Why VAE samples look blurry',
-      md: `Ask ten people to draw "a dog" and average the drawings. You get a brown smudge — the average of many valid answers is usually not a valid answer.
+      title: 'Why a trained autoencoder still cannot generate anything',
+      md: `You now own a decoder that turns 32 numbers into a picture. So type in 32 random numbers, press run, get a free digit? No. You get static.
 
-- The decoder is trained with MSE (or per-pixel likelihood), and MSE is minimized by predicting the **mean** of every plausible output for that z.
-- The whiskers could be here or there. Drawing them faintly in both places beats committing to one and being wrong.
-- Hedging in pixel space *is* blur. It is not a capacity problem; it is the loss doing exactly its job.
-- GANs never average — their judge specifically punishes average-looking output, which is why GAN images are sharp.
-- The VAE's latent space is still excellent, though. That is why VAEs are alive today as the **compressor inside latent diffusion**, not as generators.`,
-    },
-    {
-      type: 'intuition',
-      title: 'GANs: the forger versus the police',
-      md: `A forger paints fake notes. A detective grades each note real or fake and explains nothing. Both get better for years. Eventually the forger is very good.
+First, one word. **Sampling** means drawing a value at random from some range or shape — the way rolling a die samples a number from 1 to 6. Generation is exactly "sample a z, then decode it".
 
-- **Generator G:** noise z in, image out. It never sees a real image — only the discriminator's verdict on its own work.
-- **Discriminator D:** image in, one number out — the probability it is real. Trained on real data plus G's fakes.
-- G's objective is the negative of D's. One's gain is the other's loss: this is a **min-max game**, not a minimization.
-- There is no reconstruction term anywhere, because there is no "correct output" for a given z. Only a judge.
-- Where G's training signal comes from: backprop *through* D into G — "which pixel change would have fooled the judge more?"
-- Consequence to remember: the loss numbers are meaningless as progress. G's loss falling can mean G improved or D got worse.`,
-    },
-    {
-      type: 'math',
-      intro: 'The original objective, and the one-line change that made it trainable in practice.',
-      latex: [
-        '\\min_G \\max_D \\; V(D, G) = \\mathbb{E}_{x \\sim p_{\\text{data}}}\\big[\\log D(x)\\big] + \\mathbb{E}_{z \\sim p_z}\\big[\\log\\big(1 - D(G(z))\\big)\\big]',
-        '\\text{Plain English: } D \\text{ maximizes it (call real real, call fakes fake); } G \\text{ minimizes the second term, i.e. pushes } D(G(z)) \\text{ up.}',
-        '\\text{Non-saturating fix: replace } \\min_G \\log\\big(1 - D(G(z))\\big) \\text{ with } \\max_G \\log D(G(z)) \\text{ — same fixed point, steep gradient where } G \\text{ is losing.}',
-      ],
+- Picture every training image as a dot. Its position is the 32 numbers the encoder produced for it. All those dots together live in a space called the **latent space** — 32 dimensions, one per number in z.
+- Draw the dots and they sit in scattered clumps, with large empty regions between the clumps.
+- The decoder was only ever asked about the dots. Every training step showed it a z that the encoder had actually produced, and asked for that image back. It was never once asked what to do anywhere else.
+- A random 32 numbers almost certainly lands in an empty region. The decoder has no idea what belongs there, so it emits nonsense. It is not broken. It is being asked a question it was never trained on.
+- Walk in a straight line from the z of a "3" to the z of an "8" and decode the points along the way: the middle of the walk is usually not a digit at all.
+- So generation needs a latent space with two properties nothing has asked for yet: **no gaps** (every point decodes to something plausible) and **smoothness** (nearby points decode to similar things).`,
     },
     {
       type: 'intuition',
-      title: 'Why GAN training is a nightmare',
-      md: `- **Mode collapse.** G finds ONE output that reliably fools D and emits it for every z. The losses look healthy; the sample grid is 64 copies of the same face. G was asked to fool, never to *cover*.
-- **Non-convergence / oscillation.** Two players chasing each other. D learns the current fake, G moves, D re-learns — the pair can cycle forever with no equilibrium reached and no loss curve you can trust.
-- **Vanishing generator gradient.** When D gets too good, D(G(z)) ≈ 0, and log(1 − D(G(z))) is flat there. A perfect judge gives zero feedback — G stops learning exactly when it needs help most.
-- **Non-saturating loss:** flip G's objective to maximize log D(G(z)), which is steep precisely where D is confident. Everyone does this by default.
-- **WGAN (+ gradient penalty):** swap the log-loss judge for a Wasserstein critic that still gives useful gradients when real and fake distributions barely overlap.
-- **Spectral normalization:** divide each of D's weight matrices by its largest singular value, capping D's Lipschitz constant so it cannot get sharp enough to strangle G.`,
+      title: 'The VAE: encode a fuzzy cloud instead of a sharp dot',
+      md: `Instead of pinning each photo to one exact dot on the map, give it a small fuzzy circle. Circles overlap. A map covered in overlapping circles has no gaps.
+
+A **VAE** (variational autoencoder) is an autoencoder with exactly one structural change, plus one extra pull on the training.
+
+- **The change:** the encoder no longer outputs one latent vector. It outputs *two* lists of numbers — a centre and a width. Together those describe a small cloud in latent space rather than a single point. That is what "the encoder outputs a distribution" means.
+- Each training step then **samples** one z from that cloud and hands it to the decoder. Different z every time, from the same input.
+- So the decoder is forced to make *every* point in the cloud rebuild the image sensibly, not just one point. That is where **smoothness** comes from.
+- **The extra pull:** a second term in the loss drags every cloud toward the same standard region around the origin — centre near 0, width near 1. Clouds get packed together instead of drifting off into private corners. That is where **no gaps** comes from.
+- Now sampling works. Draw random numbers from that same standard region, hand them to the decoder, and out comes a new image the model has never seen.
+- One sentence to keep: the autoencoder learns *where each input goes*; the VAE learns *where everything goes*, and leaves nowhere empty.
+- The exact form of that second pull, and why the two terms together are the right thing to maximise, is derived in the Metrics module *Generative Model Objectives: Reconstruction, ELBO & GANs*. Read it when you want the maths; you do not need it to use the idea.`,
     },
     {
       type: 'note',
-      md: `What GANs won and where they lost. From 2014 to roughly 2021 GANs owned image generation — StyleGAN faces were the first synthetic images people could not tell apart from photos, and sampling costs exactly **one forward pass**, which is still unbeaten. What they lost on: no likelihood (you cannot even score how probable a sample is), mode coverage never really solved, brittle to hyperparameters and architecture choices, and awkward to condition on rich inputs like a paragraph of text. Diffusion overtook them on image quality *and* diversity while being far less temperamental to train. GANs remain the right tool where latency dominates — super-resolution, real-time avatars, audio vocoders — and, neatly, as the adversarial ingredient used to distill slow diffusion samplers down to one or two steps.`,
+      md: `The two pulls fight, and that fight is the whole tuning story. The rebuild term wants each cloud tiny and far from every other cloud, because that is how you reconstruct an input exactly — let it win alone and you are back to the plain autoencoder, gaps and all. The packing term wants every cloud identical and centred — let *that* win alone and every input encodes to the same cloud, z stops carrying any information about the input, and the decoder just emits the average image no matter what you feed it. That named failure is **posterior collapse**. Real training sits between the two, and the knob that sets where is a weight on the second term. Turn it to zero and you have literally rebuilt the plain autoencoder, which is the cleanest way to remember what it buys you: not sharper pictures, but a space you can sample from.`,
     },
     {
       type: 'intuition',
-      title: 'Diffusion: destroy the image, then learn to undo one step',
-      md: `Drop ink into a glass of water and film it. Diffusion trains a model to play that film backwards, one frame at a time.
+      title: 'Why VAE pictures come out blurry',
+      md: `Ask ten people to draw "a dog", then average the ten drawings pixel by pixel. You get a brown smudge. The average of several valid answers is usually not itself a valid answer.
 
-- **Forward process** — no learning at all. Take a real image, add a little Gaussian noise, repeat T times (T ≈ 1000). By the end it is indistinguishable from pure noise.
-- The noise schedule is fixed and known, so you can jump straight to any step t in one formula instead of looping.
-- **What the model learns:** given a noisy image x_t and the timestep t, predict *the noise inside it*. That is a regression problem with a perfect label — you added the noise, so you know it exactly.
-- **Sampling:** start from pure noise. Predict the noise, subtract a slice of it, add a pinch of fresh noise, decrement t. Repeat. An image appears.
-- Why a *slice* and not all of it: removing all the predicted noise at once lands you on the blurry average again. Many small corrections beat one confident leap.
-- Nothing here is adversarial. There is one network, one MSE, and a label you generated yourself.`,
+- The decoder is scored on squared error against the original image, pixel by pixel.
+- For a given z there are many images that would be reasonable. The whiskers could be here, or there.
+- Squared error is smallest when you predict the **average** of all the reasonable answers. Drawing the whiskers faintly in both places scores better than committing to one place and being wrong.
+- Hedging across pixel positions looks exactly like blur. So the blur is not the network being too small or trained too little. It is the network doing precisely what it was scored on.
+- Remember that, because the next model removes the pixel-by-pixel score entirely, and gets sharp pictures as a direct result.`,
     },
     {
-      type: 'math',
-      intro:
-        'The forward jump in closed form and the loss that made diffusion boring in the best possible way. alpha-bar_t is the fixed schedule: near 1 at t = 0, near 0 at t = T.',
-      latex: [
-        'x_t = \\sqrt{\\bar{\\alpha}_t}\\, x_0 + \\sqrt{1 - \\bar{\\alpha}_t}\\, \\epsilon, \\qquad \\epsilon \\sim \\mathcal{N}(0, I)',
-        '\\mathcal{L}_{\\text{simple}} = \\mathbb{E}_{t,\\, x_0,\\, \\epsilon} \\Big[ \\big\\| \\epsilon - \\epsilon_\\theta(x_t, t) \\big\\|^2 \\Big]',
-        '\\text{An MSE between a noise vector you drew and the one the network guessed. No opponent, no equilibrium to balance.}',
-      ],
+      type: 'intuition',
+      title: 'The GAN: one network makes fakes, another one judges them',
+      md: `A forger paints fake banknotes. A detective looks at each note and says only "real" or "fake", never explaining why. Both get better for years. Eventually the forger is very good.
+
+A **GAN** (generative adversarial network) is two networks trained against each other.
+
+- The **generator** takes random numbers in and produces an image out. It is the forger. It never sees a real image in its life — its only feedback is what the judge said about its own work.
+- The **discriminator** takes an image in and produces one number out: how likely this image is real rather than made up. It is the detective. It trains on a mix of real images and the generator's fakes, and it is told which is which.
+- The two goals are exact opposites. The discriminator wants to be right. The generator wants the discriminator to be wrong about its output. One's gain is the other's loss.
+- Notice what is missing: there is no "correct image" for a given input. Nothing is compared pixel by pixel to a target. There is only the judge's opinion.
+- That is why GAN images are sharp. A blurry image is the easiest thing in the world for a detective to spot, so blur gets punished immediately, and averaging is never a safe answer.
+- The exact objective both networks are optimising lives in the Metrics module *Generative Model Objectives: Reconstruction, ELBO & GANs*.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Why GAN training is genuinely unstable',
+      md: `Every model you have trained so far had a fixed target. The data did not move while you learned. In a GAN, the thing you are being scored against is *itself learning*, and it is learning to defeat you. Three concrete consequences.
+
+- **The ground moves.** The generator improves against today's discriminator. Tomorrow the discriminator has adapted, and the improvement is worthless. The two can chase each other in circles for a very long time without settling anywhere.
+- **Losing all feedback.** If the discriminator gets far ahead, it rejects every fake with total confidence. "Definitely fake" tells the generator nothing about which direction to move. A judge who is too good gives no useful feedback at all, so the generator stops improving exactly when it most needs help.
+- **Mode collapse.** **Mode collapse** is when the generator finds one output that reliably fools the discriminator and then produces that same output for every input. You ask for 64 faces and get 64 copies of one face. This is not a bug in the code: the generator was asked to fool the judge, and it was never once asked to be varied. A single winning output satisfies everything that was actually demanded of it.
+- Add it up and you get a model with no reliable signal that says "training is going well". The loss numbers are relative scores in a fight between two changing players, not a measure of picture quality. The only honest check is to look at a grid of samples.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Diffusion: wreck the picture on purpose, then learn to un-wreck it one step at a time',
+      md: `Drop a spot of ink into a glass of water and film it spreading until the water is a uniform grey. Diffusion trains a model to play that film backwards.
+
+**Denoising** means taking a corrupted input and producing the clean version. That is the only skill this model ever learns.
+
+- **Going forward — no learning here at all.** Take a real image. Add a small amount of random noise. Repeat, maybe 1000 times. Each step is slightly grainier than the last, and by the end nothing of the original is left: it is pure static.
+- **What the model is trained to do.** Show it one of those grainy images, along with which step number it came from, and ask it: *which noise is in here?* It answers with a picture-sized guess at the noise.
+- **Why that is such an easy job to train.** You added the noise yourself, so you know the exact right answer. It is ordinary supervised learning with a free, perfect label — one network, one squared-error score, no opponent anywhere.
+- **Generating.** Start from pure static that came from no image at all. Ask the model what noise is in it. Subtract a *slice* of the noise it predicted. Add a small pinch of fresh noise. Step down and repeat, a few dozen to a thousand times. An image that never existed condenses out.
+- **Why a slice and not the whole predicted noise?** Because at the start the model has almost nothing to go on, so its single best guess is the average of everything plausible — the brown-smudge problem again. Taking many small corrections, each of which only has to be slightly right, avoids ever needing one confident leap. The demo below shows the leap failing, on purpose.
+- This is what the image and video tools you have used are built on. The cost is that generation is a long chain of network passes instead of one, which is why they take seconds rather than milliseconds.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Part 1: teach a model to spot the noise (plain Python, one number instead of an image)',
+      code: `import random
+random.seed(0)
+
+w = 0.0
+c = 0.0
+for step in range(20000):
+    x0 = random.gauss(5.0, 0.5)
+    eps = random.gauss(0.0, 1.0)
+    xt = 0.1 * x0 + 0.995 * eps
+    pred = w * xt + c
+    slope = 2 * (pred - eps)
+    w = w - 0.01 * slope * xt
+    c = c - 0.01 * slope
+print('learned w :', round(w, 3))
+print('learned c :', round(c, 3))
+
+# ---- real output ----
+# learned w : 1.004
+# learned c : -0.498`,
+      annotations: {
+        1: 'random is in the standard library. No neural network library is needed for any of this.',
+        2: 'seed(0) fixes the random sequence, so you get exactly the numbers printed below when you run it.',
+        4: 'w and c are the model. The whole model. It will predict noise as w times the input plus c — a straight line, which is all we need when the "image" is a single number.',
+        5: 'c starts at zero too. Both get nudged 20000 times by the loop below.',
+        6: 'One pass of the loop is one training step: make an example, guess, measure the miss, nudge.',
+        7: 'Draw a "real image" from the data: a single number near 5.0, give or take 0.5. gauss(mean, spread) draws from a bell curve. Our whole dataset is "numbers around 5".',
+        8: 'Draw the noise we are about to add. eps (epsilon) is the standard name for it. This is the label — the exact answer the model must learn to produce.',
+        9: 'The forward step: keep a tiny 0.1 of the real number and add 0.995 of the noise. xt is the wrecked version, and it is almost entirely noise, like the last step of a real forward process.',
+        10: 'The model looks at the wrecked number and guesses which noise is inside it.',
+        11: 'How wrong the guess was, doubled. Squared error is (pred - eps) squared, and its slope with respect to pred is 2 times (pred - eps). Slope means: which way does the error move if I nudge the guess.',
+        12: 'Nudge w against the slope. Multiplying by xt is the chain rule doing its job: pred moves by xt for each unit of w, so w deserves that much of the blame. 0.01 is the step size.',
+        13: 'Nudge c the same way. pred moves one-for-one with c, so there is no extra factor here.',
+        14: 'w came out at 1.004. Since xt is mostly the noise itself, "read the noise off the wrecked number almost directly" is the right rule, and the model found it.',
+        15: 'c came out at -0.498, which cancels the small leftover of the data (0.1 times an average of 5.0 is 0.5). Nobody told it that; it fell out of 20000 nudges.',
+      },
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Part 2: now generate — start from pure noise and remove what the model sees',
+      code: `made = []
+for i in range(6):
+    xt = random.gauss(0.0, 1.0)
+    eps_hat = w * xt + c
+    x0_hat = (xt - 0.995 * eps_hat) / 0.1
+    made.append(round(x0_hat, 2))
+print('generated :', made)
+
+# ---- real output ----
+# generated : [4.96, 4.95, 4.95, 4.95, 4.95, 4.94]`,
+      annotations: {
+        1: 'An empty list to collect the generated numbers.',
+        2: 'Make six of them. i is just a counter; we never use its value.',
+        3: 'The whole point of the module, in one line: this is pure noise. No image went into it. There is nothing here to reconstruct.',
+        4: 'Ask the trained model what noise it thinks is inside. eps_hat is its answer.',
+        5: 'Undo the forward step algebraically. The forward step was xt = 0.1 * x0 + 0.995 * eps, so if you trust the predicted eps, solving for x0 gives this line. Removing ALL the predicted noise in one jump.',
+        6: 'Store the result, rounded to two decimals so the printed line is readable.',
+        7: 'Print all six. They are around 4.95 — the model really did generate numbers that look like our data, from noise alone.',
+      },
+    },
+    {
+      type: 'note',
+      md: `Now look at the six outputs properly: 4.96, 4.95, 4.95, 4.95, 4.95, 4.94. The training data was numbers spread around 5.0 with a spread of 0.5, so a good generator should produce things like 4.3 and 5.6. These are all glued to 4.95. The generator learned the *average* of the data and nothing else. This is the brown-smudge problem in its simplest possible form, and it happened because we removed all the predicted noise in a single leap — and from pure static, the model's single best guess about what was hidden in there *is* the average. Real diffusion never takes that leap. It removes a thin slice, adds a pinch of fresh noise, and asks again, hundreds of times, so each individual guess is easy and the randomness it adds along the way is what makes two runs come out different. That is the reason for the step count, stated in one line: **many easy questions instead of one impossible one.**`,
     },
     {
       type: 'visual',
@@ -214,63 +255,55 @@ print('z_bad        mean/std :', round(float(z_bad.mean()), 4), round(float(z_ba
       props: {
         title: 'Diffusion: noise it to death, then walk back one step at a time',
         notice:
-          'Frames 1-5 are the forward process (no learning). Frames 6-10 are sampling. The last frame is the GAN alternative for contrast — one step, but with a judge and a trap.',
+          'Frames 1-4 are the forward process, where nothing is learned. Frames 5-8 are generation. The last frame is the GAN alternative, for contrast: one step, but with a judge and a trap.',
         leftLabel: 'what runs',
-        rightLabel: 'the image',
+        rightLabel: 'the picture',
         frames: [
           {
-            note: 'Forward process, step 0. Start from a real training image. Nothing has happened yet.',
+            note: 'Forward process, step 0. A real training image, untouched.',
             stack: [
               { name: 't = 0', value: 'noise level: 0%' },
-              { name: 'q(x_t | x_0)', to: 'img' },
+              { name: 'add noise', to: 'img' },
             ],
-            heap: [{ id: 'img', value: 'sharp cat photo', label: 'x_0 — real data' }],
+            heap: [{ id: 'img', value: 'sharp cat photo', label: 'x_0 - real data' }],
           },
           {
-            note: 'Add a little Gaussian noise. Still obviously a cat — a model could denoise this in its sleep. These easy steps teach fine detail.',
+            note: 'Add a little noise. Still obviously a cat. Easy steps like this one are where the model learns fine detail.',
             stack: [
-              { name: 't = 200', value: 'noise level: ~20%' },
-              { name: 'q(x_t | x_0)', to: 'img' },
+              { name: 't = 200', value: 'noise level: about 20%' },
+              { name: 'add noise', to: 'img' },
             ],
-            heap: [{ id: 'img', value: 'cat + faint grain', label: 'x_200' }],
+            heap: [{ id: 'img', value: 'cat plus faint grain', label: 'x_200' }],
           },
           {
-            note: 'Halfway. Colour and pose survive, whiskers do not. Steps around here are where the model learns overall composition.',
+            note: 'Halfway. Colour and pose survive, whiskers do not. Steps here are where the model learns overall shape.',
             stack: [
-              { name: 't = 500', value: 'noise level: ~55%' },
-              { name: 'q(x_t | x_0)', to: 'img' },
+              { name: 't = 500', value: 'noise level: about 55%' },
+              { name: 'add noise', to: 'img' },
             ],
-            heap: [{ id: 'img', value: 'cat under heavy static', label: 'x_500 — shapes only' }],
+            heap: [{ id: 'img', value: 'cat under heavy static', label: 'x_500 - shapes only' }],
           },
           {
-            note: 'Almost gone. A vague warm blob in a snowstorm. You could not name the animal, let alone the breed.',
+            note: 'End of the forward process. Every trace of the cat is gone. That is the goal, because it means generation can START here without needing any image at all.',
             stack: [
-              { name: 't = 800', value: 'noise level: ~85%' },
-              { name: 'q(x_t | x_0)', to: 'img' },
+              { name: 't = 1000', value: 'noise level: 100%' },
+              { name: 'add noise', to: 'img' },
             ],
-            heap: [{ id: 'img', value: 'warm blob in noise', label: 'x_800' }],
+            heap: [{ id: 'img', value: 'pure static', label: 'x_T - pure noise', moved: true }],
           },
           {
-            note: 'End of the forward process. Every trace of the cat is gone — and that is the goal, because it means sampling can START here without needing any image.',
+            note: 'Generation begins. Forget the cat completely: draw FRESH random numbers. This is the only input the model ever gets.',
             stack: [
-              { name: 't = 1000 (T)', value: 'noise level: 100%' },
-              { name: 'q(x_T | x_0)', to: 'img' },
-            ],
-            heap: [{ id: 'img', value: 'pure static', label: 'x_T ~ N(0, I)', moved: true }],
-          },
-          {
-            note: 'Sampling begins. Forget the cat entirely: draw FRESH noise from N(0, I). This is the only input the generator ever gets.',
-            stack: [
-              { name: 't = 1000', value: 'draw x_T ~ N(0, I)' },
+              { name: 't = 1000', value: 'draw pure noise' },
               { name: 'model input', to: 'img' },
             ],
-            heap: [{ id: 'img', value: 'pure static', label: 'x_T — random draw' }],
+            heap: [{ id: 'img', value: 'pure static', label: 'x_T - random draw' }],
           },
           {
-            note: 'One reverse step — the entire trick. The network reads x_t and t and PREDICTS the noise inside. Subtract a slice of that prediction, add a pinch of fresh noise, and you have x_(t-1).',
+            note: 'One reverse step, which is the entire trick. The model reads the picture and the step number and predicts the noise inside. Subtract a slice of that prediction, add a pinch of fresh noise, and you have the next picture.',
             stack: [
-              { name: 'eps_theta(x_t, t)', value: 'predicts the noise', to: 'now' },
-              { name: 'x_t minus a slice', to: 'next' },
+              { name: 'model predicts the noise', to: 'now' },
+              { name: 'subtract a slice', to: 'next' },
             ],
             heap: [
               { id: 'now', value: 'pure static', label: 'x_1000' },
@@ -278,328 +311,337 @@ print('z_bad        mean/std :', round(float(z_bad.mean()), 4), round(float(z_ba
             ],
           },
           {
-            note: 'Four hundred steps later. Blobs and edges have condensed out of the noise. No single step did anything clever; each one removed a sliver.',
+            note: 'Four hundred steps later. Blobs and edges have condensed out of the static. No single step did anything clever; each one removed a sliver.',
             stack: [
               { name: 't = 600', value: 'step 400 of 1000' },
-              { name: 'eps_theta(x_t, t)', to: 'img' },
+              { name: 'model predicts the noise', to: 'img' },
             ],
             heap: [{ id: 'img', value: 'blobs, edges, a horizon', label: 'x_600' }],
           },
           {
-            note: 'Now it is clearly an animal. The late steps do detail work: fur texture, whiskers, eye highlights.',
+            note: 'Done. A sharp cat that was never in the training set. The cost: 1000 network passes in a row. Every one of them was an easy, well-posed question, and that is the trade.',
             stack: [
-              { name: 't = 200', value: 'step 800 of 1000' },
-              { name: 'eps_theta(x_t, t)', to: 'img' },
-            ],
-            heap: [{ id: 'img', value: 'a cat-shaped thing', label: 'x_200' }],
-          },
-          {
-            note: 'Done. A sharp cat that was never in the training set. Cost: 1000 sequential network passes. Every one of them was an easy, well-posed regression — that is the trade.',
-            stack: [
-              { name: 't = 0', value: 'sampling complete' },
+              { name: 't = 0', value: 'generation complete' },
               { name: 'output', to: 'img' },
             ],
-            heap: [{ id: 'img', value: 'sharp NEW cat', label: 'x_0 — generated sample' }],
+            heap: [{ id: 'img', value: 'sharp NEW cat', label: 'x_0 - generated sample' }],
           },
           {
-            note: 'Contrast: the GAN does it in ONE generator pass, graded by a discriminator that is itself still learning. Milliseconds instead of minutes — but the two players can chase each other forever, and G can win by finding a single output that always fools D.',
+            note: 'Contrast: a GAN does it in ONE pass of the generator, graded by a discriminator that is itself still learning. Milliseconds instead of seconds, but the two can chase each other forever, and the generator can win by finding a single output that always fools the judge.',
             stack: [
-              { name: 'G(z): one forward pass', to: 'img' },
-              { name: 'D(image): real or fake?', to: 'img' },
-              { name: 'MODE COLLAPSE: same cat for every z', to: 'img', danger: true },
+              { name: 'generator: one pass', to: 'img' },
+              { name: 'discriminator: real or fake?', to: 'img' },
+              { name: 'MODE COLLAPSE: same cat every time', to: 'img', danger: true },
             ],
-            heap: [{ id: 'img', value: 'sharp cat, 1 pass', label: 'G(z) — instant, but fragile' }],
+            heap: [{ id: 'img', value: 'sharp cat, 1 pass', label: 'one pass - instant, but fragile' }],
           },
         ],
       },
     },
     {
-      type: 'note',
-      md: `The bill and the receipts. Diffusion's one real weakness is **sequential sampling**: T network passes per image against a GAN's one, which is seconds-to-minutes versus milliseconds. Two families of fix. **DDIM** re-derives sampling as a deterministic path you are allowed to skip along — 20 to 50 steps instead of 1000, for a small quality cost, and it is the default in every image tool you have used. **Distillation** (progressive, consistency models, adversarial distillation) trains a student network to jump several teacher steps at once, pushing generation down to 1–4 steps. Separately, **conditioning**: text enters through **cross-attention** — the denoiser attends to the prompt's token embeddings at every step, so "a red bicycle" steers each individual denoising decision rather than being consulted once at the start. That is literally the attention mechanism from the GenAI track, reused; GenAI L0 covers it from zero.`,
+      type: 'intuition',
+      title: 'The four side by side, and why evaluating any of them is hard',
+      md: `- **Autoencoder.** Squeeze and rebuild. Excellent at compressing, denoising and spotting odd inputs. Not a generator: its latent space has gaps.
+- **VAE.** Encodes a cloud instead of a point, so the space is samplable. Trains easily. Pictures come out soft, because it is scored pixel by pixel.
+- **GAN.** Generator versus discriminator. Sharpest results for years, and generation is a single fast pass. Training is a balancing act and variety is its standing weakness.
+- **Diffusion.** Learn to remove a little noise; repeat from static. Sharp *and* varied, and training is ordinary supervised learning. It pays for that with many passes per image.
+- **The modern hybrid, in one sentence:** a VAE compresses the image into a small latent space, and a diffusion model does its noising and denoising inside that smaller space. That is why it is called latent diffusion.
+- **Evaluation is the genuinely hard part.** There is no correct answer to compare against — the whole point is that the output is new — so accuracy is meaningless here. You need scores that judge quality and variety separately, and every one of them has known blind spots. That is a subject in itself: it is taught in the Metrics module *Generative Model Objectives: Reconstruction, ELBO & GANs*.`,
     },
     {
       type: 'intuition',
-      title: 'The comparison you will be asked to recite',
-      md: `Five axes. Memorize the shape, not the wording.
+      title: 'Worked case: sizing a face generator by hand',
+      md: `You are given 100,000 face photos, 64 by 64 pixels, colour. Product wants to generate new faces. Work through it with a pen, no code.
 
-- **Sample quality:** AE — not a generator at all. VAE — blurry. GAN — sharp. Diffusion — sharpest, current state of the art.
-- **Diversity / mode coverage:** VAE good (it optimizes a likelihood bound, so it must cover the data). GAN poor — collapse is the default failure. Diffusion excellent.
-- **Training stability:** AE and VAE easy, a single loss goes down. GAN fragile, a permanent balancing act. Diffusion easy, because it is regression.
-- **Sampling speed:** AE / VAE / GAN — one forward pass, milliseconds. Diffusion — 20 to 1000 sequential passes. The one axis it loses.
-- **Latent space usefulness:** AE compressed but holey. VAE smooth and interpolatable — the reason latent diffusion embeds one. GAN has no encoder at all by default. Diffusion's "latent" is image-sized, so it compresses nothing.
-- The modern system is a hybrid: a **VAE compresses** the image, a **diffusion model generates inside that latent space**, and text conditions it by **cross-attention**. That sentence is Stable Diffusion.`,
+**Step 1 — how big is one input?** 64 × 64 = 4096 pixels, times 3 colour channels = **12,288 numbers per image**.
+
+**Step 2 — pick a bottleneck.** Say 128. The compression is 12,288 ÷ 128 = **96 times**. Every face has to be describable by 128 numbers. Plausible: faces vary in a limited number of ways.
+
+**Step 3 — what does the VAE encoder output?** Not 128 numbers. A centre and a width for each latent number, so **256 numbers**. The decoder still takes 128, because one z is sampled from the cloud before it goes in.
+
+**Step 4 — sample one latent number by hand.** For latent number 1 the encoder says centre 0.4, width 0.2. The random draw for this step comes out as 1.5. The sampled value is 0.4 + 0.2 × 1.5 = **0.7**. Next step, same photo, the draw is −0.5: 0.4 + 0.2 × (−0.5) = **0.3**. Same photo, different z. The decoder must handle both, and that is precisely what stops gaps forming.
+
+**Step 5 — what will the output look like?** Soft. Recognisably faces, correct hair colour and pose, mushy at the eyelashes. If product needs magazine-sharp, the pixel-by-pixel score is the thing standing in the way, so the answer is a different model, not more epochs.
+
+**Step 6 — what would you actually ship?** A diffusion model, and if generation is too slow, use the VAE you just built as the compressor and run the diffusion inside its 128-number space instead of over 12,288 pixels. Roughly 96 times less to denoise at every one of the steps.`,
+    },
+    {
+      type: 'note',
+      md: `**The classic mistake, walked into on purpose.** You are training a GAN. At epoch 5 the generator's loss reads 2.8. By epoch 40 it is down to 0.9, and it is still falling smoothly. You write in the log: "generator loss down 68 percent, quality clearly improving, training another 50 epochs." Then you open the sample grid and every one of the 64 faces is the same face.
+
+Here is why the number said nothing. The generator's loss measures **how often it fools the discriminator right now**. It is a score in a match against an opponent who is also changing. A falling generator loss has two completely different explanations that the number cannot tell apart: the generator got better at making faces, or the discriminator got *worse* at spotting fakes. In this case it was neither in a useful sense — the generator found one face that happens to fool this particular discriminator, and repeated it. Fooling the judge is exactly what it was scored on, so mode collapse shows up as a *healthy-looking* loss curve. That is what makes it dangerous.
+
+Contrast that with a diffusion model, where the loss is squared error against a noise you generated yourself. The target does not move, so a falling loss really does mean the model is better at its job. **The rule: a loss is a progress meter only when the thing it is measured against holds still.** In a GAN, look at samples and at a variety score. In a diffusion model, the loss curve is safe to trust.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Practice problems (work them before reading the solutions)',
+      md: `1. An autoencoder is trained on 28×28 images with a bottleneck of 784. Training error goes to almost exactly zero. Your teammate says the model learned the data perfectly. What actually happened?
+2. You take a trained plain autoencoder, feed the decoder 32 random numbers, and get static. Someone suggests training the decoder longer. Will that fix it?
+3. A VAE's centre-and-width outputs come back as centre ≈ 0 and width ≈ 1 for *every* training image. Reconstructions are all the same blurry average face. Name the failure and the knob that caused it.
+4. You must generate 500 product images overnight on one GPU, and separately power a live video filter that must respond in under 30 milliseconds per frame. Which model for which job, and why?`,
+    },
+    {
+      type: 'note',
+      md: `**Solutions.**
+
+**1.** The bottleneck is the same size as the input, so nothing was squeezed. The network learned the identity function — copy the input to the output. Zero error, zero understanding. The proof: give it an image type it has never seen and it will copy that perfectly too, which a model that had learned anything about digits could not do. Compression is not a side effect of the autoencoder; it is the only reason it learns anything.
+
+**2.** No. More training makes the decoder better at the z values the encoder produces, which is not where your random numbers landed. The problem is the *shape of the latent space*, not the decoder's skill, and nothing in the autoencoder's objective ever mentions that shape. Fixing it needs a change of design — a VAE — not a change of budget.
+
+**3.** Posterior collapse. Every input maps to the same standard cloud, so z carries no information about which image it came from and the decoder learned to ignore it entirely and emit the dataset average. The cause is the packing term outweighing the rebuild term. Turn its weight down, or start it at zero and raise it gradually so the model first learns to use z at all. Watch for the symmetric failure at the other extreme: set the weight to zero and you have a plain autoencoder again, with gaps.
+
+**4.** Overnight batch of 500: diffusion. Nobody is waiting, quality and variety matter, and a few seconds per image times 500 is under an hour. Live video filter at 30 milliseconds a frame: a GAN, or a diffusion model distilled down to one or two steps. A GAN generates in a single pass, which is the one axis where it still wins outright. The general shape of this answer: if latency is the binding constraint, pay for it with training difficulty; if quality and variety are, pay for it with time at generation.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Beyond the basics - skip this on your first read',
+      md: `Four extras, each one a name you will meet in real code.
+
+- **The reparameterisation trick.** A VAE samples z from the encoder's cloud, and you cannot compute the effect of a nudge *through a random draw* — a die roll has no slope. The fix is to draw the randomness separately, as plain unit noise, and then write z = centre + width × noise. Same distribution, but z is now ordinary arithmetic on the encoder's outputs, and arithmetic can be differentiated. The randomness has been moved into an input that needs no gradient. This is asked about by name.
+- **Denoising autoencoder.** Corrupt the input on purpose, and ask the autoencoder for the clean version. The bottleneck can no longer get away with copying, so it must learn what the data actually looks like. Notice that this idea, scaled up and repeated over many noise levels, is diffusion.
+- **Anomaly detection.** Train an autoencoder on normal data only, then score new inputs by their reconstruction error. Normal things rebuild well; a fraudulent transaction rebuilds badly, because the decoder never learned that shape. Where the threshold goes is a business decision, not a model decision.
+- **Fewer diffusion steps.** Two families of fix for the step-count cost. Better samplers (DDIM and friends) skip along the path and get good results in 20 to 50 steps instead of 1000, with no retraining. Distillation trains a second network to jump several of the original's steps at once, reaching one to four steps, at a training run's cost and some loss of variety.
+- **How a text prompt steers it.** The prompt is turned into a list of numbers by a text model, and the denoising network *attends* to those numbers at every single step — each region of the picture asks which words are relevant to it. That is why the prompt shapes the whole trajectory rather than just the starting point. The attention mechanism itself is taught from zero in the GenAI track.`,
     },
   ],
   quiz: [
     {
-      question: 'Why does a plain autoencoder fail if you sample a random z and decode it?',
+      question: 'What separates a generative model from a classifier, in terms of what comes out?',
       options: [
         {
-          text: 'The decoder is too small to produce a full image',
-          explanation: 'Capacity is not the issue — the same decoder reconstructs training images perfectly. The problem is WHERE you sampled.',
+          text: 'A classifier outputs a label about the input you gave it; a generator outputs a whole new example that was not in the data',
+          explanation: 'Correct. Ten class scores versus 784 pixel values. One judges an existing thing, the other produces a new thing.',
         },
         {
-          text: 'The latent space has holes: random z lands where no training example ever went, and the decoder has no idea what belongs there',
-          explanation:
-            'Correct. Reconstruction loss only constrained the decoder at the exact z values the encoder produced. Everywhere else is undefined behaviour.',
+          text: 'A generative model is more accurate than a classifier',
+          explanation: 'They are not doing the same job, so they cannot be compared on accuracy. A generator has no correct answer to be accurate against.',
         },
         {
-          text: 'Reconstruction loss is not differentiable, so the decoder never trained properly',
-          explanation: 'MSE is perfectly differentiable, and the decoder did train — it just never learned anything about unvisited regions.',
+          text: 'A generative model needs labelled data and a classifier does not',
+          explanation: 'It is the other way round. Classifiers need labels; an autoencoder or a diffusion model makes its own target out of the input.',
+        },
+      ],
+      correct: 0,
+    },
+    {
+      question: 'An autoencoder is built with a bottleneck exactly as wide as its input. What does it learn?',
+      options: [
+        {
+          text: 'The most important features of the data, faster than a narrow one would',
+          explanation: 'Nothing forces it to find features. With room to store everything, storing everything is the easiest way to get zero error.',
+        },
+        {
+          text: 'To copy the input straight through: near-zero error and nothing learned about the data',
+          explanation: 'Correct. The squeeze is what forces the network to find structure. Remove the squeeze and you have a copying machine.',
+        },
+        {
+          text: 'Nothing at all — training will fail to converge',
+          explanation: 'Training converges beautifully. That is the trap: the error looks perfect while the model is useless.',
         },
       ],
       correct: 1,
     },
     {
-      question: 'What does the encoder of a VAE output?',
-      options: [
-        { text: 'A single latent vector z', explanation: 'That is the plain autoencoder — and exactly the design that produces a holey latent space.' },
-        { text: 'A reconstructed image', explanation: 'That is the decoder\'s output, at the other end of the network.' },
-        {
-          text: 'A mean vector and a variance (usually log-variance) vector, which together define a Gaussian',
-          explanation: 'Correct. Encoding a distribution instead of a point is the single structural change that turns an autoencoder into a generator.',
-        },
-      ],
-      correct: 2,
-    },
-    {
-      question: 'In z = μ + σ ⊙ ε, what is ε and why is it there?',
+      question: 'Why does decoding 32 random numbers from a trained plain autoencoder produce static?',
       options: [
         {
-          text: 'Parameter-free noise drawn from N(0, 1) — it holds the randomness so that z stays a differentiable function of μ and σ',
-          explanation: 'Correct. The sampling still happens, but upstream of everything learnable, so ∂z/∂μ = 1 and ∂z/∂σ = ε both exist.',
+          text: 'The decoder is too small to make a full image',
+          explanation: 'The same decoder rebuilds training images fine. Size is not the issue; where you sampled is.',
         },
-        { text: 'A learned parameter the encoder predicts alongside μ and σ', explanation: 'If ε were learned there would be no randomness at all — the model would collapse to a deterministic autoencoder.' },
-        { text: 'The reconstruction error, fed back into the latent', explanation: 'The reconstruction error lives in the loss, not in the sampling step. ε is pure noise, unrelated to the input.' },
-      ],
-      correct: 0,
-    },
-    {
-      question: 'You set the KL weight in a VAE to exactly zero. What do you get?',
-      options: [
-        { text: 'Sharper samples when you decode random z', explanation: 'The opposite — with no KL pull the latent space fragments and random z decodes to garbage.' },
         {
-          text: 'A plain autoencoder: excellent reconstructions, a holey latent space, and useless sampling',
-          explanation: 'Correct — and this is the cleanest way to remember what the KL term actually buys: not reconstruction quality, but a samplable space.',
+          text: 'The latent space has gaps — the random point lands where no training image ever went, and the decoder was never asked what belongs there',
+          explanation: 'Correct. Training only ever constrained the decoder at the exact points the encoder produced. Everywhere else is undefined.',
         },
-        { text: 'Posterior collapse', explanation: 'Backwards. Posterior collapse is what happens when KL is too STRONG and the latent stops carrying information.' },
+        {
+          text: 'Squared error cannot be differentiated, so the decoder never really trained',
+          explanation: 'Squared error differentiates fine and the decoder did train. It simply learned nothing about unvisited regions.',
+        },
       ],
       correct: 1,
     },
     {
-      question: 'A trained GAN produces a 64-image sample grid of nearly identical faces. Both losses look healthy. Diagnosis?',
-      options: [
-        { text: 'Learning rate too high — the model diverged', explanation: 'Divergence produces noise or NaNs, not one clean repeated output. And the losses would not look healthy.' },
-        {
-          text: 'The discriminator is too weak to tell real from fake',
-          explanation: 'A weak D degrades overall quality, but it does not explain why one specific output repeats. The generator here is being rewarded, not unchecked.',
-        },
-        {
-          text: 'Mode collapse — G found one output that reliably fools D and stopped exploring',
-          explanation: 'Correct. The objective only ever asked G to fool D, never to cover the data distribution, so a single winning output is a valid optimum of what was asked.',
-        },
-      ],
-      correct: 2,
-    },
-    {
-      question: 'Why does a discriminator that gets TOO good hurt GAN training?',
+      question: 'What is the one structural change a VAE makes to an autoencoder?',
       options: [
         {
-          text: 'D(G(z)) goes to 0, where log(1 − D(G(z))) is flat, so the generator receives almost no gradient',
-          explanation: 'Correct — the vanishing generator gradient. The non-saturating loss (maximize log D(G(z))) fixes exactly this by being steep in that region.',
+          text: 'The decoder is made much deeper',
+          explanation: 'Depth is a tuning choice, not the defining change, and it would not fix the gaps in the latent space.',
         },
-        { text: 'D overfits the training set and memorizes real images', explanation: 'D can overfit, and it is a real concern, but it is not the mechanism that starves G of gradient.' },
-        { text: 'D starts generating images itself and competes with G', explanation: 'D only outputs a single probability. It has no generative capacity at all.' },
-      ],
-      correct: 0,
-    },
-    {
-      question: 'At each reverse step, what does a standard diffusion model actually predict?',
-      options: [
-        { text: 'Which timestep t the image is currently at', explanation: 't is given to the model as an input, not predicted from it.' },
         {
-          text: 'The noise that was added to produce x_t, so that a slice of it can be subtracted',
-          explanation: 'Correct. Predicting ε is a regression with a perfect label, because the training procedure generated that noise itself.',
+          text: 'The encoder outputs a centre and a width — a small cloud — instead of a single point, and a z is sampled from that cloud each step',
+          explanation: 'Correct. Encoding a distribution rather than a point is what makes the space smooth and samplable.',
         },
-        { text: 'The probability that the image is real rather than generated', explanation: 'That is a GAN discriminator. Diffusion has no judge anywhere in the loop.' },
+        {
+          text: 'The reconstruction target becomes a different image',
+          explanation: 'The target is still the input itself. Only what the encoder emits, and how the space is shaped, changed.',
+        },
       ],
       correct: 1,
     },
     {
-      question: 'Why is diffusion training much more stable than GAN training?',
+      question: 'A GAN has trained for 40 epochs. Generator loss has fallen steadily. The 64-image sample grid shows the same face 64 times. What is going on?',
       options: [
         {
-          text: 'The objective is a plain MSE regression against a label the trainer generated itself — one network, no opponent, no equilibrium to maintain',
-          explanation: 'Correct. Replacing an adversarial game with a well-posed supervised problem is the whole reason diffusion took over.',
+          text: 'Mode collapse: the generator found one output that fools the discriminator and repeats it, and the falling loss reflects exactly that',
+          explanation: 'Correct. It was asked to fool the judge and never asked to be varied, so one winning output is a perfectly good solution to what was demanded.',
         },
-        { text: 'Diffusion models are much smaller, so they optimize more easily', explanation: 'They are typically LARGER than comparable GANs. Size is not the reason.' },
-        { text: 'Diffusion does not use gradient descent', explanation: 'It absolutely does — the same optimizers, the same schedules. Only the objective changed.' },
+        {
+          text: 'The learning rate is too high and the model has diverged',
+          explanation: 'Divergence gives you noise or NaNs, not one clean repeated face, and the loss would not be falling smoothly.',
+        },
+        {
+          text: 'Training is going well and just needs more epochs',
+          explanation: 'This is the trap the loss curve sets. More epochs entrench the collapse; the loss will keep looking fine.',
+        },
       ],
       correct: 0,
+    },
+    {
+      question: 'During training, what is a diffusion model actually asked to produce?',
+      options: [
+        {
+          text: 'Which step number the noisy picture came from',
+          explanation: 'The step number is given to the model as an input, not predicted from the picture.',
+        },
+        {
+          text: 'The noise that was added to make this picture, so a slice of it can be subtracted',
+          explanation: 'Correct. The trainer added that noise, so the correct answer is known exactly. It is ordinary supervised learning with a free label.',
+        },
+        {
+          text: 'Whether the picture is real or generated',
+          explanation: 'That is a GAN discriminator. There is no judge anywhere in a diffusion model.',
+        },
+      ],
+      correct: 1,
     },
   ],
   interviewQuestions: [
     {
-      question: 'Explain the reparameterization trick and why a VAE cannot be trained without it.',
+      question: 'Explain an autoencoder and why the bottleneck matters, without using any maths.',
       answer:
-        'The encoder outputs μ and σ, and we need a sample z from N(μ, σ²) to feed the decoder. Sampling is not differentiable — there is no derivative of "a draw" with respect to the parameters that shaped it — so backprop stops dead and the encoder receives no gradient. The trick rewrites the sample as z = μ + σ ⊙ ε with ε ~ N(0, I) drawn independently. The distribution is unchanged, but z is now a deterministic, differentiable function of μ and σ, with ∂z/∂μ = 1 and ∂z/∂σ = ε; the randomness sits in ε, an input that carries no gradient. The estimator this gives is unbiased, which is why one ε draw per input per step is enough in practice. The alternative (score-function / REINFORCE estimators) works but has far higher variance — worth naming to show you know why this specific trick won.',
+        'An autoencoder is two networks trained together. The encoder squeezes the input into a short list of numbers called the latent vector; the decoder rebuilds the input from that list. The training target is the input itself, so no labels are needed. For a 28-by-28 image the journey is 784 numbers in, maybe 32 in the middle, 784 back out. The bottleneck is the entire point: with only 32 slots the network cannot store a copy, so to get low error it has to find the patterns that let 32 numbers stand in for 784 — overall stroke shape rather than individual pixel values. Widen the bottleneck to 784 and the network learns to copy: error goes to zero and nothing is learned. The squeeze is not a limitation of the design, it is the mechanism.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Why can a trained autoencoder not generate new images, and what does a VAE change to fix it?',
+      answer:
+        'The decoder was only ever asked about the latent vectors the encoder actually produced. Those sit in scattered clumps with large empty regions between them, so a random latent vector lands somewhere the decoder was never trained and the output is noise. Nothing in the objective ever asked for a well-shaped latent space. A VAE makes one structural change plus one addition. The change: the encoder outputs a centre and a width instead of a point, describing a cloud, and each training step samples a latent vector from that cloud — so the decoder must handle every point in the cloud, which makes the space smooth. The addition: a second loss term pulls every cloud toward one standard region, so the clouds pack together and stop leaving empty space. Now drawing from that standard region and decoding gives a genuinely new image.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Why are VAE outputs soft and GAN outputs sharp? Answer in terms of what each model is scored on.',
+      answer:
+        'A VAE decoder is scored pixel by pixel against the original, usually with squared error. For a given latent vector there are many plausible images, and squared error is smallest when you predict the average of them. The average of several sharp images is a blur, so the model hedges because hedging is optimal under that score. A GAN has no per-pixel target at all — the only feedback is a discriminator saying real or fake, and a blurry image is trivially easy to reject, so blur is punished rather than rewarded. The costs are symmetric: the VAE covers the whole data distribution and pays in sharpness; the GAN only has to be convincing and pays in variety. Diffusion gets both by keeping a squared-error objective but making each individual prediction so easy that there is almost nothing to average over.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Why is diffusion training so much more stable than GAN training?',
+      answer:
+        'A GAN has two networks with opposite goals, so the thing each one is scored against is itself moving. That produces three problems: the generator improves against a discriminator that then adapts, so progress can go in circles; a discriminator that gets too far ahead rejects everything with total confidence and gives no useful direction back; and the generator can satisfy its objective by finding a single output that fools the judge, which is mode collapse. There is also no number that reliably reports progress, since the losses are relative scores in a moving fight. Diffusion replaces all of that with one network doing supervised regression: predict the noise that was added, with the correct answer known exactly because the trainer generated it. Fixed target, no opponent, no balance to maintain, and a loss curve you can actually trust.',
       isCaseBased: false,
     },
     {
       question:
-        'Case: your VAE trains, total loss drops nicely, but every sample from N(0, I) is the same blurry average-looking blob, and the KL term is nearly zero. What happened and how do you fix it?',
+        'Case: your VAE trains, the total loss falls nicely, but every sample looks like the same blurry average face and the second loss term is almost zero. What happened and how would you fix it?',
       answer:
-        'Near-zero KL is the diagnostic: q(z|x) has collapsed onto the prior for every x, so z carries no information about the input — **posterior collapse**. The decoder learned to ignore z and just emit the dataset mean, which is why every sample looks identical. Usual causes: KL weight (β) too high, or a decoder powerful enough to reconstruct well without needing z (very common with autoregressive/PixelCNN-style decoders). Fixes, in order of laziness: KL annealing / warmup — start β at 0 and ramp it up so reconstruction establishes a useful latent first; free bits — floor the KL per latent dimension so each one must carry some information; lower β outright; weaken the decoder or add a skip from z to deeper decoder layers. Tradeoff to say out loud: everything that fights collapse pushes the latent away from N(0, I), which degrades sampling quality — you are choosing a point on the reconstruction/prior-match curve, not eliminating the tension.',
+        'The near-zero second term is the diagnosis: every input is being encoded to the same standard cloud, so the latent vector carries no information about which image it came from. That is posterior collapse, and the decoder has learned to ignore the latent entirely and emit the dataset average. Two usual causes: the weight on that packing term is too high, or the decoder is powerful enough to produce a decent image without needing the latent at all. Fixes, cheapest first: start the weight at zero and ramp it up over the first few epochs, so the model first learns to use the latent for something; put a floor under how small the term may go per latent dimension, forcing each one to carry information; or lower the weight outright; or weaken the decoder. The trade to state out loud: everything that fights collapse pushes the latent away from the standard region, which makes sampling worse. You are picking a point on that curve, not removing the tension.',
       isCaseBased: true,
     },
     {
-      question: 'Why are VAE samples blurry and GAN samples sharp? Answer at the level of the loss function.',
-      answer:
-        'A VAE decoder is trained with a per-pixel reconstruction loss, typically MSE (Gaussian likelihood). For a given z there are many plausible images; the loss-minimizing prediction is their pixelwise MEAN, and the mean of several sharp alternatives is a blur. The model hedges because hedging is optimal under that loss. A GAN has no per-pixel target at all — the only signal is a discriminator, and a blurry image is the easiest thing in the world for a discriminator to reject, so blur is actively punished. The tradeoff is symmetric: the VAE covers the data because it optimizes a likelihood bound and pays for it in sharpness; the GAN sharpens because it only needs to be convincing, and pays for it in mode coverage. Diffusion gets both by keeping an MSE objective but making each prediction easy enough that the averaging is negligible — predicting the noise over one small step has a nearly unique answer.',
-      isCaseBased: false,
-    },
-    {
       question:
-        'Case: you are training a GAN on a face dataset. After 30 epochs the sample grid shows four or five distinct faces repeated over and over. Losses are flat and unremarkable. Walk me through your debugging.',
+        'Case: you are training a GAN on faces. After 30 epochs the sample grid shows four or five distinct faces repeating. The losses look flat and unremarkable. Walk me through your debugging.',
       answer:
-        'Name it first: mode collapse, and note that flat unremarkable losses are expected — GAN losses are relative scores, not progress meters, so the sample grid and a coverage metric are the real instruments. Debug order: (1) Measure, do not eyeball — compute FID and, better, precision/recall for generative models, which separates "sharp" from "diverse". (2) Check the D/G balance — if D is winning easily, G is optimizing against a saturated judge; try one G step per D step, lower D\'s learning rate, or use the two-timescale rule (TTUR). (3) Switch the objective — non-saturating loss if you are still on the original min-max, then WGAN-GP or hinge loss with spectral normalization on D, which are the standard stability package. (4) Add explicit diversity pressure — minibatch discrimination or minibatch standard deviation lets D see a whole batch, so identical outputs become detectable and punishable. (5) Check for a data pipeline bug — a broken shuffle or a tiny effective dataset produces the same symptom for a much dumber reason. Tradeoff: every diversity mechanism costs some sharpness, and if the deadline is real, the honest recommendation is to move to a diffusion model, where this failure mode does not exist.',
+        'Name it first: mode collapse. And note that flat unremarkable losses are exactly what you should expect, because GAN losses are relative scores in a fight between two changing networks, not progress meters — the sample grid and a variety score are the real instruments here. Then, in order: measure rather than eyeball, using a quality score plus a separate variety score so that "sharp" and "diverse" cannot hide each other. Check the balance between the two networks — if the discriminator is winning easily the generator is optimising against a saturated judge, so lower the discriminator learning rate or give the generator more steps. Change the objective to one of the standard stability packages, which are designed to keep useful feedback flowing when the discriminator is confident. Add explicit pressure for variety by letting the discriminator see a whole batch at once, so identical outputs become detectable and punishable. And check for a boring bug: a broken shuffle or a much smaller effective dataset than you think produces this exact symptom. Trade-off: every variety mechanism costs some sharpness, and if the deadline is real, the honest recommendation is a diffusion model, where this failure mode does not exist.',
       isCaseBased: true,
     },
     {
-      question: 'Describe the forward and reverse processes of a diffusion model, and say what the network is actually trained to do.',
-      answer:
-        'Forward: a fixed, learning-free Markov chain that adds a small amount of Gaussian noise to a real image at each of T steps until it is indistinguishable from N(0, I). Because the schedule is fixed, there is a closed form for jumping straight to any t: x_t = sqrt(alphabar_t)·x_0 + sqrt(1 − alphabar_t)·ε, so training samples a random t rather than looping. Reverse: the network is given x_t and t and predicts ε — the noise inside — and training minimizes the MSE between the true ε and the prediction. That label is free and exact, because the trainer drew the noise. Sampling starts from pure noise, and at each step subtracts a scaled portion of the predicted noise and adds a smaller fresh noise term, walking t down to 0. The key framing for an interviewer: it is a stack of tiny denoising problems, each nearly deterministic, which is what makes an MSE objective produce sharp results where a VAE\'s MSE produces blur.',
-      isCaseBased: false,
-    },
-    {
-      question: 'Name the two terms of the VAE loss, say what each one buys, and describe what happens as you reweight them.',
-      answer:
-        'Reconstruction (expected log-likelihood of x given z) buys fidelity — it wants each input\'s latent cloud tiny and well-separated so the decoder can rebuild precisely. KL(q(z|x) || N(0, I)) buys a samplable space — it pulls every cloud toward the prior so the clouds overlap and cover, leaving no holes. Together they are the negative ELBO, so minimizing the loss maximizes a lower bound on log p(x). Reweighting: β → 0 recovers a plain autoencoder — great reconstructions, unsamplable latent. β large gives β-VAE behaviour — more disentangled, more prior-like latents and blurrier reconstructions, and past a point, posterior collapse. The interview point is that these are not two goals that happen to coexist; they are in direct tension, and choosing β is choosing where on that tradeoff you want to sit.',
-      isCaseBased: false,
-    },
-    {
-      question: 'How does an autoencoder relate to PCA, and when would you actually prefer the autoencoder?',
-      answer:
-        'A single-hidden-layer autoencoder with linear activations and MSE loss spans the same subspace as PCA — same reconstruction error, though the learned axes are not forced to be orthogonal or ordered by variance. So an autoencoder is honestly described as nonlinear PCA. Prefer PCA when the data really is roughly linear, when you need deterministic, fast, explainable components with variance explained per axis, when the dataset is small (PCA has no hyperparameters and cannot overfit the way a deep net can), or when you must justify the method to a regulator. Prefer an autoencoder when the manifold is curved — images, audio, sensor traces — where linear axes waste dimensions, when you want the encoder to become part of a bigger differentiable model, or when the input is not naturally a flat vector and you want convolutional or sequential structure in the encoder. Practical note: PCA first, always. It is five minutes and it tells you whether the extra machinery has anything to find.',
-      isCaseBased: false,
-    },
-    {
       question:
-        'Case: you deployed an autoencoder for anomaly detection on server telemetry. It flags 40% of ordinary traffic as anomalous. What do you check?',
+        'Case: you deployed an autoencoder for anomaly detection on server telemetry, and it flags 40 percent of ordinary traffic as anomalous. What do you check?',
       answer:
-        'Reconstruction-error anomaly detection has a small number of well-known failure points, so go in order. (1) The threshold — it is a hyperparameter, and if it was set on training data it is far too tight; recalibrate on a held-out normal-only window (e.g. the 99th percentile of its errors) and check the error distribution shape, which is usually long-tailed rather than Gaussian. (2) Distribution drift — telemetry changes with releases, traffic seasonality and new features; the "normal" the model learned is stale, and the fix is periodic retraining plus drift monitoring on the error distribution itself, not a bigger threshold. (3) Scaling — if features were standardized with training-set statistics, any shift in scale inflates the error for everything; verify the exact same transform runs in production. (4) Bottleneck too tight — if the model cannot reconstruct even normal data, every point looks anomalous; check training reconstruction error before blaming the data. (5) Contaminated training data — if anomalies were present during training, the model learned to reconstruct them and the score loses meaning in both directions. Tradeoff to name: the threshold is a precision/recall dial, and the right setting comes from the cost of a missed incident versus the cost of alert fatigue, not from the model.',
+        'Reconstruction-error anomaly detection has a short list of well-known failure points, so go in order. First the threshold: it is a hyperparameter, and if it was set on training data it is far too tight. Recalibrate it on a held-out window of normal-only traffic and look at the shape of the error distribution, which is usually long-tailed rather than symmetric. Second, drift: telemetry changes with every release and with traffic seasonality, so the "normal" the model learned is stale — the fix is periodic retraining and monitoring the error distribution itself, not a looser threshold. Third, scaling: if features were standardised using training statistics, any shift in scale inflates the error for everything, so verify that the identical transform runs in production. Fourth, the bottleneck: if it is so tight that the model cannot rebuild even normal data, everything looks anomalous — check the training reconstruction error before blaming the data. Fifth, contaminated training data: if anomalies were present during training the model learned to rebuild them, and the score loses meaning in both directions. The trade to name: the threshold is a dial between missed incidents and alert fatigue, and where it belongs comes from the cost of each, not from the model.',
       isCaseBased: true,
     },
     {
       question:
         'Case: your text-to-image diffusion service takes 9 seconds per image and product wants under 1 second. What are your options and what does each cost?',
       answer:
-        'The bill is T sequential network passes, so every option either reduces T or shrinks the network. (1) Better sampler — DDIM or a higher-order solver (DPM-Solver++) cuts 1000 steps to 20–50 with small quality loss and zero retraining. Do this first; it is a config change. (2) Latent diffusion — if you are denoising at full image resolution, move to a VAE-compressed latent space (e.g. 8× smaller per side, ~64× fewer pixels per step). Large win, requires a VAE and retraining. (3) Step distillation — progressive distillation, consistency models, or adversarial distillation train a student to jump many teacher steps, reaching 1–4 steps. Biggest win, costs a training run and some fidelity and diversity. (4) Engineering — fp16/bf16, compiled kernels, batching concurrent requests, caching the text encoder output. Free quality-wise, and often 2–3× on its own. (5) Smaller UNet or a distilled backbone — direct quality tradeoff. Sequence I would actually ship: precision + batching + a 30-step DPM-Solver, measure, then distill only if still short. Say explicitly that quality is measured (FID plus human preference on a fixed prompt set) before and after, or "faster" quietly means "worse".',
+        'The bill is the number of sequential network passes, so every option either reduces that count or shrinks the network. First, a better sampler: the standard skipping samplers cut a thousand steps to twenty or fifty with a small quality loss and no retraining at all — do this first, it is a configuration change. Second, latent diffusion: if you are denoising at full image resolution, put a VAE in front and denoise inside its much smaller latent space instead. A large win, but it needs a compressor and a retraining run. Third, distillation: train a student network to jump several of the teacher\'s steps at once, reaching one to four steps. The biggest win, at the cost of a training run and some fidelity and variety. Fourth, plain engineering: lower-precision arithmetic, compiled kernels, batching concurrent requests, and caching the text encoder output — often two to three times on its own with no quality cost. Fifth, a smaller network, which is a direct quality trade. What I would actually ship: precision plus batching plus a thirty-step sampler, measure, and distil only if still short. And say explicitly that quality is measured on a fixed prompt set before and after, or "faster" quietly means "worse".',
       isCaseBased: true,
-    },
-    {
-      question: 'Why did diffusion displace GANs? Give two independent reasons and say which mattered more.',
-      answer:
-        'Reason one: the objective. Diffusion is supervised regression against a label the trainer generated, so it has a stable loss, no equilibrium to maintain, and scales predictably with model size and data — you can train a bigger one and expect it to be better, which is emphatically not true of GANs. Reason two: mode coverage. Diffusion is likelihood-based in spirit and must explain the whole data distribution, so it does not have a mode-collapse failure mode; GANs never solved coverage, only mitigated it. Which mattered more: stability and scalability. Sample quality between a well-tuned StyleGAN and early diffusion was arguably close, but "you can reliably train a bigger one" is what let diffusion absorb billions of images and text conditioning, and that is what GANs could not follow. The honest caveat: GANs still win decisively on sampling latency, which is why they came back as distillation targets for one-step diffusion.',
-      isCaseBased: false,
-    },
-    {
-      question: 'How does a text prompt actually steer a diffusion model? Explain the mechanism, not the API.',
-      answer:
-        'The prompt is tokenized and run through a frozen text encoder (CLIP or T5) into a sequence of token embeddings. The denoising network is a UNet or transformer with **cross-attention** layers: at every resolution and at every timestep, the image features form the queries and the text embeddings form the keys and values, so each spatial location asks "which words are relevant to me?" and mixes in their content. This happens at every one of the sampling steps, which is why the prompt shapes the entire trajectory rather than just the starting point. On top of that, classifier-free guidance runs the model twice per step — once conditioned, once unconditioned — and extrapolates away from the unconditioned prediction; the guidance scale trades prompt adherence against diversity and, at high values, against realism. Note the doubled compute cost, since that is the follow-up question. The attention mechanism itself is the same one from the GenAI track.',
-      isCaseBased: false,
-    },
-    {
-      question: 'Non-saturating loss, WGAN with gradient penalty, and spectral normalization — what specific problem does each solve?',
-      answer:
-        'Non-saturating loss: fixes the vanishing generator gradient. In the original min-max, G minimizes log(1 − D(G(z))), which is flat when D confidently rejects G — exactly early in training. Flipping to maximize log D(G(z)) keeps the same optimum but gives a steep gradient precisely where G is losing. One line, no cost, always on. WGAN + gradient penalty: fixes the case where real and generated distributions barely overlap, where Jensen-Shannon (what the original loss optimizes) is constant and therefore gradient-free. The Wasserstein distance still varies with how far apart they are, so the critic gives useful signal; the gradient penalty enforces the 1-Lipschitz constraint the theory requires. Cost: slower, extra hyperparameters, and the critic needs multiple steps per generator step. Spectral normalization: a cheaper way to bound the discriminator\'s Lipschitz constant — divide each weight matrix by its largest singular value, estimated with one power iteration per step. Nearly free, drop-in, and it is what most modern GAN code actually uses instead of gradient penalty.',
-      isCaseBased: false,
     },
   ],
   flashcards: [
     {
-      front: 'Discriminative vs generative',
-      back: 'Discriminative learns p(y|x) — the boundary, enough to judge. Generative learns p(x) — the data itself, so it can SAMPLE something new.',
+      front: 'Classifier vs generator, by what comes out',
+      back: 'Classifier: you give it a picture, it gives back a label. Generator: you give it random numbers, it gives back a whole new picture that was never in the data.',
     },
     {
       front: 'Autoencoder in one line',
-      back: 'Encoder squeezes x into a small bottleneck z, decoder rebuilds x̂. Loss = reconstruction error. The label is the input — self-supervised.',
+      back: 'Encoder squeezes the input into a short latent vector z; decoder rebuilds the input from z. The target is the input itself, so no labels are needed.',
     },
     {
-      front: 'What autoencoders are actually good for',
-      back: 'Nonlinear PCA (dimensionality reduction), denoising, and anomaly detection via reconstruction error. NOT generation.',
+      front: 'What the bottleneck is for',
+      back: '784 to 32 to 784. With only 32 slots the network cannot store a copy, so it must find patterns. Make the middle as wide as the input and it just learns to copy.',
     },
     {
       front: 'Why a plain autoencoder cannot generate',
-      back: 'The latent space has holes — nothing forced it to be continuous or complete, so a random z lands where the decoder was never trained and outputs garbage.',
+      back: 'Its latent space has gaps. The decoder was only ever asked about the points the encoder produced, so a random point lands somewhere it was never trained and gives static.',
     },
     {
-      front: 'The VAE\'s one structural change',
-      back: 'Encode to a DISTRIBUTION (μ, σ) instead of a point, sample z from it, and add a KL term pulling every cloud toward N(0, I). Result: no holes, so sampling works.',
+      front: 'The one change a VAE makes',
+      back: 'The encoder outputs a centre and a width (a cloud), not a point, and a z is sampled from it each step. A second loss term packs all the clouds into one standard region. Result: no gaps, so sampling works.',
     },
     {
-      front: 'The two VAE loss terms',
-      back: 'Reconstruction (fidelity — wants tiny separated clouds) + KL to N(0, I) (samplability — wants every cloud on the prior). They pull against each other; β sets the truce.',
+      front: 'Why VAE outputs are soft',
+      back: 'Pixel-by-pixel squared error is smallest at the average of all plausible images for that z, and the average of several sharp images is a blur. The loss is hedging, not failing.',
     },
     {
-      front: 'Reparameterization trick',
-      back: 'z = μ + σ ⊙ ε with ε ~ N(0, I). You cannot backprop through a sample, so move the randomness into an input carrying no gradient. ∂z/∂μ = 1, ∂z/∂σ = ε.',
+      front: 'GAN, and mode collapse',
+      back: 'Generator makes fakes from random numbers; discriminator judges real vs fake. Opposite goals, so the target moves and training is unstable. Mode collapse: the generator finds one output that fools the judge and repeats it — it was asked to fool, never to vary.',
     },
     {
-      front: 'Why VAE samples are blurry',
-      back: 'MSE reconstruction is minimized by the MEAN of all plausible outputs for a z, and the average of several sharp images is a blur. The loss is hedging, not failing.',
-    },
-    {
-      front: 'GAN objective + mode collapse',
-      back: 'min_G max_D E[log D(x)] + E[log(1 − D(G(z)))] — forger vs police. Mode collapse: G finds one output that fools D and emits it for every z; it was asked to fool, never to cover.',
-    },
-    {
-      front: 'Diffusion in one line (and its cost)',
-      back: 'Forward: add Gaussian noise over T steps until pure noise. Model: predict that noise, subtract a slice, repeat from noise. Stable regression, sharp and diverse — but T sequential passes (DDIM/distillation cut it).',
+      front: 'Diffusion in one line, and its cost',
+      back: 'Add noise step by step until the image is static; train one network to predict the noise; then start from static and remove a slice at a time. Stable, sharp and varied. Costs many sequential passes per image.',
     },
   ],
   mindmapMarkdown: `- Generative Models
-  - Framing
-    - Discriminative p(y|x) — boundary, judges
-    - Generative p(x) — can SAMPLE new data
+  - What "generative" means
+    - Classifier: picture in, label out
+    - Generator: random numbers in, NEW picture out
   - Autoencoder
-    - Encoder → bottleneck z → decoder
-    - Loss = reconstruction (MSE), self-supervised
-    - Good at: nonlinear PCA, denoising, anomaly detection
-    - Bad generator: latent has HOLES
+    - Encoder squeezes to latent vector z, decoder rebuilds
+    - Shape journey 784 to 32 to 784
+    - Bottleneck forces patterns instead of copying
+    - Target is the input: no labels needed
+    - Cannot generate: latent space has GAPS
   - VAE
-    - Encode a distribution (μ, σ), not a point
-    - KL pulls clouds to N(0, I) → continuous + complete
-    - Loss = reconstruction + β·KL (ELBO)
-    - Tension: β→0 = autoencoder, β large = posterior collapse
-    - Reparameterization: z = μ + σ⊙ε, ε~N(0,I)
-      - Cannot backprop through a sample
-      - ∂z/∂μ = 1, ∂z/∂σ = ε
-    - Samples blurry: MSE predicts the mean of plausible outputs
+    - Encoder outputs a cloud (centre + width), not a point
+    - Sample z from the cloud each step: smoothness
+    - Second loss term packs clouds together: no gaps
+    - Now samplable, so it is a real generator
+    - Outputs soft: pixel score rewards the average
+    - Posterior collapse if the packing term wins
   - GAN
-    - Forger (G) vs police (D), min-max game
-    - No reconstruction target — only a judge
-    - Mode collapse: one output fools D forever
-    - Non-convergence / oscillation
-    - Vanishing G gradient when D is too good
-    - Fixes: non-saturating loss, WGAN-GP, spectral norm
-    - Won: sharp images, 1-pass sampling
-    - Lost: diversity, stability, text conditioning
+    - Generator makes fakes, discriminator judges them
+    - No pixel target, only a judge, so output is sharp
+    - Unstable: the opponent is also learning
+    - Too-good judge gives no useful feedback
+    - Mode collapse: one output forever
+    - Loss curve is not a progress meter
   - Diffusion
-    - Forward: add Gaussian noise t=0 → T (no learning)
-    - Model predicts the NOISE, subtract a slice, repeat
-    - Sampling: pure noise → image
-    - Stable (regression, no adversary) + diverse
-    - Cost: T sequential steps → DDIM, distillation
-    - Conditioning: text via cross-attention
-  - Comparison axes
-    - Quality: diffusion > GAN > VAE
-    - Diversity: diffusion > VAE > GAN
-    - Stability: diffusion ≈ VAE > GAN
-    - Speed: GAN/VAE > diffusion
-    - Latent use: VAE best, diffusion none
+    - Forward: add noise until pure static (no learning)
+    - Model predicts the noise inside a noisy picture
+    - Free perfect label, so training is ordinary regression
+    - Generate: from static, remove a slice, repeat
+    - Many easy questions beats one impossible one
+    - Cost: many sequential passes per image
+  - Comparison
+    - Quality: diffusion, then GAN, then VAE
+    - Variety: diffusion, then VAE, then GAN
+    - Stability: diffusion and VAE easy, GAN hard
+    - Speed: GAN one pass, diffusion many
+    - Evaluation is hard: no correct answer to compare to
   - Modern hybrid
-    - VAE compresses → diffusion generates in latent → cross-attention conditions`,
+    - VAE compresses, diffusion generates inside that latent space`,
 }
 
 export default m

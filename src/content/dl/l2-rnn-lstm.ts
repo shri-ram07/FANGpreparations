@@ -6,141 +6,229 @@ const m: Module = {
   level: 2,
   title: 'RNNs, LSTMs & the Road to Attention',
   whyItMatters:
-    'Nobody ships an LSTM in 2025 — and every serious interviewer still asks about one. Because the LSTM is where the field learned that a state you MULTIPLY dies and a state you ADD to survives, the same insight that gives you ResNet and the residual stream in GPT. This module is also the only honest way to understand why attention had to be invented: you have to feel the bottleneck first.',
-  estMinutes: 60,
+    'This is where a network first learns to read something that arrives one piece at a time: a sentence, a heart-rate trace, a week of sales numbers. You will build the loop by hand, watch its memory fade with real numbers, and then see the one small change (add instead of overwrite) that fixes it. That change also explains skip connections and residual paths everywhere else in deep learning.',
+  assumes: [
+    'You can read a Python for loop and a list',
+    'You know what tanh and sigmoid do, from the module Activation Functions: Sigmoid, Tanh, ReLU, GELU & Softmax',
+    'You know that training nudges weights using a gradient, which is just the slope of the error',
+    'No sequence-model background is needed. Every term used here is defined here.',
+  ],
+  estMinutes: 31,
   sections: [
     {
       type: 'intuition',
-      title: 'Why a plain MLP cannot read a sentence',
-      md: `Feed "the food was great" to a dense layer. Now feed "the food at the new place near the station was, honestly, not great at all". Same task, and the MLP is already broken.
+      title: 'Why an ordinary network cannot read a sentence',
+      md: `An ordinary neural network layer takes a fixed number of inputs. Say 4. Now feed it these two reviews:
 
-- **Variable length.** A dense layer has a fixed input size. 4 words and 15 words cannot enter the same *nn.Linear(n, h)*.
-- **No parameter sharing.** Pad to 100 slots and the word "great" at position 3 hits totally different weights than "great" at position 30. The model must learn "great" 100 separate times.
-- **No order, no memory.** Flatten the words and "dog bites man" and "man bites dog" are the same vector of features.
-- The fix is not a bigger MLP. It is a different *shape* of computation: one small model, applied again and again along the sequence.`,
+- "the food was great" - 4 words.
+- "the food at the new place near the station was not great" - 12 words.
+
+The layer has 4 input slots. The second review does not fit. That is the first problem: **the input length varies** and a fixed layer cannot stretch.
+
+The obvious patch is to pad everything to 100 slots. That creates the second problem. The word "great" landing in slot 3 is multiplied by completely different weights than the same word landing in slot 11. The network would have to learn what "great" means 100 separate times, once per slot.
+
+And there is a third problem. If you just flatten all the words together, "dog bites man" and "man bites dog" become the same bag of features. **Word order carries meaning**, and a flat layer throws it away.
+
+Two words you will need from here on. A **sequence** is an ordered list of items - the words of a sentence, the daily prices of a stock. A **timestep** is one position in that sequence: word 1 is timestep 1, word 2 is timestep 2, and so on. "Time" here just means "position in the order", even when nothing is actually timed.`,
     },
     {
       type: 'intuition',
-      title: 'The RNN: one brain, re-applied every step',
-      md: `Think of a person reading a book with one sticky note. They read a word, update the note, move on. The note is everything they remember.
+      title: 'The RNN: one small model, applied again and again',
+      md: `Picture a person reading a book with a single sticky note. They read one word, scribble an updated summary on the note, and move to the next word. The note is the only thing they carry forward.
 
-- One weight set, used at **every** timestep — that is the parameter sharing an MLP lacked.
-- The sticky note is the **hidden state h_t**: a fixed-size vector carrying everything from words 1..t.
-- The update: **h_t = tanh(W_x x_t + W_h h_(t−1) + b)**. Old state in, new word in, new state out.
-- The state IS the memory. There is no other storage.
-- Any length works, because the loop just runs longer. The parameter count never changes.
-- Mental model: **unrolling**. Draw the same cell copied T times, left to right, state flowing along the arrows. That picture is not a metaphor — it is literally what the autograd graph looks like.`,
+That is a **recurrent neural network**, or RNN. Four terms, all defined here:
+
+- **Hidden state** - the sticky note. A fixed-size list of numbers that summarises everything read so far. It is written h, and h at timestep t is written h_t.
+- **Recurrence** - the fact that the new hidden state is computed from the *previous* hidden state plus the current word. The layer feeds its own output back into itself.
+- **Shared weights across time** - there is exactly one set of weights, and the same set is used at every timestep. The word "great" is multiplied by the same numbers whether it is word 3 or word 30. That directly fixes problem two above.
+- **Unrolling** - the picture you draw to think about it: copy the same small cell left to right, once per timestep, with an arrow carrying h from each copy to the next.
+
+The update rule is one line: **h_t = tanh(W_x times x_t + W_h times h_(t-1) + b)**. Old state in, new word in, new state out. Any sequence length works, because the loop simply runs more times. The number of weights never changes.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Run an RNN by hand over 3 timesteps',
+      md: `Concrete numbers, no code yet. Take the smallest possible RNN: the hidden state is a single number, and so is each input.
+
+Set W_x = 1.0 (the weight on the incoming word), W_h = 0.5 (the weight on the memory), and b = 0. Start with h_0 = 0.0, because the network has read nothing.
+
+Feed it three inputs: x_1 = 1.0, then x_2 = 0.0, then x_3 = 0.0. Read that as: word 1 carries a signal worth 1.0, and the next two words are blanks. The question is how long word 1 survives.
+
+1. **Timestep 1.** Inside tanh: 1.0 times 1.0 plus 0.5 times 0.0 = 1.0. So h_1 = tanh(1.0) = **0.7616**.
+2. **Timestep 2.** Inside tanh: 1.0 times 0.0 plus 0.5 times 0.7616 = 0.3808. So h_2 = tanh(0.3808) = **0.3634**.
+3. **Timestep 3.** Inside tanh: 1.0 times 0.0 plus 0.5 times 0.3634 = 0.1817. So h_3 = tanh(0.1817) = **0.1797**.
+
+Two things just happened, and both matter. The signal from word 1 **did** reach timestep 3 - that is memory, and a flat layer has none. But it arrived at 0.1797 instead of 0.7616. Each step multiplied it by roughly a half and then squashed it. **The memory carries forward, and it fades.** Hold on to that number, 0.18 after only three blank words.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'The same three timesteps, in code',
+      code: `import math
+
+W_x = 1.0             # weight applied to the incoming word
+W_h = 0.5             # weight applied to the memory we already have
+h = 0.0               # h_0: the hidden state before any word is read
+xs = [1.0, 0.0, 0.0]  # word 1 carries a signal, words 2 and 3 are blanks
+
+for t, x in enumerate(xs, start=1):
+    pre = W_x * x + W_h * h
+    h = math.tanh(pre)
+    print('t =', t, 'x =', x, 'pre =', round(pre, 4), 'h =', round(h, 4))
+
+# t = 1 x = 1.0 pre = 1.0 h = 0.7616
+# t = 2 x = 0.0 pre = 0.3808 h = 0.3634
+# t = 3 x = 0.0 pre = 0.1817 h = 0.1797`,
+      annotations: {
+        1: 'math is the standard library module holding tanh and exp. No numpy anywhere in this module - every number here is one you could check on paper.',
+        8: 'enumerate walks a list and hands back both the position and the item. start=1 makes the first position 1 instead of 0, so t matches the timestep numbering.',
+        9: 'The mixing step: this word times its weight, plus the old memory times its weight. This is the whole input side of the recurrence.',
+        10: 'tanh squashes that number into the range -1 to 1, and the result is stored back into h. Storing it back IS the recurrence - the next loop pass reads the value this pass wrote.',
+        11: 'Prints the three lines shown below. They match the hand arithmetic exactly: 0.7616, 0.3634, 0.1797.',
+      },
     },
     {
       type: 'math',
-      intro: 'The whole vanilla RNN. Three matrices and a bias, reused T times.',
+      intro: 'The whole vanilla RNN. One weight for the input, one for the state, one bias, reused at every timestep.',
       latex: [
-        'h_t = \\tanh\\!\\left( W_x x_t + W_h h_{t-1} + b \\right), \\qquad h_0 = \\mathbf{0}',
-        'y_t = W_y h_t + b_y \\qquad \\text{(a prediction per step, or only at } t = T \\text{)}',
-        '\\text{Same } W_x, W_h, b \\text{ for } t = 1 \\dots T. \\;\\; \\text{Sequence length changes; parameter count does not.}',
+        'h_t = \\tanh\\!\\left( W_x x_t + W_h h_{t-1} + b \\right), \\qquad h_0 = 0',
+        '\\text{The same } W_x, W_h, b \\text{ are used for } t = 1 \\dots T.',
       ],
     },
     {
       type: 'intuition',
-      title: 'BPTT: backprop, but the graph is the timeline',
-      md: `Backpropagation Through Time is not a new algorithm. It is ordinary backprop on the unrolled graph.
+      title: 'Backpropagation through time, in plain words',
+      md: `Training needs a gradient: for each weight, how much would the error change if I nudged this weight a little. In an ordinary network you get that by walking backwards through the layers.
 
-1. Unroll the T steps into one deep feed-forward graph — depth T, with **tied** weights.
-2. Forward: run t = 1..T, keep every h_t (you need them for the backward pass — this is why long sequences eat memory).
-3. Backward: chain-rule from the loss back through step T, T−1, ... 1.
-4. Because W_h is shared, its gradient is the **sum** of the gradients contributed at every step.
+An RNN has no stack of layers - it has one cell used T times. So you unroll it first, and then the unrolled picture *is* a deep network: T copies in a row, all sharing one set of weights. Walking backwards through that unrolled picture is called **backpropagation through time**, or BPTT. It is not a new algorithm. It is ordinary backpropagation applied to the unrolled timeline.
 
-The dangerous part: the gradient that reaches step 1 has passed through **T multiplications by W_h**. That single fact decides the fate of the entire architecture.`,
+Three consequences worth naming:
+
+- You must keep every h_t from the forward pass, because the backward pass needs them. That is why long sequences use a lot of memory.
+- Because W_h is used at every step, its gradient is the **sum** of the contributions from all T steps.
+- The gradient that finally reaches timestep 1 has been passed backwards through T-1 steps, and **at every one of them it got multiplied by roughly the same factor**. That last point decides the fate of the whole architecture, so we are going to measure it.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Watch the gradient die over 20 timesteps',
+      code: `factor = 0.6   # how much the gradient shrinks at each step going backwards
+g = 1.0        # the gradient handed back by the error at the LAST timestep
+
+for t in range(1, 21):
+    g = g * factor
+    if t in (1, 5, 10, 20):
+        print('after', t, 'steps the gradient is', format(g, '.8f'))
+
+# after 1 steps the gradient is 0.60000000
+# after 5 steps the gradient is 0.07776000
+# after 10 steps the gradient is 0.00604662
+# after 20 steps the gradient is 0.00003656`,
+      annotations: {
+        1: 'Where 0.6 comes from: each backward step multiplies by W_h and by the slope of tanh. The slope of tanh is never above 1, so the combined factor is easily below 1. 0.6 is a mild, realistic value.',
+        2: 'Starting the gradient at exactly 1.0 makes every printed number a pure survival fraction: 0.00003656 means 0.0037 percent of the original signal is left.',
+        4: 'range(1, 21) counts 1 through 20 - one pass per timestep we walk backwards over.',
+        5: 'The single line that causes the problem: the same shrinking factor is applied again, on top of everything before it.',
+        6: 'The in operator checks membership in the tuple (1, 5, 10, 20), so we print four checkpoints instead of twenty lines.',
+        7: 'format(g, \'.8f\') prints g with 8 digits after the decimal point. Without it Python would show 3.656e-05 and the collapse would be harder to feel.',
+      },
+    },
+    {
+      type: 'note',
+      md: 'That collapse has a name: the **vanishing gradient problem**. After 20 words, timestep 1 receives 0.0037 percent of the learning signal - which is to say, none. The network physically cannot learn that word 1 mattered for the prediction at word 21. The activations module, *Activation Functions: Sigmoid, Tanh, ReLU, GELU & Softmax*, showed you the cause from the other side: the slope of tanh is at most 1 and is far below 1 whenever the unit is saturated, and the slope of sigmoid never exceeds 0.25. There you saw one such factor per layer. Here you get one per **word**, and sentences are longer than networks are deep. The mirror image also exists: if the factor is above 1, say 1.3, then 1.3 to the power 20 is about 190, and the gradient explodes to a NaN. Exploding has a cheap fix - clip the gradient to a maximum length and keep its direction. Vanishing has no such fix, because there is nothing left to rescale. Multiplying 0.00003656 by a thousand amplifies rounding noise, not information. So the repair has to be structural.',
+    },
+    {
+      type: 'intuition',
+      title: 'The LSTM idea: stop overwriting, start adding',
+      md: `Look again at why the RNN memory faded. Every step *rebuilds* the hidden state from scratch: h_new = tanh(weights times h_old + weights times word). Old information survives only by being re-encoded through a multiply and a squash, over and over, and each pass shaves a bit off.
+
+The **LSTM** (long short-term memory) keeps that hidden state but runs a second line of memory beside it, called the **cell state**, written c. Think of a conveyor belt running straight from the first word to the last.
+
+- Facts are placed on the belt and simply ride along.
+- The belt is only ever touched by two cheap operations: multiply each slot by a number, and add something to each slot. No weight matrix sits on the belt, and no tanh.
+- So the amount of a fact that survives one step is exactly the number you multiplied by. If the network learns to multiply by 1.0, the fact passes through **completely untouched**, forwards and backwards.
+
+The hidden state h is still there, but its job changes. It is now just a filtered view of the belt - what the model chooses to expose at this step - rather than the storage itself.
+
+This "let the signal pass through unchanged and only add corrections to it" trick is the same one behind skip connections in ResNet. The LSTM did it first, in 1997.`,
+    },
+    {
+      type: 'intuition',
+      title: 'The three gates',
+      md: `A **gate** is a list of numbers, one per slot of the state, each between 0 and 1. It is produced by a sigmoid, which squashes any number into that range. Multiply a gate into something and it decides **how much passes**: 0 blocks the slot entirely, 1 lets it through untouched, 0.7 lets 70 percent through. Think of a row of taps, one per slot, each opened by some amount.
+
+An LSTM has three of them, and each answers one question about one slot:
+
+- **Forget gate f** - "how much of what is already on the belt should stay?" The belt is multiplied by f. f = 1 keeps a slot exactly as it was; f = 0 wipes it.
+- **Input gate i** - "how much of the new content should be written in?" Its partner is the **candidate**, written g, which is a tanh and therefore ranges from -1 to 1. The candidate is *what* to write; the input gate is *how much* of it to write.
+- **Output gate o** - "how much of the belt should be exposed as the hidden state right now?" This is what makes storing and speaking separate decisions.
+
+All four (three gates and the candidate) are computed the same way, from the previous hidden state and the current word. They are learned, not hand-set. The two update lines are then just:
+
+- **c_t = f times c_(t-1) + i times g** - scale what was on the belt, then add the new write.
+- **h_t = o times tanh(c_t)** - expose a filtered view.`,
+    },
+    {
+      type: 'hinglish',
+      md: `Gates ko ek chowkidar samajh: har timestep pe teen sawaal poochta hai. **Forget gate** - *"purani baat me se kitna rehne dena hai?"* (0 matlab poora mita do, 1 matlab jaisa hai waisa rakho). **Input gate** - *"is naye word me se kitna likhna hai?"* **Output gate** - *"abhi bahar kitna bolna hai?"* Sabse bada point yehi hai: **yaad rakhna aur bolna alag-alag cheezein hain**. Belt pe "subject = billi" pada reh sakta hai bees words tak, bina ek baar bhi bahar aaye - aur jis din verb aayega, output gate darwaza khol dega. Aur yaad rakho: belt pe sirf multiply aur add hota hai, koi matrix nahi - isliye purani baat mitti nahi, jaise plain RNN me mit jaati thi.`,
     },
     {
       type: 'math',
-      intro: 'The product that breaks everything. λ = largest |eigenvalue| of W_h.',
+      intro: 'The four computations, then the two updates. The sigma symbol is the sigmoid (a 0..1 valve) and the circled dot means multiply slot by slot.',
       latex: [
-        '\\frac{\\partial L_T}{\\partial h_1} = \\frac{\\partial L_T}{\\partial h_T} \\prod_{t=2}^{T} \\frac{\\partial h_t}{\\partial h_{t-1}}, \\qquad \\frac{\\partial h_t}{\\partial h_{t-1}} = \\operatorname{diag}\\!\\left( \\tanh\'(\\cdot) \\right) W_h',
-        '\\left\\| \\prod_{t=2}^{T} \\frac{\\partial h_t}{\\partial h_{t-1}} \\right\\| \\;\\sim\\; \\lambda^{\\,T-1}',
-        '\\lambda < 1 \\Rightarrow \\text{gradient} \\to 0 \\;\\; (\\textbf{vanishing}) \\qquad \\lambda > 1 \\Rightarrow \\text{gradient} \\to \\infty \\;\\; (\\textbf{exploding})',
+        'f_t = \\sigma(W_f h_{t-1} + U_f x_t + b_f) \\qquad i_t = \\sigma(W_i h_{t-1} + U_i x_t + b_i)',
+        'g_t = \\tanh(W_g h_{t-1} + U_g x_t + b_g) \\qquad o_t = \\sigma(W_o h_{t-1} + U_o x_t + b_o)',
+        'c_t = f_t \\odot c_{t-1} \\;+\\; i_t \\odot g_t \\qquad h_t = o_t \\odot \\tanh(c_t)',
       ],
     },
     {
       type: 'code',
       lang: 'python',
-      title: 'Watch a gradient die — the whole RNN problem in 10 lines',
-      code: `import numpy as np
+      title: 'One LSTM timestep by hand, three slots, real numbers',
+      code: `import math
 
-# In BPTT the gradient reaching step 1 is multiplied by W_h once per timestep.
-# Over many steps only the largest |eigenvalue| of W_h decides the outcome.
-g = np.ones(4)                        # gradient handed back by the loss
-print("|eig|    T=10      T=30      T=100")
-for s in (0.9, 1.0, 1.1):
-    W = np.eye(4) * s                 # simplest W_h: every eigenvalue = s
-    norms = [np.linalg.norm(np.linalg.matrix_power(W, T) @ g) for T in (10, 30, 100)]
-    print(f"{s:<8} " + "  ".join(f"{n:.2e}" for n in norms))
+def sigmoid(z):
+    return 1 / (1 + math.exp(-z))
 
-# |eig|    T=10      T=30      T=100
-# 0.9      6.97e-01  8.48e-02  5.31e-05
-# 1.0      2.00e+00  2.00e+00  2.00e+00
-# 1.1      5.19e+00  3.49e+01  2.76e+04`,
+c_prev = [0.80, 0.50, -0.30]                            # the belt arriving from step t-1
+f = [sigmoid(3.0), sigmoid(0.0), sigmoid(-2.0)]         # forget gate: keep how much?
+i = [sigmoid(-2.0), sigmoid(2.0), sigmoid(0.0)]         # input gate: write how much?
+g = [math.tanh(0.5), math.tanh(1.0), math.tanh(-0.5)]   # candidate: what to write
+o = [sigmoid(2.0), sigmoid(-1.0), sigmoid(0.0)]         # output gate: expose how much?
+
+c = [f[k] * c_prev[k] + i[k] * g[k] for k in range(3)]
+h = [o[k] * math.tanh(c[k]) for k in range(3)]
+
+for k in range(3):
+    print('slot', k, 'f', round(f[k], 3), 'kept', round(f[k] * c_prev[k], 3), 'added', round(i[k] * g[k], 3), 'c', round(c[k], 3), 'h', round(h[k], 3))
+
+# slot 0 f 0.953 kept 0.762 added 0.055 c 0.817 h 0.593
+# slot 1 f 0.5   kept 0.25  added 0.671 c 0.921 h 0.195
+# slot 2 f 0.119 kept -0.036 added -0.231 c -0.267 h -0.13`,
       annotations: {
-        8: 'A scaled identity so the eigenvalues are exactly s — no linear algebra needed to see the effect.',
-        9: 'matrix_power(W, T) IS the BPTT product: one W_h per timestep between the loss and step 1.',
-        13: '0.9 per step: after 100 steps the signal is 5e-05. Word 1 gets essentially no learning signal from word 100.',
-        15: '1.1 per step: 2.76e+04 and climbing. This is the NaN that shows up 300 steps into training.',
+        1: 'Only the standard math module. The numbers fed to the gates are written out directly instead of coming from weight matrices, so you can see exactly which valve setting produces which result.',
+        3: 'def defines a function. sigmoid takes one number z and returns one number.',
+        4: 'The sigmoid formula. Large positive z gives a result near 1 (tap wide open), large negative z gives near 0 (tap shut), z = 0 gives exactly 0.5.',
+        12: 'This is a list comprehension: it builds a new list by running the expression once for each k in 0, 1, 2. Read it as "for every slot, keep f of the old value and add i of the candidate". This one line is the entire LSTM.',
+        13: 'The hidden state is a filtered view: squash the belt with tanh, then let only the output-gate fraction through.',
+        15: 'Loop over the three slots so we can print each one separately.',
+        16: 'Slot 0 checked by hand: f = 0.953, so 0.953 times 0.80 = 0.762 stays. The input gate is nearly shut (0.119) so only 0.119 times 0.462 = 0.055 is added. c becomes 0.817 - the fact arrived at 0.80 and left at 0.817, essentially intact. A plain RNN at the same step would have squashed 0.80 down to about 0.38.',
       },
-    },
-    {
-      type: 'note',
-      md: 'The two failures are not equally hard. **Exploding is easy**: clip the gradient norm to a threshold (*torch.nn.utils.clip_grad_norm_*), keep the direction, shrink the length — done, one line, everybody does it. **Vanishing is fundamental**: there is nothing to clip, the signal is simply gone, and no learning rate recovers information that decayed to 1e-05. Tuning λ toward exactly 1 is a knife edge that forward activations do not survive. So the fix has to be architectural — a path where the state is not multiplied by a matrix every step.',
-    },
-    {
-      type: 'intuition',
-      title: 'LSTM: add a conveyor belt next to the brain',
-      md: `The LSTM keeps the RNN's hidden state and adds a second, separate line of memory: the **cell state c_t**.
-
-- Picture a conveyor belt running straight down the whole sequence. Facts sit on it and ride.
-- The belt is touched only by **elementwise multiply and add** — no weight matrix, no tanh, on the belt itself.
-- So the derivative along the belt is *f_t*, not *W_h*. If the network learns f ≈ 1, the gradient walks back hundreds of steps untouched.
-- That is the same trick as a **residual connection** in ResNet (x + F(x)): give the signal an additive highway past the transformation. Cross-ref that module — the LSTM got there first, in 1997.
-- The hidden state h_t is now just a **filtered view** of the belt, not the belt itself.`,
-    },
-    {
-      type: 'intuition',
-      title: 'Three gates, three questions',
-      md: `A gate is a vector of numbers in 0..1 produced by a sigmoid, multiplied elementwise into something. Think **soft valve**, one per slot of the state: 0 = closed, 1 = fully open, 0.7 = mostly open.
-
-- **Forget gate f_t** — what to drop from the belt. *c := f · c*. f = 0 on a slot erases it; f = 1 keeps it exactly.
-- **Input gate i_t** — how much of the new content to write. Its partner, the **candidate g_t** (a tanh, so −1..1), is *what* to write.
-- **Output gate o_t** — how much of the belt to expose as h_t this step. Storage and exposure are decoupled.
-- Every gate reads the same two things: the previous hidden state and the current input. They are learned, not hand-designed.
-- Bias tip that interviewers like: initialize the forget-gate bias to +1 so f starts near 1 and the belt remembers **by default**.`,
-    },
-    {
-      type: 'hinglish',
-      md: `Gates ko ek chowkidar samajh: har timestep pe teen sawaal poochta hai. **Forget gate** — *"purani baat me se kya bhoolna hai?"* (0 matlab poora mita do, 1 matlab jaisa hai waisa rehne do). **Input gate** — *"is naye word me se kitna likhna hai?"* **Output gate** — *"abhi bahar kitna bolna hai?"* Sabse bada point yehi hai: **yaad rakhna aur bolna alag-alag cheezein hain**. Belt pe "subject = billi" pada reh sakta hai bees words tak, bina ek baar bhi bahar aaye — aur jis din verb aayega, output gate darwaza khol dega.`,
-    },
-    {
-      type: 'math',
-      intro: 'The four gate computations, then the two state updates. σ = sigmoid (0..1 valve), ⊙ = elementwise product.',
-      latex: [
-        'f_t = \\sigma(W_f h_{t-1} + U_f x_t + b_f) \\qquad i_t = \\sigma(W_i h_{t-1} + U_i x_t + b_i)',
-        '\\tilde{c}_t = \\tanh(W_c h_{t-1} + U_c x_t + b_c) \\qquad o_t = \\sigma(W_o h_{t-1} + U_o x_t + b_o)',
-        'c_t = f_t \\odot c_{t-1} \\;+\\; i_t \\odot \\tilde{c}_t \\qquad h_t = o_t \\odot \\tanh(c_t)',
-        '\\frac{\\partial c_t}{\\partial c_{t-1}} = f_t \\;\\; \\Rightarrow \\;\\; \\text{the belt gradient is } \\textstyle\\prod_t f_t \\text{, not } W_h^{T}. \\;\\; f \\approx 1 \\Rightarrow \\text{memory survives.}',
-      ],
     },
     {
       type: 'visual',
       component: 'PointerBoxDiagram',
       props: {
         title: 'The cell state as a conveyor belt',
-        notice: 'Left: what this timestep computes. Right: the cell state c, one box per slot. Watch that the belt is only ever SCALED and ADDED to — never rebuilt from scratch.',
+        notice: 'Left: what this timestep computes. Right: the belt, one box per slot. Watch that the belt is only ever scaled and added to, never rebuilt.',
         leftLabel: 'this timestep',
         rightLabel: 'cell state c',
         frames: [
           {
-            note: 'Reading "the cat that chased the dog was tired". Step t begins: the cell state rolls in from t-1 completely untouched. No matrix multiply on this path — it is a belt, not a layer.',
+            note: 'Reading the sentence "the cat that chased the dog was tired". Step t begins. The belt rolls in from the previous step completely untouched: no weights sit on this path.',
             stack: [
-              { name: 'x_t', value: '"dog"' },
-              { name: 'h_prev', value: 'last view' },
+              { name: 'x_t', value: 'the word "dog"' },
+              { name: 'h_prev', value: 'last exposed view' },
             ],
             heap: [
               { id: 'c0', value: 'subject: cat', label: 'carried' },
@@ -149,7 +237,7 @@ for s in (0.9, 1.0, 1.1):
             ],
           },
           {
-            note: 'Forget gate: f = [1.0, 0.0, 0.9]. Slot 0 survives untouched, slot 1 is erased (the verb context is stale), slot 2 fades slightly. c := f * c is a MULTIPLY, so "keep" costs nothing.',
+            note: 'Forget gate f = [1.0, 0.0, 0.9]. Slot 0 is multiplied by 1.0 and survives exactly. Slot 1 is multiplied by 0.0 and is wiped. Slot 2 fades slightly. Keeping a fact costs nothing here.',
             stack: [
               { name: 'f', value: '[1.0, 0.0, 0.9]' },
               { name: 'f * c_prev', to: 'c1', danger: true },
@@ -161,7 +249,7 @@ for s in (0.9, 1.0, 1.1):
             ],
           },
           {
-            note: 'Input gate i says how much to write, candidate g says what. c := f*c + i*g — the new fact is ADDED onto the belt, not blended over the whole state. Slot 0 was not part of this write at all.',
+            note: 'Input gate i says how much, candidate g says what. c = f*c_prev + i*g adds the new fact into slot 1. Slot 0 was not part of this write at all, so the subject is untouched.',
             stack: [
               { name: 'i', value: '[0.1, 0.9, 0.2]' },
               { name: 'g', value: 'object = dog' },
@@ -174,383 +262,254 @@ for s in (0.9, 1.0, 1.1):
             ],
           },
           {
-            note: 'Output gate filters what leaves: h_t = o * tanh(c_t). The subject stays in storage while this step only exposes the object. Remembering and speaking are separate decisions — that is the whole point of o.',
-            stack: [
-              { name: 'o', value: '[0.2, 0.9, 0.3]' },
-              { name: 'h_t', value: 'o * tanh(c_t)', to: 'c1' },
-            ],
-            heap: [
-              { id: 'c0', value: 'subject: cat', label: 'held, hidden' },
-              { id: 'c1', value: 'object: dog', label: 'exposed' },
-              { id: 'c2', value: 'topic: animals', label: 'held, hidden' },
-            ],
-          },
-          {
-            note: 'Contrast — a vanilla RNN at the same step. There is no belt. h_t = tanh(W h + U x) REPLACES the entire state every step, so an old fact survives only if it keeps being re-encoded through a matrix multiply.',
-            stack: [{ name: 'h_t', value: 'tanh(Wh + Ux)', to: 'hnew' }],
+            note: 'Contrast: a plain RNN at the same step. There is no belt. h = tanh(weights times h + weights times x) replaces the whole state, so the subject survives only as a fading blur - the 0.18 you computed by hand.',
+            stack: [{ name: 'h_t', value: 'tanh(W h + U x)', to: 'hnew' }],
             heap: [
               { id: 'hold', value: 'subject: cat', freed: true },
-              { id: 'hnew', value: 'blur of last ~7', label: 'overwritten' },
-            ],
-          },
-          {
-            note: 'Backward it is worse. The gradient reaching step 1 carries one W_h per step; at |eigenvalue| 0.9 it is gone by step 100 — these are the real numbers from the snippet above. The LSTM belt multiplies by f instead, and f can learn to be 1.',
-            stack: [{ name: 'grad reaching h_1' }],
-            heap: [
-              { id: 't10', value: 'T=10   6.97e-01', label: 'alive' },
-              { id: 't30', value: 'T=30   8.48e-02', label: 'fading' },
-              { id: 't100', value: 'T=100  5.31e-05', freed: true },
+              { id: 'hnew', value: 'blur of the last few words', label: 'overwritten' },
             ],
           },
         ],
       },
     },
     {
+      type: 'intuition',
+      title: 'GRU, in one paragraph',
+      md: `The **GRU** (gated recurrent unit) is the same idea with less machinery: two gates instead of three, and no separate cell state. A reset gate decides how much of the past to use when proposing new content, and a single update gate z does forgetting and writing with one dial: h_t = (1 - z) times h_old + z times h_new. That (1 - z) times h_old term is the additive path, so the memory trick survives. A GRU has about 25 percent fewer weights than an LSTM and runs slightly faster per step, and on most tasks the accuracy difference is small enough to disappear into normal run-to-run variation. Benchmark both on your data rather than trusting folklore.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Worked case: does the subject survive to the verb?',
+      md: `The sentence is "the cat that chased the dog around the garden all afternoon was tired". To choose "was" over "were", the model must still know the subject is singular ("cat"), decided 11 words earlier.
+
+**Step 1 - count the gap.** From "cat" to "was" is 11 timesteps.
+
+**Step 2 - the plain RNN.** Take the per-step survival factor we measured, 0.6. Then 0.6 to the power 11 = 0.6 times itself 11 times. Building it up: 0.6^2 = 0.36, 0.6^4 = 0.36^2 = 0.1296, 0.6^8 = 0.1296^2 = 0.0168, and 0.6^11 = 0.6^8 times 0.6^2 times 0.6 = 0.0168 times 0.36 times 0.6 = **0.0036**. So about 0.36 percent of the subject signal is left, and the same 0.36 percent applies to the gradient that would teach the model to keep it.
+
+**Step 3 - the LSTM.** Suppose the forget gate on the subject slot has learned f = 0.98. Then the survival is 0.98 to the power 11. Since 0.98^2 = 0.9604, 0.98^4 = 0.9224, 0.98^8 = 0.8508, and 0.98^11 = 0.8508 times 0.9604 times 0.98 = **0.8007**. Eighty percent of the subject signal arrives at the verb.
+
+**Step 4 - read the verdict.** 0.36 percent versus 80 percent, over the same 11 words. The difference is not the number of weights: it is that the RNN multiplied by a fixed 0.6 it could not control, while the LSTM's 0.98 is a value the network *chose* by learning the forget gate. This is the whole point of gating - the model gets to decide, per slot, what to keep.`,
+    },
+    {
       type: 'code',
       lang: 'python',
-      title: 'One LSTM timestep by hand — all four gates, real numbers',
-      code: `import numpy as np
+      title: 'The classic mistake: a long dependency lost by a plain RNN',
+      code: `import math
 
-def sigmoid(z):
-    return 1 / (1 + np.exp(-z))
+rnn = 1.0     # a plain RNN's hidden state, holding one fact at full strength
+lstm = 1.0    # the same fact sitting on an LSTM's cell-state belt
 
-np.random.seed(0)
-n_h, n_x = 3, 2                        # hidden size, input size
+for t in range(20):
+    rnn = math.tanh(0.5 * rnn)
+    lstm = 0.95 * lstm + 0.0
 
-x_t    = np.array([1.0, -0.5])         # this timestep's input
-h_prev = np.array([0.1, -0.2, 0.3])    # last hidden state (the exposed view)
-c_prev = np.array([0.5,  0.0, -0.4])   # last cell state (the conveyor belt)
+print('plain RNN state after 20 steps:', format(rnn, '.8f'))
+print('LSTM belt  after 20 steps:', format(lstm, '.8f'))
 
-def block():                           # one gate's parameter set
-    return (np.random.randn(n_h, n_h) * 0.5,   # W: reads h_prev
-            np.random.randn(n_h, n_x) * 0.5,   # U: reads x_t
-            np.zeros(n_h))                     # b
-
-Wf, Uf, bf = block()   # forget gate
-Wi, Ui, bi = block()   # input gate
-Wg, Ug, bg = block()   # candidate content
-Wo, Uo, bo = block()   # output gate
-
-f = sigmoid(Wf @ h_prev + Uf @ x_t + bf)   # keep how much of c_prev?
-i = sigmoid(Wi @ h_prev + Ui @ x_t + bi)   # write how much of g?
-g = np.tanh(Wg @ h_prev + Ug @ x_t + bg)   # what to write (-1..1)
-o = sigmoid(Wo @ h_prev + Uo @ x_t + bo)   # expose how much of c_t?
-
-c_t = f * c_prev + i * g                   # scale the belt, then ADD
-h_t = o * np.tanh(c_t)                     # filtered view of the belt
-
-print("f (forget)", f.round(3))
-print("i (input) ", i.round(3))
-print("g (cand.) ", g.round(3))
-print("o (output)", o.round(3))
-print("c_prev    ", c_prev.round(3))
-print("c_t       ", c_t.round(3))
-print("h_t       ", h_t.round(3))
-print("kept:", (f * c_prev).round(3), " added:", (i * g).round(3))
-
-# f (forget) [0.59  0.578 0.499]
-# i (input)  [0.792 0.447 0.558]
-# g (cand.)  [-0.052 -0.313  0.756]
-# o (output) [0.525 0.441 0.417]
-# c_prev     [ 0.5  0.  -0.4]
-# c_t        [ 0.254 -0.14   0.222]
-# h_t        [ 0.13  -0.061  0.091]
-# kept: [ 0.295  0.    -0.2  ]  added: [-0.041 -0.14   0.422]`,
+# plain RNN state after 20 steps: 0.00000086
+# LSTM belt  after 20 steps: 0.35848592`,
       annotations: {
-        13: 'Four identical parameter blocks — an LSTM is literally 4x a vanilla RNN cell. That is the parameter cost of gating.',
-        23: 'Sigmoid, so every entry lands in 0..1: a soft valve per slot, not an on/off switch. Untrained here, so all three sit near 0.5.',
-        25: 'The only tanh among the four: the candidate is CONTENT (-1..1), not a valve. Mixing this up is a classic interview slip.',
-        28: 'THE line of the architecture. Scale the old belt, add the new write. No W_h on this path — hence no vanishing product.',
-        29: 'h_t is a view, not the state. Note h_t (0.13) is much smaller than c_t (0.254): the output gate is holding most of it back.',
-        40: 'Untrained gates sit near 0.5, so half of c_prev survives by accident. Trained forget gates on long-range slots learn to sit at 0.98+ — that is memory being learned.',
-        45: 'Check slot 0 by hand: 0.590 x 0.5 (kept) + 0.792 x (-0.052) (written) = 0.254. That is c_t = f*c_prev + i*candidate, with real numbers.',
+        1: 'math again, for tanh. Both memories start at exactly 1.0 so the printed numbers are survival fractions.',
+        6: 'Twenty more words arrive, none of them about the fact we are trying to remember.',
+        7: 'The plain RNN rebuilds its state every step: multiply by the weight, then squash. Nothing here can be tuned to 1, because tanh always pulls the value toward 0.',
+        8: 'The LSTM belt is only scaled by the forget gate and added to. The + 0.0 is the input gate writing nothing into this slot this step.',
+        10: 'Prints 0.00000086 - eight ten-millionths. The fact is gone, and so is any gradient that would have taught the model to keep it.',
+        11: 'Prints 0.35848592 with a forget gate of only 0.95. At the 0.98 a trained gate reaches, 20 steps leaves about 0.67.',
       },
     },
     {
-      type: 'intuition',
-      title: 'GRU, bidirectional, stacked — the honest versions',
-      md: `**GRU** is the LSTM with the fat trimmed. Two gates instead of three, and no separate cell state.
-
-- **Reset gate r** — how much of the past to use when proposing new content. **Update gate z** — one dial that does forget and input together: *h = (1−z)·h_old + z·h_new*.
-- Merging c and h costs one memory line but keeps the additive path (that *(1−z)·h_old* term is the belt).
-- ~25% fewer parameters, faster per step. **Accuracy is usually a wash** — pick by benchmark on your data, not by folklore. The honest sentence: *"GRU on small data or tight latency, LSTM when you have data to spare and want the extra capacity."*
-- **Bidirectional**: run one RNN forward, one backward, concatenate the states — only legal when the whole sequence is available up front (tagging, classification), never for live generation.
-- **Stacking**: layer 2's input is layer 1's h_t sequence. 2–4 layers is the practical ceiling; deeper mostly buys you a slower model.`,
-    },
-    {
-      type: 'math',
-      intro: 'GRU in three lines. One gate fewer, same additive idea.',
-      latex: [
-        'r_t = \\sigma(W_r h_{t-1} + U_r x_t) \\qquad z_t = \\sigma(W_z h_{t-1} + U_z x_t)',
-        '\\tilde{h}_t = \\tanh\\!\\left( W (r_t \\odot h_{t-1}) + U x_t \\right)',
-        'h_t = (1 - z_t) \\odot h_{t-1} + z_t \\odot \\tilde{h}_t \\qquad \\text{(the } (1-z) h_{t-1} \\text{ term is the additive highway)}',
-      ],
+      type: 'note',
+      md: 'Now the diagnosis, because the wrong conclusion here is very common. Seeing 0.00000086, people say "the hidden state is too small - make it bigger". **That is the wrong fix, and the numbers say why.** Widening the state from 128 slots to 512 gives you four times as many slots, but every single one of them is still multiplied by tanh and a weight at every step, so every single one still decays by the same factor. Four times zero is zero. The failure is not capacity, it is the *shape* of the update: overwriting instead of adding. Change the shape - put the fact on a path that is only scaled and added to - and 20 steps costs you 64 percent instead of everything. The tell in real life: bucket your validation accuracy by input length. If accuracy falls smoothly as inputs get longer while short inputs are fine, you have a memory-path problem, not a size problem. Two other things worth checking before you touch the architecture: whether your data loader is silently truncating long inputs, and whether the forget-gate bias is initialised to about +1, which starts every gate near "keep" so the model remembers by default and has to learn to forget.',
     },
     {
       type: 'intuition',
-      title: 'seq2seq — and the bottleneck you can feel',
-      md: `Translation needs a different shape: input length ≠ output length. So use two RNNs.
+      title: 'Practice problems',
+      md: `Work them out before reading the solutions below.
 
-1. **Encoder** reads the source sentence and stops. Its final hidden state is the **context vector**.
-2. **Decoder** starts from that vector and generates the target, one token at a time, feeding each output back in.
-
-- This works. It also has an obvious flaw the moment you say it out loud: **one fixed-size vector must hold an entire sentence**.
-- 512 floats for "hi" — fine. 512 floats for a 60-word legal clause — the last words in overwrite the first.
-- Measured behaviour: BLEU is fine up to ~15–20 tokens and then falls off a cliff as input length grows. The encoder is not weak; the *pipe* is too narrow.
-- Diagnosis to remember: the model translates the end of long sentences well and the beginning badly. That asymmetry is the bottleneck's fingerprint.`,
+1. An RNN has hidden state h_0 = 0.0, W_x = 1.0, W_h = 0.5, b = 0, and receives x_1 = 2.0 then x_2 = 0.0. Compute h_1 and h_2, given tanh(2.0) = 0.9640 and tanh(0.4820) = 0.4482.
+2. Backwards through a 30-step RNN the gradient shrinks by 0.8 per step. Roughly what fraction reaches timestep 1? Use 0.8^10 = 0.107.
+3. One LSTM slot has c_prev = 0.60, forget gate f = 0.90, input gate i = 0.30, candidate g = -0.40, output gate o = 0.50. Compute c and then h, given tanh(0.42) = 0.3969.
+4. A colleague says "our LSTM forgets things, so let us raise the learning rate". Give the numerical reason that will not help.`,
     },
     {
       type: 'intuition',
-      title: 'Attention teaser: stop compressing, start looking back',
-      md: `The fix is almost rude in its simplicity: **do not throw the encoder states away**.
+      title: 'Worked solutions',
+      md: `**1.** Timestep 1: inside tanh is 1.0 times 2.0 plus 0.5 times 0.0 = 2.0, so h_1 = tanh(2.0) = **0.9640**. Timestep 2: inside tanh is 1.0 times 0.0 plus 0.5 times 0.9640 = 0.4820, so h_2 = tanh(0.4820) = **0.4482**. The stronger input pushed tanh toward its ceiling of 1, and one blank word still cost more than half of it.
 
-- Keep all T encoder hidden states h_1..h_T instead of only the last one.
-- At each output step, the decoder scores every encoder state against its current state, softmaxes the scores into weights, and takes a weighted sum — a **fresh context vector per output word**.
-- Producing "chat"? Weight lands on "cat". Producing "fatigué"? Weight moves to "tired". The alignment plots in the 2015 Bahdanau paper made this visible and the field changed direction.
-- It fixed the length curve outright: translation quality stopped collapsing with input length.
-- Then came the punchline. If attention is doing the heavy lifting, **why keep the RNN at all?** Delete the recurrence, keep only attention, add positional encodings — that is the transformer. Built from scratch in the GenAI subject.`,
+**2.** 0.8^30 = (0.8^10)^3 = 0.107^3 = 0.107 times 0.107 times 0.107 = about **0.0012**, so roughly one tenth of one percent. A gentler factor than 0.6 buys you more steps, but not many more - the decay is still geometric.
+
+**3.** c = f times c_prev + i times g = 0.90 times 0.60 + 0.30 times (-0.40) = 0.54 - 0.12 = **0.42**. Then h = o times tanh(c) = 0.50 times 0.3969 = **0.1985**. Note that h is much smaller than c: the output gate is holding most of the stored value back, which is exactly what lets the model keep a fact without acting on it.
+
+**4.** The learning rate multiplies the gradient. From problem 2, the gradient arriving at an early timestep is about 0.0012 of the signal, and in the 20-step example it was 0.00003656. Multiplying a number that small by 10 or 100 does not restore the information that decayed away - it mostly amplifies numerical noise, and it destabilises the near timesteps whose gradients were healthy. The fix is a memory path that does not decay (gating), or a shorter dependency, not a bigger step size.`,
     },
     {
-      type: 'math',
-      intro: 'Attention, in its original RNN form. Compare this to softmax(QKᵀ/√d)V later — same shape, no recurrence.',
-      latex: [
-        'e_{ij} = \\text{score}(s_{i-1}, h_j) \\qquad \\alpha_{ij} = \\frac{\\exp(e_{ij})}{\\sum_{k=1}^{T_x} \\exp(e_{ik})}',
-        'c_i = \\sum_{j=1}^{T_x} \\alpha_{ij} \\, h_j \\qquad \\text{one context vector per OUTPUT step } i \\text{, not one per sentence}',
-      ],
+      type: 'note',
+      md: 'One honest closing note. For language, attention and transformers have largely replaced these models: instead of squeezing a sentence through one small state, a transformer lets every position look directly at every other position, and that is covered properly in the GenAI subject. So why learn LSTMs at all? Two real reasons. They still come up in interviews, because the gating idea is the cleanest example of "add, do not overwrite" that the field has. And they are still genuinely used in time-series and streaming work, where inputs arrive one at a time, memory per step must stay constant, and the sequences are short enough that a transformer is overkill.',
     },
     {
       type: 'intuition',
-      title: 'Why RNNs actually lost (it was not accuracy)',
-      md: `LSTMs did not get beaten on quality first. They got beaten on **hardware economics**.
+      title: 'Beyond the basics - skip this on your first read',
+      md: `Four extras, none needed above.
 
-- h_t needs h_(t−1). A 1000-token sequence is 1000 strictly sequential steps, each a small matmul. No amount of GPU helps.
-- A transformer computes all positions at once: two big matmuls, and the GPU runs at full occupancy. Same data, same day, vastly more of it processed.
-- So RNNs could not ride the scaling curve. When compute got 100× cheaper, transformers got 100× better and LSTMs got maybe 3× better.
-- The one-line interview answer: **"RNNs trade parallel width for sequential depth — and the hardware that got cheap was width."**
-- Where recurrence still lives: streaming and on-device inference (constant memory per token, no growing KV cache), tiny sensor sequences, and — notably — modern state-space models like Mamba, which are recurrence redesigned to be parallelizable at train time. The idea was never wrong; the *implementation* did not fit the silicon.`,
+- **Truncated BPTT.** Backpropagating through a 10,000-word document is impractical, so you cut the sequence into chunks of about 35 steps, backpropagate inside a chunk only, and pass the hidden state to the next chunk without a gradient attached. You keep the forward memory but give up learning signal for dependencies longer than the chunk.
+- **Bidirectional models.** Run one pass left to right and another right to left, then join the two states. This only works when the whole sequence is available before you start - tagging, classification, offline transcription. It is impossible for live generation, because the backward pass would need words that do not exist yet.
+- **Stacking.** Feed the sequence of hidden states from layer 1 into layer 2. Two to four layers is the practical ceiling; deeper mostly buys latency.
+- **Why RNNs actually lost.** Not accuracy - throughput. Timestep t needs timestep t-1, so a 1000-word sequence is 1000 strictly sequential small matrix multiplies and a GPU sits mostly idle. A transformer computes all positions at once in a few large multiplications. When compute got cheap, only the parallel architecture could spend it. Recurrence is now returning in a parallelisable form (state-space models), which is the same idea rebuilt to fit the hardware.`,
     },
   ],
   quiz: [
     {
-      question: 'Why can a plain MLP not handle "the food was great" and a 15-word review with the same weights?',
+      question: 'Why can a fixed 4-input layer not handle both "the food was great" and a 12-word review?',
       options: [
         {
-          text: 'Fixed input size, and no weight sharing across positions — "great" at slot 3 and slot 30 hit different weights',
-          explanation:
-            'Correct. Both problems are structural: nn.Linear needs a fixed n, and padding to a max length forces the model to relearn every word at every position.',
+          text: 'The input length varies, and padding to a fixed size makes the same word hit different weights at different positions',
+          explanation: 'Correct. Two structural problems: the layer has a fixed number of slots, and a padded layout forces the model to relearn each word once per position.',
         },
-        { text: 'MLPs cannot represent text at all', explanation: 'They can — embeddings are vectors. The failure is about variable length and position, not about text.' },
-        { text: 'MLPs have no activation function suitable for words', explanation: 'Activation choice is irrelevant here; the same ReLU works fine in an RNN cell.' },
+        { text: 'Neural networks cannot represent words as numbers', explanation: 'They can - each word becomes a vector. The failure is about variable length and position, not about text.' },
+        { text: 'tanh is the wrong activation for text', explanation: 'The activation is not the issue; the same tanh works fine inside an RNN cell.' },
       ],
       correct: 0,
     },
     {
-      question: 'In an RNN, where is the memory of everything read so far?',
+      question: 'In an RNN, where is everything the model remembers about the words it has read so far?',
       options: [
-        { text: 'In the weight matrix W_h', explanation: 'W_h is shared and fixed during a forward pass — it is the RULE for updating memory, not the memory.' },
-        { text: 'In a buffer of past inputs the cell keeps', explanation: 'There is no buffer. An RNN never re-reads an old token; that is exactly its limitation.' },
-        {
-          text: 'Entirely in the hidden state vector h_t',
-          explanation: 'Correct. A single fixed-size vector is the whole memory — which is also why it saturates on long inputs.',
-        },
+        { text: 'In the weight W_h', explanation: 'W_h is the same at every step and does not change during a forward pass. It is the rule for updating the memory, not the memory.' },
+        { text: 'In a buffer of past words the cell keeps', explanation: 'There is no buffer. An RNN never re-reads an earlier word - that is exactly its limitation.' },
+        { text: 'Entirely in the hidden state h_t', explanation: 'Correct. One fixed-size list of numbers holds everything, which is also why it saturates on long inputs.' },
       ],
       correct: 2,
     },
     {
-      question: 'The gradient reaching timestep 1 in a 100-step RNN has been multiplied by W_h 99 times. If the largest |eigenvalue| of W_h is 0.9, what happens?',
+      question: 'The gradient shrinks by a factor of 0.6 at each backward step. After 20 steps, what fraction is left?',
       options: [
-        { text: 'It explodes — clip it', explanation: 'Explosion needs |eigenvalue| > 1. At 0.9 the product shrinks every step.' },
-        {
-          text: 'It vanishes to ~1e-05 — step 1 gets essentially no learning signal',
-          explanation: 'Correct, and the code confirmed it: 0.9^99 drives the norm to 5.31e-05. The early tokens simply stop being trained.',
-        },
-        { text: 'Nothing — tanh normalizes it', explanation: 'tanh makes it WORSE: its derivative is ≤ 1, so it multiplies in another shrinking factor.' },
+        { text: 'About 0.6, because the factor does not compound', explanation: 'It does compound: each step multiplies the already-shrunken value again.' },
+        { text: 'About 0.0000366 - effectively nothing', explanation: 'Correct, and the code printed exactly that: 0.00003656. Timestep 1 receives no usable learning signal.' },
+        { text: 'It grows, because tanh normalises it', explanation: 'tanh makes it worse. Its slope is at most 1, so it contributes another shrinking factor.' },
       ],
       correct: 1,
     },
     {
-      question: 'Why is gradient clipping a real fix for exploding gradients but not for vanishing ones?',
+      question: 'Why does gradient clipping fix exploding gradients but not vanishing ones?',
       options: [
-        { text: 'Clipping is too slow to run every step', explanation: 'It is one norm computation per step — negligible, and standard practice in every RNN codebase.' },
+        { text: 'Clipping is too slow to run every step', explanation: 'It is one length computation per step - negligible, and standard in every RNN codebase.' },
         {
-          text: 'Clipping rescales a too-large vector while keeping its direction; a vanished gradient has no information left to rescale',
-          explanation:
-            'Correct. Explosion is a magnitude problem with intact direction. Vanishing destroys the signal itself — multiplying 1e-05 by 1000 amplifies numerical noise, not learning signal.',
+          text: 'Clipping shrinks a too-large vector while keeping its direction; a vanished gradient has no information left to rescale',
+          explanation: 'Correct. Exploding is a size problem with the direction intact. Vanishing destroys the signal itself, and multiplying 0.00003656 by a thousand amplifies noise, not learning.',
         },
-        { text: 'Vanishing gradients do not actually hurt training', explanation: 'They are precisely why vanilla RNNs cannot learn dependencies beyond ~10-20 steps.' },
+        { text: 'Vanishing gradients do not really hurt training', explanation: 'They are precisely why a plain RNN cannot learn dependencies beyond roughly 10 to 20 steps.' },
       ],
       correct: 1,
     },
     {
-      question: 'What is architecturally special about the LSTM cell state path c_(t−1) → c_t?',
+      question: 'What is structurally special about the LSTM cell state path?',
       options: [
-        { text: 'It uses a bigger weight matrix than the hidden state', explanation: 'It uses NO weight matrix — that is the entire point.' },
-        { text: 'It is recomputed from scratch each step for freshness', explanation: 'That describes a vanilla RNN state, the thing the LSTM was built to avoid.' },
+        { text: 'It uses a larger weight matrix than the hidden state does', explanation: 'It uses no weight matrix at all - that is the entire point.' },
+        { text: 'It is rebuilt from scratch each step to stay fresh', explanation: 'That describes a plain RNN hidden state, which is the thing the LSTM was designed to avoid.' },
         {
-          text: 'Only elementwise scaling and addition touch it, so ∂c_t/∂c_(t−1) = f_t instead of W_h',
-          explanation:
-            'Correct. An additive, matrix-free highway — the same idea as a ResNet skip connection. Gates near 1 let the gradient walk back hundreds of steps.',
+          text: 'Only elementwise multiplication and addition touch it, so one step costs the forget-gate value instead of a weight multiply plus a squash',
+          explanation: 'Correct. With f near 1 a fact passes through essentially unchanged, which is why 20 steps cost 64 percent instead of everything.',
         },
       ],
       correct: 2,
     },
     {
-      question: 'Which LSTM component is NOT a sigmoid gate?',
+      question: 'Which part of an LSTM is NOT a 0-to-1 gate?',
       options: [
         {
-          text: 'The candidate c̃_t — it is a tanh, because it is content (−1..1), not a valve',
-          explanation: 'Correct. f, i and o are sigmoids in 0..1 (how much); the candidate is tanh (what). Confusing these is a common interview slip.',
+          text: 'The candidate g - it is a tanh, so it ranges from -1 to 1, because it is content rather than a valve',
+          explanation: 'Correct. f, i and o are sigmoids answering "how much"; the candidate answers "what", and content needs to be able to be negative.',
         },
-        { text: 'The forget gate', explanation: 'Sigmoid — it must produce a 0..1 keep-fraction per slot.' },
-        { text: 'The output gate', explanation: 'Sigmoid — it decides what fraction of tanh(c_t) is exposed as h_t.' },
-      ],
-      correct: 0,
-    },
-    {
-      question: 'A seq2seq translator scores well on short sentences and degrades sharply as input length grows. The most likely cause?',
-      options: [
-        { text: 'The decoder is too small', explanation: 'A bigger decoder cannot recover information that never made it out of the encoder.' },
-        { text: 'Learning rate is too high', explanation: 'That would hurt short and long inputs alike, not produce a length-dependent curve.' },
-        {
-          text: 'The fixed-size context vector bottleneck — one vector cannot hold a long sentence',
-          explanation:
-            'Correct, and the length-dependent shape of the failure is the giveaway. The fix that actually worked historically was attention, not a bigger encoder.',
-        },
-      ],
-      correct: 2,
-    },
-    {
-      question: 'What ultimately made transformers replace RNNs?',
-      options: [
-        {
-          text: 'RNN timesteps are strictly sequential, so training cannot be parallelized across time — they could not ride the GPU scaling curve',
-          explanation:
-            'Correct. Gating had already patched long-range memory; nothing patches "step t needs step t−1". Attention turns the sequence into one parallel matmul, and cheap compute did the rest.',
-        },
-        { text: 'Transformers have fewer parameters', explanation: 'They generally have far more. Parameter count was never the argument.' },
-        { text: 'RNNs could not represent long-range dependencies at all', explanation: 'LSTMs demonstrably could, to a few hundred steps. The blocker was throughput, not capability.' },
+        { text: 'The forget gate', explanation: 'A sigmoid - it must produce a keep-fraction between 0 and 1 for each slot.' },
+        { text: 'The output gate', explanation: 'A sigmoid - it decides what fraction of tanh(c) becomes the hidden state.' },
       ],
       correct: 0,
     },
   ],
   interviewQuestions: [
     {
-      question: 'Whiteboard: write the vanilla RNN update and explain what makes it different from an MLP layer.',
+      question: 'Write the vanilla RNN update and explain what makes it different from an ordinary layer.',
       answer:
-        'h_t = tanh(W_x x_t + W_h h_(t−1) + b), with y_t = W_y h_t optionally per step. Two differences to name: (1) the SAME W_x, W_h, b are applied at every timestep — parameter sharing, so a word means the same thing at position 3 and position 30, and the parameter count is independent of sequence length; (2) the extra term W_h h_(t−1) makes the layer a function of its own past output, which is what gives it memory and makes the computation graph a timeline rather than a stack. Then add the honest caveat unprompted: the unrolled graph is depth T with tied weights, which is exactly why it has a gradient problem.',
+        'h_t = tanh(W_x x_t + W_h h_(t-1) + b), with h_0 = 0. Two differences. First, the same W_x, W_h and b are used at every timestep, so the parameter count does not depend on sequence length and a word means the same thing at position 3 and position 30. Second, the term W_h h_(t-1) makes the layer a function of its own previous output, which is what gives it memory. Unrolled, it is a deep network whose depth equals the sequence length and whose weights are all tied. I would add the caveat unprompted: that tied depth is exactly why it has a gradient problem, since the signal reaching step 1 has been multiplied by the same factor once per step.',
       isCaseBased: false,
     },
     {
-      question: 'Derive why vanilla RNNs suffer vanishing gradients. Be precise about where the product comes from.',
+      question: 'Explain the vanishing gradient problem in an RNN with numbers, not just words.',
       answer:
-        '∂L_T/∂h_1 = ∂L_T/∂h_T · Π_{t=2..T} ∂h_t/∂h_(t−1), and each Jacobian factor is diag(tanh\'(·))·W_h. Two shrinking effects compound: tanh\' ≤ 1 everywhere (and is far below 1 whenever the unit is saturated), and the norm of the W_h product behaves like λ^(T−1) where λ is the largest |eigenvalue|. λ < 1 → the whole product decays geometrically → the early steps receive no gradient; λ > 1 → it blows up. Since W_h is shared, this same product appears in every term of its own gradient sum. The knife edge λ ≈ 1 is not a usable fix, because forward activations then explode or drift instead.',
+        'Going backwards, each timestep multiplies the gradient by the recurrent weight and by the slope of tanh. The slope of tanh is at most 1 and much less when the unit is saturated, so the combined per-step factor is typically below 1. Say it is 0.6. Then over 20 steps the surviving fraction is 0.6 to the power 20, which is 0.0000366 - about 0.0037 percent. The early timesteps get no usable learning signal, so the model cannot learn that word 1 mattered for the prediction at word 21. The mirror case is a factor above 1, where the gradient explodes; that one is cheap to fix by clipping the gradient length while keeping its direction. Vanishing has no equivalent fix, because rescaling 0.0000366 amplifies rounding noise rather than recovering information. That is why the repair is architectural - gating.',
       isCaseBased: false,
-    },
-    {
-      question: 'Case: your LSTM language model trains for 4 hours, then loss jumps to NaN at step 30k. Walk your debugging order.',
-      answer:
-        'NaN after long stable training is almost always a gradient spike, not a code bug — the code already ran 30k steps. Order: (1) is clip_grad_norm_ on at all? Add it (norm 1.0–5.0) — it is the standard mitigation and costs nothing. (2) Log the pre-clip grad norm and find the batch that spiked; very often it is one pathological long sequence or a corrupted sample. (3) Check the loss for log(0) — an unclamped log-softmax or a division in a custom head. (4) Check for an exploding forward pass too: if cell states drift to ±1e4, tanh(c) saturates and gradients get weird — that points at a missing forget-gate bias init or too high an LR. (5) Only then reduce LR / switch to fp32 if you were on fp16 (a very common real cause: fp16 overflow in the attention or the loss). Tradeoff to name: clipping is a band-aid that hides the bad batch; log the norms so you actually find it.',
-      isCaseBased: true,
     },
     {
       question: 'Explain the three LSTM gates to a smart non-specialist, then give the equations.',
       answer:
-        'Story: the LSTM keeps a conveyor belt of facts running through the sentence. At each word it asks three yes/no-ish questions. Forget: what should I drop off the belt? Input: what from this word should I add? Output: what part of the belt should I say out loud right now? Each answer is a vector of 0..1 valves, one per slot, learned. Then the equations: f = σ(W_f h + U_f x + b_f), i = σ(...), c̃ = tanh(...), o = σ(...), c_t = f⊙c_(t−1) + i⊙c̃_t, h_t = o⊙tanh(c_t). Land the punchline: the belt is only scaled and added to, so ∂c_t/∂c_(t−1) = f_t rather than W_h — that additive path is why memory survives, and it is the same idea as a residual connection.',
+        'Story first: the LSTM runs a conveyor belt of facts through the sentence. At each word it asks three questions. Forget: how much of what is on the belt should stay? Input: how much of this new word should be written on? Output: how much of the belt should I say out loud right now? Each answer is a list of numbers between 0 and 1, one per slot, produced by a sigmoid and learned from data. Then the equations: f = sigmoid(...), i = sigmoid(...), g = tanh(...), o = sigmoid(...), then c_t = f times c_(t-1) + i times g, and h_t = o times tanh(c_t). The punchline is the c line: the belt is only scaled and added to, with no weight matrix and no squash on that path, so one step costs the forget-gate value instead of a weight multiply. With f around 0.98 a fact survives 11 steps at 80 percent, where a plain RNN at 0.6 per step delivers 0.36 percent.',
       isCaseBased: false,
     },
     {
-      question: 'Why does the LSTM separate the cell state from the hidden state? What breaks if you merge them?',
+      question: 'Why does an LSTM keep the cell state and the hidden state separate? What breaks if you merge them?',
       answer:
-        'They serve different jobs: c is storage, h is the exposed interface used by the output layer and by the gates at the next step. Separating them lets the model hold a fact for 30 steps without acting on it — the output gate can stay near 0 for a slot the whole time. Merge them and every stored fact is also broadcast, so storage decisions and prediction decisions fight over the same vector, and you lose the clean matrix-free gradient highway (h passes through tanh and the output gate). The GRU does merge them and compensates with the (1−z)h_(t−1) term to keep the additive path — it works, at slightly less capacity.',
+        'They do different jobs. The cell state is storage; the hidden state is the exposed interface that the output layer and the next step gates read. Keeping them apart lets the model hold a fact for 30 words without acting on it, because the output gate can stay near 0 for that slot the whole time. Merge them and every stored fact is also broadcast, so storage decisions and prediction decisions compete for the same numbers, and the clean pass-through path is lost because the hidden state goes through tanh and the output gate. The GRU does merge them and compensates with the (1 - z) times h_old term, which preserves the additive path at slightly less flexibility.',
       isCaseBased: false,
     },
     {
-      question: 'LSTM vs GRU — how do you actually choose?',
+      question: 'LSTM or GRU - how do you actually choose?',
       answer:
-        'Parameters: LSTM has 4 gate blocks, GRU has 3 (r, z, candidate) — roughly 25% fewer parameters and a bit faster per step. Capacity: LSTM\'s separate cell state and independent output gate give more control; GRU\'s single update gate ties forgetting to writing (whatever it writes, it must forget in equal measure). Empirically the accuracy difference is usually inside the noise band; the 2014-2015 comparison papers were inconclusive on purpose. Practical rule: GRU when data is small, latency matters, or you are compute-bound; LSTM when data is plentiful and the extra capacity can be paid for. The interview-safe answer is "benchmark both, they are one hyperparameter apart" — anyone claiming a universal winner is repeating folklore.',
+        'A GRU has three weight blocks (reset, update, candidate) against the LSTM four, so roughly 25 percent fewer parameters and slightly faster steps. The LSTM has a separate cell state and an independent output gate, which is more control; the GRU ties writing to forgetting through one update gate, so whatever it writes it must forget in equal measure. Empirically the accuracy gap is usually inside normal run-to-run variation, and the published comparisons were inconclusive. Practical rule: GRU when data is small or latency matters, LSTM when you have data to spare and want the extra flexibility. The honest answer is that they are one hyperparameter apart, so benchmark both on your data.',
       isCaseBased: false,
     },
     {
-      question: 'Case: your team uses a bidirectional LSTM for named-entity recognition, and it works great. Product now wants it to run on a live audio stream, tagging as words arrive. What happens?',
+      question: 'Case: your LSTM trains stably for four hours, then the loss becomes NaN at step 30,000. Walk through your debugging order.',
       answer:
-        'It breaks, and not subtly. A biLSTM concatenates a forward pass with a BACKWARD pass over the full sequence — the backward half literally cannot start until the last token exists. Streaming has no last token. Options with their costs: (1) drop to a unidirectional LSTM — deployable immediately, expect a measurable F1 drop on entities whose evidence comes after them; (2) chunked/latency-controlled bidirectionality — buffer k future tokens and run the backward pass over the window; recovers most of the accuracy at the price of k tokens of latency, and this is usually the right answer; (3) retrain with a causal architecture from the start. Name the general principle: bidirectionality is only legal when the whole sequence is available up front — classification, tagging, offline transcription — never for generation or live inference.',
+        'A NaN after long stable training is almost always a gradient spike rather than a code bug, since the code already survived 30,000 steps. Order of checks. One: is gradient clipping on at all? Add it with a maximum length of 1 to 5 - it is the standard mitigation and costs nothing. Two: log the gradient length before clipping and find the batch where it spiked; it is often one pathological long or corrupted sample. Three: look for a log of zero in the loss, usually an unclamped log or a division in a custom output head. Four: check the forward pass too - if cell states drift to plus or minus ten thousand then tanh saturates and the gradients get strange, which points at a missing forget-gate bias initialisation or too high a learning rate. Five: if you are training in half precision, try full precision for that step - half precision overflow is a very common real cause. The tradeoff to name out loud: clipping hides the bad batch, so log the gradient lengths or you will never find the actual sample.',
       isCaseBased: true,
     },
     {
-      question: 'Explain the seq2seq bottleneck and how attention fixes it. Why was it such a big deal?',
+      question: 'Case: a bidirectional LSTM for named-entity recognition works well offline. Product wants it to tag a live audio stream as words arrive. What happens?',
       answer:
-        'Vanilla seq2seq compresses the entire source sentence into the encoder\'s final hidden state and hands that one fixed-size vector to the decoder. Capacity is constant while input length grows, so quality degrades with length — BLEU falls off sharply past roughly 15-20 tokens, and characteristically the beginning of long sentences is translated worst. Attention keeps ALL encoder states: at each output step the decoder scores every h_j against its current state, softmaxes into weights α_ij, and builds a fresh context c_i = Σ α_ij h_j. So the pipe is per-output-word instead of per-sentence. It was a big deal for two reasons: it flattened the length-degradation curve, and the α matrix turned out to be a readable soft alignment — the first time a neural translator was interpretable. And it set up the real punchline: if attention carries the information, the recurrence is optional. Remove it and you have the transformer.',
-      isCaseBased: false,
-    },
-    {
-      question: 'Truncated BPTT — what is it, and what do you give up?',
-      answer:
-        'Full BPTT stores every hidden state for the whole sequence and backprops through all of it: memory is O(T·hidden) and the backward pass is serial over T. Truncated BPTT chops the sequence into chunks of k steps (say 35 for language modelling), backprops only within a chunk, and carries the hidden state forward to the next chunk WITHOUT gradient (detach). You give up gradient paths longer than k — the model can still USE context beyond k in its forward state, but it cannot receive learning signal for dependencies longer than k. In practice that is an acceptable trade because gradients beyond a few dozen steps are tiny anyway; the tell that k is too small is a model that never learns long-range agreement even though the state clearly carries it.',
-      isCaseBased: false,
-    },
-    {
-      question: 'How many parameters does an LSTM layer have, given input size n_x and hidden size n_h? What about a GRU?',
-      answer:
-        'Each gate block has W (n_h × n_h), U (n_h × n_x), b (n_h) → n_h(n_h + n_x + 1). LSTM has four such blocks (f, i, candidate, o) → 4·n_h·(n_h + n_x + 1). Concretely n_x = 300, n_h = 512: 4·512·(512+300+1) = 4·512·813 ≈ 1.665M per layer. GRU has three blocks → 3·n_h·(n_h + n_x + 1) ≈ 1.249M, i.e. 25% fewer. Two follow-ups they like: bidirectional doubles it (two independent parameter sets), and the count is independent of sequence length — the sequence only costs activation memory, not parameters. Frameworks may report a slightly larger number because cuDNN keeps separate input and recurrent biases.',
-      isCaseBased: false,
-    },
-    {
-      question: 'Case: you inherit an LSTM sentiment model. It nails short reviews but is near chance on long ones, and someone proposes doubling the hidden size. React.',
-      answer:
-        'Doubling hidden size is the expensive guess. Diagnose first. (1) Is it a length problem or a distribution problem? Bucket validation accuracy by input length — if it degrades monotonically with length, it is memory/bottleneck; if long reviews are also topically different, it is data. (2) Check what the model actually sees: truncation. Most pipelines silently cut at max_len — if long reviews are being clipped to 200 tokens, no architecture change helps. (3) Check where the label evidence lives: sentiment often sits in the last sentence, in which case last-hidden-state pooling is fine and the problem is elsewhere; if evidence is spread out, mean/max pooling over all h_t, or attention pooling, usually beats a bigger state for far less compute. (4) Forget-gate bias init to 1 is a free retrain-level fix for weak long-range retention. Only after those, consider capacity. Cheapest real fix in 2025: replace the classifier head with attention pooling, or fine-tune a small pretrained transformer and skip the argument entirely.',
+        'It breaks, and not subtly. A bidirectional model joins a forward pass with a backward pass over the full sequence, and the backward half cannot start until the last word exists. A live stream has no last word. Options with their costs. One: drop to a forward-only LSTM - deployable immediately, expect a measurable accuracy drop on entities whose evidence arrives after them. Two: buffer a small window of future words and run the backward pass over that window only - this recovers most of the accuracy at the cost of a fixed lag, and it is usually the right answer. Three: retrain with a forward-only architecture from the start so training and serving match. The general principle to state: bidirectionality is only legal when the whole sequence is available before you begin - classification, tagging, offline transcription - and never for live inference or generation.',
       isCaseBased: true,
     },
     {
-      question: 'RNNs "lost" to transformers — but recurrence is back in state-space models like Mamba. Reconcile that.',
+      question: 'Case: you inherit an LSTM sentiment model. It handles short reviews well but is near chance on long ones, and a colleague proposes doubling the hidden size. React.',
       answer:
-        'What lost was not recurrence as an idea; it was recurrence implemented as a step-by-step nonlinear update that cannot be parallelized across time. That property capped training throughput no matter how many GPUs you bought, so RNNs could not convert cheap compute into quality the way transformers could. State-space models keep a recurrent state but make the recurrence LINEAR and time-invariant enough to be computed with a parallel scan or a convolution at training time, then run it as a cheap O(1)-per-token recurrence at inference — parallel to train, recurrent to serve. That directly attacks the transformer\'s weak spot: O(n²) attention and a KV cache that grows with context. The lesson for interviews: architecture choices are often hardware-utilization choices wearing a math costume.',
-      isCaseBased: false,
+        'Doubling the hidden size is an expensive guess, and the numbers say it will not help: every slot decays by the same per-step factor, so four times as many decaying slots is still nothing at step 40. Diagnose first. One: bucket validation accuracy by input length. A smooth fall as length grows points at the memory path; if long reviews are also topically different, it is a data problem. Two: check for silent truncation in the data loader - if long reviews are being cut at 200 tokens, no architecture change matters. Three: check where the evidence lives. If sentiment sits in the last sentence, using only the final hidden state is fine and the problem is elsewhere; if evidence is spread out, pooling over all hidden states, by mean or by attention, usually beats a larger state for far less compute. Four: initialise the forget-gate bias to about +1 so gates start near keep - a free change at the next retrain. Only after all that would I consider capacity. The cheapest real fix in practice is attention pooling on the head, or fine-tuning a small pretrained transformer and skipping the argument.',
+      isCaseBased: true,
     },
   ],
   flashcards: [
-    { front: 'Three reasons an MLP cannot do sequences', back: 'Fixed input size (variable length breaks it), no parameter sharing across positions, no notion of order/memory.' },
-    { front: 'The vanilla RNN update', back: 'h_t = tanh(W_x x_t + W_h h_(t−1) + b). Same weights every step; h_t is the ENTIRE memory.' },
-    { front: 'BPTT in one line', back: 'Unroll T steps into a deep graph with tied weights, then ordinary backprop. W_h\'s gradient is the sum over all steps.' },
-    { front: 'Why long-range memory fails', back: '∂L/∂h_1 contains Π ∂h_t/∂h_(t−1) ≈ λ^(T−1). λ<1 → vanish, λ>1 → explode. Repeated multiplication by the same matrix.' },
-    { front: 'Exploding vs vanishing', back: 'Exploding: clip the gradient norm — one line, direction preserved. Vanishing: nothing to clip, signal is gone → needs gates (architecture).' },
-    { front: 'The LSTM cell state', back: 'A conveyor belt touched only by elementwise multiply and add. ∂c_t/∂c_(t−1) = f_t, not W_h — an additive highway, same idea as a ResNet skip.' },
-    { front: 'The three gates', back: 'Forget f: what to drop from c. Input i: how much new to write (candidate c̃ = tanh = WHAT). Output o: how much of c to expose as h_t.' },
-    { front: 'LSTM equations', back: 'c_t = f⊙c_(t−1) + i⊙c̃_t ; h_t = o⊙tanh(c_t). f, i, o are sigmoids (0..1 valves); c̃ is a tanh (content).' },
-    { front: 'GRU vs LSTM', back: 'GRU: reset + update gates, cell and hidden merged, ~25% fewer params, h = (1−z)h_old + z·h_new. Accuracy usually a wash — benchmark, do not believe folklore.' },
-    { front: 'seq2seq bottleneck → attention', back: 'One fixed context vector cannot hold a long sentence (quality collapses with length). Attention keeps all encoder states and builds c_i = Σ α_ij h_j per output step. Drop the RNN, keep attention → transformer.' },
+    { front: 'Why a fixed layer cannot read a sentence', back: 'Input length varies so it does not fit, padding makes the same word hit different weights per position, and flattening destroys word order.' },
+    { front: 'Sequence, timestep, hidden state', back: 'Sequence: an ordered list of items. Timestep: one position in it. Hidden state h_t: the fixed-size summary of everything read up to that position.' },
+    { front: 'The vanilla RNN update', back: 'h_t = tanh(W_x x_t + W_h h_(t-1) + b). The same weights at every step, and h_t is the entire memory.' },
+    { front: 'BPTT in one line', back: 'Unroll the T timesteps into one deep network with tied weights, then run ordinary backpropagation. W_h gets the sum of contributions from every step.' },
+    { front: 'Vanishing gradient, with numbers', back: 'Each backward step multiplies by roughly the same factor below 1. At 0.6 per step, 20 steps leaves 0.0000366 - no learning signal reaches the early words.' },
+    { front: 'Exploding vs vanishing', back: 'Exploding: clip the gradient length and keep its direction, one line. Vanishing: nothing to rescale, the signal is gone, so it needs an architecture change.' },
+    { front: 'The LSTM cell state', back: 'A belt touched only by multiply and add. One step costs the forget-gate value instead of a weight multiply plus tanh, so f near 1 lets a fact pass through intact.' },
+    { front: 'The three gates plus the candidate', back: 'Forget f: how much of the belt stays. Input i: how much of the new content is written. Output o: how much of the belt is exposed as h. All three are sigmoids (0 to 1); the candidate g is a tanh (-1 to 1) and is what to write.' },
   ],
-  mindmapMarkdown: `- RNNs, LSTMs & the Road to Attention
-  - Why MLPs break on sequences
-    - Fixed input size, no parameter sharing across positions, no order/memory
+  mindmapMarkdown: `- RNNs, LSTMs and the road to attention
+  - Why a fixed layer fails on sequences
+    - Length varies, padding kills weight sharing, flattening kills order
   - The RNN
-    - h_t = tanh(W_x x_t + W_h h_(t−1) + b)
-    - One weight set every step; the state IS the memory
-    - Unrolling = the mental model
-  - BPTT & the gradient problem
-    - Unroll → ordinary backprop, tied weights; step 1's gradient crosses T copies of W_h
-    - Product ≈ λ^(T−1)
-    - λ > 1 exploding → clip the norm (easy)
-    - λ < 1 vanishing → fundamental → gates
+    - h_t = tanh(W_x x_t + W_h h_(t-1) + b)
+    - Hidden state is the whole memory; same weights every step
+    - Hand-run: 0.7616, 0.3634, 0.1797 - it carries and it fades
+  - BPTT and the gradient problem
+    - Unroll into a deep tied-weight network, then ordinary backprop
+    - 0.6 per step over 20 steps leaves 0.0000366
+    - Above 1: exploding, clip it. Below 1: vanishing, needs gates
   - LSTM
-    - Cell state = conveyor belt (multiply + add only)
-    - Additive path = ResNet skip connection
-    - Forget: what to drop from c
-    - Input + tanh candidate: how much / what to write
-    - Output: what part of c to expose as h_t
-    - Forget-bias init +1 → remember by default
+    - Cell state as a belt: multiply and add only
+    - Forget f: keep how much. Input i: write how much. Candidate g: what
+    - Output o: expose how much - storing and speaking are separate
+    - Forget-bias +1 means remember by default
   - GRU
-    - Reset + update gates, cell and hidden merged; fewer params, usually comparable
-  - Bidirectional (whole sequence only), stacking, truncated BPTT
-  - seq2seq
-    - Encoder → one context vector → decoder
-    - Bottleneck: quality collapses with input length
-  - Attention teaser
-    - Keep ALL encoder states, weight them per output step
-    - Drop the RNN, keep attention → transformer (GenAI)
-  - Why RNNs lost
-    - Sequential across time = unparallelizable, so it could not ride the GPU scaling curve
-    - Economics, not accuracy
-    - Recurrence returns parallelizable: Mamba / SSMs`,
+    - Reset and update gates, cell merged into hidden, about 25 percent fewer weights
+  - Worked case
+    - 11-word gap: plain RNN 0.36 percent, LSTM at f=0.98 gives 80 percent
+  - Classic mistake
+    - Bigger hidden state does not help - every slot decays by the same factor
+  - Closing
+    - Attention and transformers took over language (GenAI subject)
+    - LSTMs still live in interviews, time series and streaming`,
 }
 
 export default m

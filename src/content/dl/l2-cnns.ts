@@ -6,475 +6,538 @@ const m: Module = {
   level: 2,
   title: 'CNNs: Convolution, Pooling & Receptive Fields',
   whyItMatters:
-    'Every vision interview runs the same two drills: "give me the output shape" and "count the parameters in this layer". Both are pure arithmetic — and both are free marks if you know the two formulas cold. This module gives you those formulas, plus the one idea underneath them (weight sharing) that turned a 150-million-weight dense layer into nine numbers.',
-  estMinutes: 60,
+    'A photograph is not a bag of numbers. It is a grid, and the same small patterns show up all over it. This module builds the layer that knows that. You will slide a small grid of numbers over a picture by hand, work out the size of what comes out, and then count the weights and find that a layer which handles any photograph at all costs 448 numbers where the obvious approach cost 120 million.',
+  assumes: [
+    'You have read *From Perceptron to MLP: Why We Need Non-Linearity*, so you know that a weight is just a number the network multiplies an input by, and that a dense layer connects every input to every unit',
+    'You have read *Backpropagation: The Chain Rule on a Graph*, or at least know that training nudges every weight automatically. You will not need any of that machinery here',
+    'You can read a Python for loop, a list, and a list of lists',
+    'School arithmetic only. No calculus, no probability, and no numpy is used anywhere in this module',
+  ],
+  estMinutes: 42,
   sections: [
     {
       type: 'intuition',
-      title: 'Do the arithmetic on a dense layer first',
-      md: `A standard ImageNet photo is 224×224 pixels, 3 colour channels. Flatten it and feed it to a dense layer with 1000 units.
+      title: 'Do the obvious thing first, and count the cost',
+      md: `Take a colour photograph, 200 pixels wide and 200 pixels tall. Colour means each pixel is stored as three numbers: how much red, how much green, how much blue. Those three are called the **channels** of the image.
 
-- Inputs: 224 × 224 × 3 = **150,528 numbers**.
-- Weights in that ONE layer: 150,528 × 1000 = **150,528,000**.
-- That is more parameters in a single layer than GPT-2 small has in total. And you still have the rest of the network to build.
-- Memory and compute are only the first problem. The other two are worse.`,
+- Numbers in the picture: 200 x 200 x 3 = **120,000**.
+- The obvious first idea is to lay all 120,000 numbers out in one long row and feed them to a dense layer. Say that layer has 1,000 units.
+- A dense layer connects every input to every unit, and every connection carries one weight. So the weight count is 120,000 x 1,000 = **120,000,000**.
+- Plus 1,000 biases, which is nothing next to that.
+
+One hundred and twenty million numbers, for one layer, on one small photo. That is the first problem, and it is the least serious of the three.`,
+    },
+    {
+      type: 'intuition',
+      title: 'The second problem: shift the picture one pixel and everything changes',
+      md: `Imagine the photo is of a cat sitting dead centre. Now shift the whole photo one pixel to the right.
+
+- To a human, that is the same cat. To the flattened list of 120,000 numbers, almost every entry has changed: the number that was at position 4,000 has moved to position 4,003.
+- Every one of those numbers now lands on a **different weight**. The dense layer that learned "cat" has to learn it again, separately, for the shifted position.
+- The word for the property we want is **translation invariance**: move the thing you are looking for, and the answer stays the same. A dense layer on a flattened image does not have it.
+
+The third problem is related. Flattening throws away *which pixels were next to which*. Pixel (5,5) and pixel (5,6) are touching, so they are probably part of the same edge, but after flattening they are only entries 3,015 and 3,018 in a long list, no more related than entries 3,015 and 90,000. The layer has to learn that they were neighbours, from data, from scratch.
+
+So we want a layer that (a) only looks at small patches of pixels that really are next to each other, and (b) uses the *same* weights everywhere in the picture. That layer is the convolution.`,
+    },
+    {
+      type: 'intuition',
+      title: 'A kernel is a tiny grid of numbers that you slide',
+      md: `Picture a small square of transparent plastic, 3 pixels by 3 pixels, with a number written in each of the nine cells. Lay it on the top-left corner of the picture.
+
+- Multiply each of the nine numbers on the plastic by the pixel value underneath it. Add the nine products together. That gives **one number**.
+- Write that number down. Slide the plastic one pixel to the right and do it again. When you run out of room, drop down one row and start from the left again.
+- The little grid of numbers is called a **kernel**, or equally a **filter**. The two words mean exactly the same thing.
+- The whole sliding-and-multiplying operation is the **convolution**.
+- The grid of numbers you wrote down is called the **feature map**. It is not a score or a class. It is a picture of *where in the input that pattern was found*.
+- The nine numbers on the plastic are the layer's weights. They are learned during training, exactly like the weights of a dense layer.
+
+The two properties we wanted fall straight out. Each output number is built from only nine pixels that genuinely sit next to each other. And it is the *same* nine weights at every stop, which is called **parameter sharing** (or weight sharing). Nine numbers, reused everywhere.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Convolve a 5x5 by hand, before any code',
+      md: `Here is a 5x5 picture with a vertical edge in it. The left two columns are dark, value 0. The right three columns are bright, value 10. All five rows are identical:
+
+- Row 0: 0, 0, 10, 10, 10
+- Row 1: 0, 0, 10, 10, 10
+- Row 2: 0, 0, 10, 10, 10
+- Row 3: 0, 0, 10, 10, 10
+- Row 4: 0, 0, 10, 10, 10
+
+And here is a 3x3 kernel that detects vertical edges. Every row of it is the same: minus one, zero, plus one.
+
+- Kernel row 0: -1, 0, 1
+- Kernel row 1: -1, 0, 1
+- Kernel row 2: -1, 0, 1
+
+Why that kernel finds edges: it subtracts what is on the left from what is on the right. If left and right are equally bright, the two cancel and you get 0. If the right is much brighter than the left, you get a big positive number. That is exactly what an edge is.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Two output cells, computed all the way through',
+      md: `**Output cell (0,0).** Put the kernel at the top-left, covering rows 0-2 and columns 0-2 of the picture. The nine pixels underneath are:
+
+- 0, 0, 10 (from row 0)
+- 0, 0, 10 (from row 1)
+- 0, 0, 10 (from row 2)
+
+Multiply each by the matching kernel cell and add. Taking it one row at a time: row 0 gives (-1 x 0) + (0 x 0) + (1 x 10) = 10. Row 1 gives (-1 x 0) + (0 x 0) + (1 x 10) = 10. Row 2 gives the same, 10. Total: 10 + 10 + 10 = **30**. A big number, because the kernel is sitting right on the edge.
+
+**Output cell (0,2).** Slide the kernel two steps right, so it covers rows 0-2 and columns 2-4. Now the nine pixels underneath are:
+
+- 10, 10, 10 (from row 0)
+- 10, 10, 10 (from row 1)
+- 10, 10, 10 (from row 2)
+
+Row 0 gives (-1 x 10) + (0 x 10) + (1 x 10) = -10 + 0 + 10 = 0. Rows 1 and 2 give 0 as well. Total: **0**. The kernel is sitting on a flat bright region, so it stays silent. That is a detector doing its job.
+
+Do the remaining seven cells the same way and the full output is three identical rows of **30, 30, 0**.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Where the output-size formula comes from',
+      md: `Notice that the output above is 3x3, not 5x5. That is not a rule someone decided. It is a count of how many places the kernel fits.
+
+- The picture is 5 wide. The kernel is 3 wide. The kernel's left edge can start at column 0, column 1, or column 2. At column 3 it would hang off the right side.
+- So the last legal starting column is 5 - 3 = 2. Counting the starts 0, 1, 2 gives 3 positions. Three positions across means three output columns.
+- In general, with picture width W and kernel width K, the last legal start is W - K, and counting 0 up to W - K inclusive gives **W - K + 1** positions.
+
+Now add the two knobs that change the count.
+
+- **Stride** S is how far the kernel jumps between stops. So far it jumped 1 each time. With S = 2 the legal starts are 0, 2, 4, ..., so instead of W - K + 1 starts you get (W - K) / S + 1, rounded down because a partial jump is not a jump.
+- **Padding** P means adding P rings of zeros all the way around the picture before you start. That makes the picture P wider on the left and P wider on the right, so its width becomes W + 2P.
+
+Substitute the padded width into the count and you have the whole formula: **(W - K + 2P) / S + 1**, rounded down.
+
+Check it on the hand example: W = 5, K = 3, P = 0, S = 1 gives (5 - 3 + 0) / 1 + 1 = 3. That is the 3x3 output we computed.`,
     },
     {
       type: 'math',
-      intro: 'The number that kills the idea, written out.',
+      intro: 'The output-size formula, and the two named padding settings.',
       latex: [
-        '224 \\times 224 \\times 3 = 150{,}528 \\;\\text{inputs} \\;\\Longrightarrow\\; 150{,}528 \\times 1000 = 150{,}528{,}000 \\;\\text{weights}',
-        '\\text{(plus 1000 biases — noise next to that)}',
+        '\\text{out} = \\left\\lfloor \\frac{W - K + 2P}{S} \\right\\rfloor + 1',
+        "\\text{'valid'}: P = 0 \\;\\Rightarrow\\; \\text{the output is smaller than the input}",
+        "\\text{'same'} \\;(\\text{with } S=1): P = \\frac{K-1}{2} \\;\\Rightarrow\\; \\text{out} = W",
       ],
     },
     {
       type: 'intuition',
-      title: 'The two problems money cannot fix',
-      md: `**Problem 1: flattening destroys spatial structure.** Pixel (5,5) and pixel (5,6) are neighbours — they are probably part of the same edge. After flatten they are just entries 1220 and 1223 in a long list. The dense layer has no idea they were adjacent; it must *learn* that fact from scratch, from data.
+      title: 'The two padding names, in plain words',
+      md: `Libraries give you two padding settings by name, and the names are unhelpful, so here is what they mean.
 
-**Problem 2: no translation invariance.** Train the dense layer on cats in the centre. Move the cat 20 pixels right — every input lands on a different weight. The network has learned "cat in the middle", not "cat".
+- **'valid'** means no padding at all, P = 0. Only positions where the kernel sits fully inside the real picture are used. Every convolution shrinks the picture: a 3x3 kernel eats 2 pixels off each side.
+- **'same'** means "add just enough padding that the output comes out the same size as the input". For stride 1 the amount needed is P = (K - 1) / 2. For K = 3 that is P = 1; for K = 5 it is P = 2.
+- Check 'same' with the formula, K = 3, P = 1, S = 1, W = 5: (5 - 3 + 2) / 1 + 1 = 5. Same size in, same size out.
+- There is a second reason to pad. Without padding, a corner pixel is looked at by exactly one kernel position, while a middle pixel is looked at by nine. Padding evens that out so the border is not quietly ignored.
 
-- A dense layer treats an image as an unordered bag of 150,528 numbers.
-- An image is not that. It is a grid, and the *same* patterns (edges, corners, textures) appear anywhere in it.
-- A convolution is what you get when you build those two facts into the architecture instead of hoping the network discovers them.`,
+One more term while we are here. Take any single number in the output. The **receptive field** of that number is the patch of input pixels that were allowed to influence it. For one 3x3 convolution the receptive field is 3x3. Stack a second 3x3 convolution on top and each of its nine inputs already saw a 3x3 patch, and those patches overlap, so the reach becomes 5x5. Stacking layers is how a network eventually gets to see the whole picture.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Part 1: one output cell, reproducing the numbers we just did by hand',
+      code: `image = [[0, 0, 10, 10, 10] for r in range(5)]
+kernel = [[-1, 0, 1], [-1, 0, 1], [-1, 0, 1]]
+
+def cell(top, left):
+    total = 0
+    for i in range(3):
+        for j in range(3):
+            total = total + image[top + i][left + j] * kernel[i][j]
+    return total
+
+print('out[0][0] =', cell(0, 0))
+print('out[0][2] =', cell(0, 2))
+
+# out[0][0] = 30
+# out[0][2] = 0`,
+      annotations: {
+        1: 'Builds the picture as a list of lists. The bit before the word `for` is the row; `for r in range(5)` repeats it 5 times, so this is five identical rows. This shorthand is called a list comprehension; it is a for loop written on one line that collects its results into a list.',
+        2: 'The kernel, written directly as three rows of three numbers. kernel[0] is the first row, kernel[0][2] is the 1 at its right end.',
+        4: 'Defines a function that computes ONE output cell. top and left say where the kernel\'s top-left corner is sitting on the picture.',
+        5: 'Start the running sum at zero. This is the "add the nine products together" step, before any product exists.',
+        6: 'Loop over the kernel\'s three rows. i is 0, then 1, then 2.',
+        7: 'Loop over the kernel\'s three columns. Together these two loops visit all nine kernel cells once each.',
+        8: 'The one line that is the whole operation: take the pixel under kernel cell (i, j) and multiply it by that kernel cell, then add the product to the running total. image[top + i][left + j] is the offset that makes the kernel sit at (top, left) instead of at the corner.',
+        9: 'Hand back the finished sum. That single number is one cell of the feature map.',
+        11: 'Kernel at the top-left corner. Prints 30, which is the number we worked out by hand.',
+        12: 'Kernel slid two steps right, onto the flat bright region. Prints 0, again matching the hand computation.',
+      },
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Part 2: slide it everywhere, using the size formula to decide how far',
+      code: `def conv2d(img, ker, stride):
+    out_n = (len(img) - len(ker)) // stride + 1
+    out = []
+    for r in range(out_n):
+        row = []
+        for c in range(out_n):
+            total = 0
+            for i in range(len(ker)):
+                for j in range(len(ker)):
+                    total = total + img[r * stride + i][c * stride + j] * ker[i][j]
+            row.append(total)
+        out.append(row)
+    return out
+
+for row in conv2d(image, kernel, 1):
+    print(row)
+
+# [30, 30, 0]
+# [30, 30, 0]
+# [30, 30, 0]`,
+      annotations: {
+        1: 'Same idea as Part 1, now taking the picture, the kernel and the stride as arguments so we can try different ones.',
+        2: 'The output-size formula in code, with P = 0. len(img) is W, len(ker) is K. The // is integer division, which throws away the remainder, and that is exactly the rounding-down in the formula.',
+        3: 'An empty list that will collect the output rows.',
+        4: 'Walk down the output rows. r counts output rows, not input rows.',
+        5: 'A fresh empty list for this output row.',
+        6: 'Walk across the output columns. Each (r, c) pair is one stop of the sliding kernel.',
+        7: 'Reset the running sum for this stop.',
+        8: 'Loop over the kernel rows, sized from the kernel itself so this works for any kernel size.',
+        9: 'Loop over the kernel columns.',
+        10: 'The multiply-and-add again. r * stride picks the input row where this stop starts: with stride 2, output row 1 starts at input row 2.',
+        11: 'One stop finished, so append its single number to the current output row.',
+        12: 'One output row finished, so append it to the output grid.',
+        13: 'Hand back the finished feature map.',
+        15: 'Run it on our 5x5 picture with stride 1. The loop walks the three returned rows.',
+        16: 'Print each row. The output matches the hand computation cell for cell.',
+      },
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Part 3: padding, stride, and the formula checked three ways',
+      code: `def pad(img, p):
+    n = len(img)
+    wide = [[0] * (n + 2 * p) for r in range(n + 2 * p)]
+    for r in range(n):
+        for c in range(n):
+            wide[r + p][c + p] = img[r][c]
+    return wide
+
+for n, k, p, s in [(5, 3, 0, 1), (5, 3, 1, 1), (5, 3, 0, 2)]:
+    print('n', n, 'k', k, 'p', p, 's', s, '-> out', (n - k + 2 * p) // s + 1)
+
+print('padded conv gives', len(conv2d(pad(image, 1), kernel, 1)))
+
+# n 5 k 3 p 0 s 1 -> out 3
+# n 5 k 3 p 1 s 1 -> out 5
+# n 5 k 3 p 0 s 2 -> out 2
+# padded conv gives 5`,
+      annotations: {
+        1: 'Adds p rings of zeros around a square picture and returns the bigger picture.',
+        2: 'The original side length. A 5x5 picture with p = 1 becomes 7x7.',
+        3: 'Builds the all-zero bigger grid. [0] * m is Python for "a list of m zeros", and the comprehension repeats that row (n + 2p) times.',
+        4: 'Walk the rows of the ORIGINAL picture.',
+        5: 'Walk its columns.',
+        6: 'Copy each original pixel into the big grid, shifted down and right by p. Everything not copied stays zero, and that ring of zeros is the padding.',
+        7: 'Hand back the padded picture.',
+        9: 'Three settings to test, each written as four numbers in brackets: n, k, p, s. Writing four names on the left of `in` pulls the four numbers out of each group in order; this is called tuple unpacking.',
+        10: 'Print the formula\'s answer for each setting. Line 1 of the output is our hand example (3). Line 2 is \'same\' padding holding the size at 5. Line 3 is stride 2, where (5-3)//2 + 1 = 1 + 1 = 2 and the rounding-down quietly drops the last incomplete window.',
+        12: 'Pad the picture first, then convolve it, and measure how many rows came back. It prints 5, so \'same\' padding really does preserve the size in practice and not just on paper.',
+      },
     },
     {
       type: 'intuition',
-      title: 'Convolution: one small stamp, dragged everywhere',
-      md: `Think of a 3×3 rubber stamp with nine numbers on it. You slide it over the image, one position at a time.
+      title: 'Channels: the kernel is a cube, not a square',
+      md: `Everything so far used a one-number-per-pixel picture. Real pictures have three numbers per pixel, and the middle of a network can have hundreds. Those are the **channels**.
 
-- At each stop: multiply each of the 9 stamp numbers by the 9 pixels underneath, add them all up. One number out.
-- That number goes into an output grid at the matching position. The grid is called a **feature map**.
-- The stamp is the **kernel** (or **filter**). Its nine numbers are the *learned parameters*.
-- A kernel tuned one way lights up on vertical edges. Tuned another way it blurs. Same machinery, different nine numbers.
-- The output is not a class or a score — it is *an image of where that pattern was found*.`,
+- A kernel always spans **all** the input channels. A "3x3 kernel" on a 3-channel colour image is really 3 x 3 x 3 = 27 weights. On a 64-channel input it is 3 x 3 x 64 = 576 weights.
+- So the kernel is a little cube, not a flat square. It slides across height and width only. It never slides across channels; it swallows all of them at every stop.
+- One cube produces one feature map, which is **one output channel**. If you want 16 output channels, you use 16 separate cubes.
+- Therefore: **the number of filters IS the number of output channels**. That is the only channel knob a conv layer has.
+
+Now we can count the weights properly. One cube holds K x K x C_in weights, plus one bias per cube. There are C_out cubes.`,
+    },
+    {
+      type: 'math',
+      intro: 'The parameter-count formula. K is the kernel side, C_in the input channels, C_out the number of filters.',
+      latex: [
+        '\\text{params} = (K \\times K \\times C_{\\text{in}} + 1) \\times C_{\\text{out}}',
+        '\\text{Example: } K=3,\\; C_{\\text{in}}=3,\\; C_{\\text{out}}=16 \\;\\Rightarrow\\; (9 \\times 3 + 1) \\times 16 = 28 \\times 16 = 448',
+        '\\text{Look at what is missing from the formula: } W \\text{ and } H.',
+      ],
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'The punchline: conv weights do not depend on the picture size',
+      code: `def conv_params(k, c_in, c_out):
+    return (k * k * c_in + 1) * c_out
+
+def dense_params(h, w, c_in, units):
+    return h * w * c_in * units + units
+
+print('dense 200x200x3 -> 1000 units:', dense_params(200, 200, 3, 1000))
+print('conv 3x3, 3 in, 16 out      :', conv_params(3, 3, 16))
+for side in [32, 200, 1000]:
+    print(side, 'conv', conv_params(3, 3, 16), 'dense', dense_params(side, side, 3, 1000))
+
+# dense 200x200x3 -> 1000 units: 120001000
+# conv 3x3, 3 in, 16 out      : 448
+# 32 conv 448 dense 3073000
+# 200 conv 448 dense 120001000
+# 1000 conv 448 dense 3000001000`,
+      annotations: {
+        1: 'The conv formula as a function. Note the arguments: kernel size and the two channel counts. Picture width and height are not asked for, because they are not needed.',
+        2: 'k * k * c_in is the size of one cube, + 1 is that cube\'s single bias, and multiplying by c_out repeats it once per filter.',
+        4: 'The dense formula for comparison. Here h and w ARE arguments, because a dense layer needs one weight per input number.',
+        5: 'Every input number wired to every unit, plus one bias per unit.',
+        7: 'The opening arithmetic, run: 120,001,000 weights for one dense layer on one 200x200 colour photo.',
+        8: 'The same job done by a conv layer with 16 filters: 448. That is roughly 268,000 times smaller.',
+        9: 'Now feed all three formulas a 32-pixel picture, a 200-pixel picture and a 1000-pixel picture.',
+        10: 'Print conv and dense side by side for each size. The conv number is 448 on all three lines. The dense number goes from 3 million to 3 billion. Parameter sharing is what makes the conv column flat: the same 448 numbers are reused at every position, so more positions cost more computing but not more weights.',
+      },
+    },
+    {
+      type: 'note',
+      md: `Be precise about what does and does not change with picture size. The **weights** do not: 448 either way. What does grow is the number of stops the kernel makes, so a bigger picture costs more multiplications and stores a bigger feature map. Those are two different budgets, compute and memory, and neither of them is the parameter count. If someone quotes a parameter count that contains the image resolution, they have mixed the two up.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Pooling: shrink on purpose, by hand',
+      md: `A **pooling** layer slides a window over a feature map, exactly like a convolution, but instead of multiplying by weights it just summarises the window down to one number. It has **no weights at all**, so it learns nothing and costs nothing.
+
+- **Max pooling** keeps the largest number in the window. It answers "did this feature turn up anywhere in this window?" and forgets exactly where.
+- **Average pooling** keeps the mean of the window. Smoother, and it keeps the overall brightness rather than just the peak.
+
+Take this 4x4 feature map, and a 2x2 window with stride 2, so the windows do not overlap:
+
+- Row 0: 1, 3, 2, 1
+- Row 1: 5, 6, 1, 2
+- Row 2: 7, 2, 4, 0
+- Row 3: 1, 0, 3, 9
+
+Top-left window is 1, 3, 5, 6. Max = 6, average = 15 / 4 = 3.75. Top-right window is 2, 1, 1, 2. Max = 2, average = 1.5. Bottom-left is 7, 2, 1, 0. Max = 7, average = 2.5. Bottom-right is 4, 0, 3, 9. Max = 9, average = 4.
+
+So max pooling gives 6, 2 on the first row and 7, 9 on the second. The output is 2x2 where the input was 4x4, which is a quarter of the numbers. And the size follows the same formula as before, with the window size playing the part of K: (4 - 2 + 0) / 2 + 1 = 2.
+
+Why bother: it cuts memory and compute fourfold, and it buys a little translation invariance. Nudge the input one pixel and a max-pooled output very often does not change at all, because the largest value in the window is still the largest value in the window.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Max pooling, reproducing the hand example',
+      code: `grid = [[1, 3, 2, 1], [5, 6, 1, 2], [7, 2, 4, 0], [1, 0, 3, 9]]
+
+def max_pool(img, size, stride):
+    out_n = (len(img) - size) // stride + 1
+    out = []
+    for r in range(out_n):
+        row = []
+        for c in range(out_n):
+            vals = []
+            for i in range(size):
+                for j in range(size):
+                    vals.append(img[r * stride + i][c * stride + j])
+            row.append(max(vals))
+        out.append(row)
+    return out
+
+print(max_pool(grid, 2, 2))
+
+# [[6, 2], [7, 9]]`,
+      annotations: {
+        1: 'The same 4x4 feature map used in the hand example above, written as four rows.',
+        3: 'size is the window side, stride is the jump. There is no kernel argument, because pooling has no weights.',
+        4: 'The same output-size formula, with the window size in place of K. (4 - 2) // 2 + 1 = 2.',
+        5: 'Collects the output rows.',
+        6: 'Walk the output rows.',
+        7: 'A fresh row.',
+        8: 'Walk the output columns. Each (r, c) is one window position.',
+        9: 'An empty list to collect the four numbers inside this window. This is the one real difference from convolution: we gather the values instead of weighting them.',
+        10: 'Walk the window rows.',
+        11: 'Walk the window columns.',
+        12: 'Copy the value at this window cell into vals. With stride 2 the windows do not overlap.',
+        13: 'max(vals) is Python\'s built-in largest-of-a-list. Swap it for sum(vals) / len(vals) and you have average pooling instead.',
+        14: 'Finished row goes into the output.',
+        15: 'Hand back the pooled map.',
+        17: 'Prints [[6, 2], [7, 9]], which is the hand computation exactly.',
+      },
     },
     { type: 'visual', component: 'ConvolutionPlayground', props: {} },
     {
       type: 'note',
-      md: `Drive that, do not just watch it. **(1)** Step through with the *edge-detect* kernel on the *edge* image — output stays black across the flat regions and lights up only at the boundary, because the centre 4 cancels its four neighbours exactly when they are all equal. **(2)** Switch to *blur* (nine 0.1s) — the same slide now produces a soft grey smear. Nothing changed except nine numbers. **(3)** Now the point: watch the blue box slide across all 100 positions. **The kernel never changes.** Those same nine numbers are being reused at every single position — that is weight sharing, and you are looking at it.`,
+      md: `Use the playground rather than watching it. Step the blue box through every position and watch one thing: **the kernel never changes**. The same numbers are being reused at every stop. That is parameter sharing, on screen. Then swap the kernel from edge-detect to blur and slide again. The machinery is identical; only the numbers on the little grid are different, and those numbers are what training decides.`,
     },
     {
       type: 'intuition',
-      title: 'Weight sharing — the whole trick, in one comparison',
-      md: `The playground maps a 12×12 input to a 10×10 output. Count both ways:
+      title: 'Worked case: trace a whole small network by hand',
+      md: `Input: a 32x32 colour photo, so 32 x 32 x 3. We will track two things at every layer, the shape and the parameter count, using only the two formulas.
 
-- **Dense:** every one of 144 inputs wired to every one of 100 outputs → 144 × 100 = **14,400 weights**.
-- **Convolution:** one 3×3 kernel, reused at all 100 positions → **9 weights** (+1 bias).
-- 1600× fewer parameters, for the *same* output size.
-- Why it is legal: an edge detector that works at the top-left works at the bottom-right. The feature does not depend on location, so neither should the weights.
-- Free bonus: shift the input, and the output shifts the same way. Translation *equivariance* comes built in — no data augmentation required to get it.`,
+1. **Conv, 3x3, 16 filters, P = 1, S = 1.** Shape: (32 - 3 + 2) / 1 + 1 = 32, so 32 x 32 x 16. Parameters: (3 x 3 x 3 + 1) x 16 = 28 x 16 = **448**.
+2. **Max pool, 2x2, S = 2.** Shape: (32 - 2 + 0) / 2 + 1 = 16, so 16 x 16 x 16. Channels are untouched by pooling. Parameters: **0**.
+3. **Conv, 3x3, 32 filters, P = 1, S = 1.** C_in is now 16, the previous layer's filter count. Shape: (16 - 3 + 2) / 1 + 1 = 16, so 16 x 16 x 32. Parameters: (3 x 3 x 16 + 1) x 32 = 145 x 32 = **4,640**.
+4. **Max pool, 2x2, S = 2.** Shape: (16 - 2) / 2 + 1 = 8, so 8 x 8 x 32. Parameters: **0**.
+5. **Flatten, then dense to 10 classes.** Flatten gives 8 x 8 x 32 = 2,048 numbers. Parameters: 2,048 x 10 + 10 = **20,490**.
+
+Total: 448 + 4,640 + 20,490 = **25,578**. Now look at the split. The two convolution layers, which do all the actual seeing, hold 5,088 parameters. The one small dense layer at the end holds 20,490, which is 80% of the whole model. That ratio is why every layer in this module is a convolution and the dense layer is one line at the end.`,
     },
     {
       type: 'intuition',
-      title: 'Local connectivity — the second saving',
-      md: `Weight sharing says *reuse* the weights. Local connectivity says there were few to begin with.
+      title: 'The classic mistake: a shape crash from forgetting padding',
+      md: `Someone builds a classifier on 32x32 images. Three convolution layers, 3x3 kernels, 32 filters each, then flatten, then dense to 10 classes. They write the flatten size as 32 x 32 x 32 = 32,768, reasoning "the convs do not change the size". They run it and get a shape error at the dense layer, or worse, silently wrong sizes.
 
-- Each output pixel looks at a 3×3 patch, not the whole image. That is **sparse interaction**: 9 connections per output, not 150,528.
-- Justification: pixels far apart are rarely directly related. Long-range structure gets assembled later, by stacking layers.
-- Together: sparse connections (few weights per output) + weight sharing (one set for all outputs) = the parameter count collapses.
-- The prior you are baking in: *local patterns, position-independent*. It is exactly right for images and exactly wrong for, say, tabular data.`,
+**What actually happened.** They left padding at the default, which in most libraries is 'valid', meaning P = 0. Apply the formula three times:
+
+- Layer 1: (32 - 3 + 0) / 1 + 1 = **30**.
+- Layer 2: (30 - 3 + 0) / 1 + 1 = **28**.
+- Layer 3: (28 - 3 + 0) / 1 + 1 = **26**.
+
+So the real flatten size is 26 x 26 x 32 = **21,632**, not 32,768. The dense layer was built expecting 32,768 inputs and is handed 21,632.
+
+**Why the wrong reasoning felt right.** "Convolutions do not change the size" is true only with 'same' padding. With no padding a 3x3 kernel eats one pixel off each side every single layer, because the kernel needs room to sit fully inside. Two pixels per layer, three layers, six pixels gone: 32 becomes 26.
+
+**The fix, and the habit.** Either pass padding='same' so the assumption becomes true, or print the shape after every layer and let the machine tell you. Never hardcode a flatten size you worked out in your head. A stride 2 anywhere in the stack causes the same crash for the same reason, and so does pooling, and the formula catches all three.`,
     },
     {
       type: 'intuition',
-      title: 'The four knobs',
-      md: `A conv layer has four hyperparameters that decide the output size:
+      title: 'Practice problems',
+      md: `Work each one on paper before reading the solution. All five use only the two formulas.
 
-- **Kernel size k** — how big the stamp is. 3×3 is the modern default; 1×1, 5×5, 7×7 all appear.
-- **Stride s** — how far the stamp jumps between stops. s=1 visits every position; s=2 skips every other one and halves the output.
-- **Padding p** — rings of zeros added around the border. Two named settings: **'valid'** = no padding (p=0, output shrinks), **'same'** = enough padding that output size equals input size (for s=1).
-- **Dilation d** — spread the kernel's taps apart with gaps, so a 3×3 covers a 5×5 area with the same 9 weights: bigger reach, no extra parameters.
-- Padding also exists to save the border: without it, corner pixels get looked at once while centre pixels get looked at nine times.`,
+1. Input 28x28, one channel. Conv with a 5x5 kernel, 6 filters, P = 0, S = 1. Give the output shape and the parameter count.
+2. Input 32x32. You want the output to still be 32x32 using a 5x5 kernel at stride 1. What padding P do you need?
+3. A conv layer takes a 64-channel input and produces 128 channels with a 3x3 kernel, biases included. How many parameters?
+4. Input 6x6. Conv with a 3x3 kernel, P = 0, S = 2. Output size?
+5. The same conv layer from question 3 is later fed 512x512 images instead of 32x32 ones. What changes?`,
     },
     {
-      type: 'math',
-      intro: 'THE formula. Memorise this one — it is asked verbatim.',
-      latex: [
-        '\\text{out} = \\left\\lfloor \\frac{n + 2p - k}{s} \\right\\rfloor + 1',
-        '\\text{with dilation } d: \\quad k_{\\text{eff}} = d(k-1)+1 \\;\\Longrightarrow\\; \\text{out} = \\left\\lfloor \\frac{n + 2p - d(k-1) - 1}{s} \\right\\rfloor + 1',
-        '\\text{\'same\' padding for } s=1: \\quad p = \\frac{k-1}{2} \\quad (k=3 \\to p=1,\\; k=5 \\to p=2,\\; k=7 \\to p=3)',
-      ],
+      type: 'intuition',
+      title: 'Practice solutions',
+      md: `**1.** Spatial size: (28 - 5 + 0) / 1 + 1 = 24. Depth equals the filter count, so the output is **24 x 24 x 6**. Parameters: (5 x 5 x 1 + 1) x 6 = 26 x 6 = **156**. The input has one channel, so each filter is a 5x5x1 cube.
+
+**2.** Set the formula equal to 32 and solve. (32 - 5 + 2P) / 1 + 1 = 32, so 27 + 2P = 31, so 2P = 4 and **P = 2**. That agrees with the 'same' rule P = (K - 1) / 2 = (5 - 1) / 2 = 2.
+
+**3.** (3 x 3 x 64 + 1) x 128 = (576 + 1) x 128 = 577 x 128 = **73,856**. The two common slips: forgetting that each filter spans all 64 input channels, which gives the far too small 3 x 3 x 128 = 1,152; and forgetting the biases, which gives 73,728.
+
+**4.** (6 - 3 + 0) / 2 + 1. The division is 3 / 2 = 1.5, which rounds **down** to 1, then + 1 gives **2**. The rounding-down matters here: the kernel starts at column 0 and column 2, and a third start at column 4 would hang two pixels off the edge, so that window is simply dropped.
+
+**5.** The parameter count does not change. It stays **73,856**, because the formula (K x K x C_in + 1) x C_out contains no width or height. What does change is the running cost: 512 x 512 is 256 times more positions than 32 x 32, so 256 times more multiply-and-add work and a feature map holding 256 times more numbers. Weights are fixed by the kernel and the channels; compute and memory scale with the picture.`,
     },
     {
       type: 'note',
-      md: `Three by hand — say each one out loud until it is automatic. **(1)** n=32, k=3, p=1, s=1 → (32 + 2 − 3)/1 = 31, +1 = **32**. Size preserved: that is 'same'. **(2)** n=32, k=3, p=0, s=2 → (32 + 0 − 3)/2 = 29/2 = 14 after flooring, +1 = **15**. Note the floor: the last incomplete window is simply dropped. **(3)** n=224, k=7, p=3, s=2 → (224 + 6 − 7)/2 = 223/2 = 111 floored, +1 = **112**. That is the ResNet stem, and it is why a 224 input becomes 112 after one layer.`,
+      md: `The named architectures built from these parts, LeNet, AlexNet, VGG and ResNet, and the reasons each one was arranged the way it was, are covered in the sibling module *LeNet to ResNet: The Architectures That Mattered*. This module is only the mechanics, and the mechanics are all you need to read that one.`,
     },
     {
       type: 'intuition',
-      title: 'Channels: the third dimension nobody draws',
-      md: `Textbook pictures show a flat 3×3 square sliding over a flat image. Real inputs have depth.
+      title: 'Beyond the basics - skip this on your first read',
+      md: `Four extras, all built on the two formulas above.
 
-- An RGB input is 224×224×**3**. A mid-network activation might be 28×28×**256**.
-- A kernel always spans **all** input channels. A "3×3 kernel" on a 64-channel input is really 3×3×64 = **576 weights** — one little cube, not a square.
-- That cube slides over height and width only. It does not slide over channels; it consumes them all at once.
-- One cube produces one feature map, i.e. **one output channel**. Want 128 output channels? Use 128 separate cubes.
-- So: **number of filters = number of output channels**. That is the layer's only channel knob.`,
-    },
-    {
-      type: 'math',
-      intro: 'Parameter counting. The second formula interviews demand — and the +1 is the bias, one per filter.',
-      latex: [
-        '\\text{params} = (k_h \\times k_w \\times C_{\\text{in}} + 1) \\times C_{\\text{out}}',
-        '\\text{Example: } 3\\times3 \\text{ conv, } C_{\\text{in}}=64,\\; C_{\\text{out}}=128',
-        '(3 \\times 3 \\times 64 + 1) \\times 128 = (576 + 1) \\times 128 = 577 \\times 128 = 73{,}856',
-        '\\text{Note what is absent: } n. \\;\\text{Input height and width never enter the count.}',
-      ],
-    },
-    {
-      type: 'note',
-      md: `That last line is the trap, and interviewers set it deliberately. Feed that same layer a 32×32 image or a 512×512 image — it still has 73,856 parameters. Image size changes the *activation* memory (how many numbers flow through) and the *FLOPs* (how many multiply-adds), never the weight count. If a candidate's parameter answer contains the input resolution, they have confused weights with activations.`,
-    },
-    {
-      type: 'code',
-      lang: 'python',
-      title: 'Convolution from scratch — and checked against a hand computation',
-      code: `import numpy as np
-
-def conv2d_valid(img, kernel):
-    kh, kw = kernel.shape
-    H, W = img.shape
-    out_h = H - kh + 1                       # out = (n + 2p - k)/s + 1, here p=0 s=1
-    out_w = W - kw + 1
-    out = np.zeros((out_h, out_w))
-    for r in range(out_h):
-        for c in range(out_w):
-            patch = img[r:r + kh, c:c + kw]  # the receptive field of this output pixel
-            out[r, c] = (patch * kernel).sum()   # multiply-accumulate: the whole operation
-    return out
-
-img = np.array([[1, 2, 3, 0],
-                [4, 5, 6, 1],
-                [7, 8, 9, 2],
-                [0, 1, 2, 3]], dtype=float)
-
-kernel = np.array([[ 0, -1,  0],
-                   [-1,  4, -1],
-                   [ 0, -1,  0]], dtype=float)
-
-out = conv2d_valid(img, kernel)
-print('input', img.shape, '-> output', out.shape)
-print(out)
-
-by_hand = np.array([[0., 6.], [10., 18.]])
-assert np.allclose(out, by_hand), out
-print('matches hand computation:', by_hand.tolist())
-
-# input (4, 4) -> output (2, 2)
-# [[ 0.  6.]
-#  [10. 18.]]
-# matches hand computation: [[0.0, 6.0], [10.0, 18.0]]`,
-      annotations: {
-        6: 'The output-size formula, in code. 4 − 3 + 1 = 2, so a 4×4 input gives a 2×2 output.',
-        11: 'This slice IS the receptive field: the exact input pixels that output[r][c] can ever see.',
-        12: 'Elementwise multiply, then sum. Every convolution ever computed is this line, tiled.',
-        28: 'Hand-check on out[0][0]: centre 5 with neighbours 2, 4, 6, 8 → 4·5 − 2 − 4 − 6 − 8 = 0. Flat region, edge detector stays silent. out[1][1]: 4·9 − 6 − 8 − 2 − 2 = 18 — a real edge.',
-        29: 'The assert is the test. Break the loop bounds or the slicing and this line fires.',
-      },
-    },
-    {
-      type: 'note',
-      md: `Honest footnote: what that code computes — and what PyTorch's \`Conv2d\` computes — is technically **cross-correlation**. True mathematical convolution flips the kernel 180° first. Nobody bothers, because the kernel is *learned*: it simply learns the flipped version. The name stuck; the flip did not. Say this in an interview and you sound like you have read the source.`,
-    },
-    {
-      type: 'intuition',
-      title: 'Pooling: throw away detail on purpose',
-      md: `A pooling layer slides a window (usually 2×2, stride 2) and reduces each window to one number. No weights at all.
-
-- **Max pooling** keeps the largest value: "did this feature appear anywhere in this window?" Position within the window is discarded.
-- **Average pooling** keeps the mean: smoother, keeps intensity information, less popular in the middle of a network.
-- Why do it: it **downsamples** (2×2/s2 quarters the spatial size, cutting memory and compute), and it grants **small translation invariance** — shift the input one pixel and a max-pooled output often does not change at all.
-- Note the difference from convolution: conv is *equivariant* (shift in → shift out), pooling adds *invariance* (shift in → no change out). You want both, in that order.
-- The modern trend: **replace pooling with a stride-2 convolution**. It downsamples too, but *learns* how to summarise instead of hardcoding "take the max". ResNet and most modern nets do this; pooling survives mainly in the stem and as global pooling at the end.`,
-    },
-    {
-      type: 'intuition',
-      title: 'Receptive field: what one neuron can possibly see',
-      md: `Pick one number in the final feature map. Trace backwards through every layer. The patch of *input pixels* that can influence it is its **receptive field**.
-
-- One 3×3 conv: receptive field 3×3. A neuron there can never see a 5-pixel-wide object in full.
-- Stack another 3×3 on top: each of its 9 inputs already saw 3×3, and they overlap — total reach **5×5**.
-- Add a 2×2/s2 pool and the field starts growing *twice as fast*, because every later step now moves two input pixels at a time.
-- This is the practical constraint nobody mentions until the model fails: **if the receptive field is smaller than the object, the network literally cannot see the whole thing.** Classifying a 200-pixel dog with a 40-pixel receptive field is guesswork.
-- Depth, stride, and dilation are the three ways to grow it. Only depth also adds representational power.`,
-    },
-    {
-      type: 'math',
-      intro: 'The recurrence. r = receptive field, j = jump (how many input pixels one step at this layer covers). Start r=1, j=1.',
-      latex: [
-        'r_l = r_{l-1} + (k_l - 1)\\, j_{l-1} \\qquad j_l = j_{l-1} \\cdot s_l',
-        '\\text{conv3}\\to r{=}3,\\,j{=}1 \\;\\to\\; \\text{conv3}\\to r{=}5,\\,j{=}1 \\;\\to\\; \\text{pool2s2}\\to r{=}6,\\,j{=}2',
-        '\\;\\to\\; \\text{conv3}\\to r{=}10,\\,j{=}2 \\;\\to\\; \\text{conv3}\\to r{=}14,\\,j{=}2 \\;\\to\\; \\text{pool2s2}\\to r{=}16,\\,j{=}4',
-      ],
-    },
-    {
-      type: 'intuition',
-      title: 'Two 3×3 beat one 5×5 — the VGG argument',
-      md: `Both stacks reach the same 5×5 of input. VGG's whole contribution was noticing you should always take the pair.
-
-- **Same receptive field.** 3 → then 3 again → 5. Verified by the recurrence above.
-- **Fewer parameters.** With 64 channels in and out: one 5×5 costs (25·64+1)·64 = 102,464. Two 3×3 cost 2 × (9·64+1)·64 = 73,856. That is **28% cheaper**.
-- **More non-linearity.** Two convs means two ReLUs instead of one — a strictly more expressive function for less money.
-- Push it further: three 3×3 reach 7×7 for 27C² versus 49C² — **45% cheaper**, three ReLUs.
-- This is why almost every architecture after 2014 is a tower of 3×3 convolutions. The only surviving large kernel is usually the 7×7 stem, which runs on 3 channels where it is cheap.`,
-    },
-    {
-      type: 'math',
-      intro: 'The comparison, with C_in = C_out = 64.',
-      latex: [
-        '\\underbrace{(5\\times5\\times64+1)\\times64}_{\\text{one }5\\times5} = 1601 \\times 64 = 102{,}464',
-        '\\underbrace{2\\times\\left[(3\\times3\\times64+1)\\times64\\right]}_{\\text{two }3\\times3} = 2 \\times 36{,}928 = 73{,}856',
-        '73{,}856 \\,/\\, 102{,}464 \\approx 0.72 \\quad \\Rightarrow \\quad 28\\% \\text{ fewer parameters, same reach, one extra ReLU}',
-      ],
-    },
-    {
-      type: 'note',
-      md: `The standard block is **conv → norm → activation → (pool)**. Norm goes *before* the activation because that is the point of it: it centres and scales the pre-activation values so they land in the responsive part of the non-linearity instead of drifting into a saturated or all-negative region. A practical consequence to mention in interviews: **set \`bias=False\` on a conv that feeds a BatchNorm** — BN subtracts the batch mean, which erases any constant the bias added, so those parameters do literally nothing. (Post-activation norm exists and is used in some transformer variants; for CNNs, conv → BN → ReLU is the default you should quote.)`,
-    },
-    {
-      type: 'intuition',
-      title: '1×1 convolutions, honestly',
-      md: `A 1×1 kernel looks pointless — it sees a single pixel. It is not pointless, because it still spans every channel.
-
-- A 1×1 conv on a 256-channel input is a 256-length vector of weights per filter: it **mixes channels** at each position independently.
-- Main use: **change the channel count cheaply**. 256 → 64 costs (256+1)·64 = 16,448 parameters and touches no spatial extent.
-- That is the **bottleneck** trick: squeeze channels with 1×1, do the expensive 3×3 in the narrow space, expand back with 1×1.
-- ResNet-50 numbers: a plain 3×3 at 256→256 costs 590,080. The 1×1/3×3/1×1 bottleneck costs 16,448 + 36,928 + 16,640 = 70,016 — **8.4× less** for a comparable job.
-- It also adds a non-linearity per 1×1 (they are followed by norm+ReLU too), so it is not purely a resize.`,
-    },
-    {
-      type: 'code',
-      lang: 'python',
-      title: 'End-to-end shape trace — every layer, both formulas, real output',
-      code: `def out_size(n, k, p, s):
-    return (n + 2 * p - k) // s + 1        # floor division IS the floor()
-
-def conv_params(k, c_in, c_out):
-    return (k * k * c_in + 1) * c_out      # +1 = one bias per filter
-
-h, w, c, total = 32, 32, 3, 0
-print(f'input           {h}x{w}x{c}')
-
-h = w = out_size(h, 3, 1, 1)               # 'same' padding: 32 -> 32
-p = conv_params(3, c, 16); c = 16; total += p
-print(f'conv3x3 p1 s1   {h}x{w}x{c}   params {p}')
-
-h = w = out_size(h, 2, 0, 2)               # pooling halves it
-print(f'maxpool2 s2     {h}x{w}x{c}   params 0')
-
-h = w = out_size(h, 3, 1, 1)
-p = conv_params(3, c, 32); c = 32; total += p
-print(f'conv3x3 p1 s1   {h}x{w}x{c}   params {p}')
-
-h = w = out_size(h, 2, 0, 2)
-print(f'maxpool2 s2     {h}x{w}x{c}   params 0')
-
-flat = h * w * c
-p = flat * 10 + 10; total += p
-print(f'flatten         {flat}  ->  dense 10   params {p}')
-print(f'TOTAL {total}   dense share {p / total:.1%}')
-print(f'global avg pool instead: {c * 10 + 10} params, total {total - p + c * 10 + 10}')
-
-# input           32x32x3
-# conv3x3 p1 s1   32x32x16   params 448
-# maxpool2 s2     16x16x16   params 0
-# conv3x3 p1 s1   16x16x32   params 4640
-# maxpool2 s2     8x8x32   params 0
-# flatten         2048  ->  dense 10   params 20490
-# TOTAL 25578   dense share 80.1%
-# global avg pool instead: 330 params, total 5418`,
-      annotations: {
-        2: 'Integer division in Python floors for positive numbers — exactly the floor in the formula.',
-        5: 'One bias per filter, not per position. The bias is shared across the feature map just like the weights.',
-        10: '\'same\' padding (p=1 for k=3) holds the size at 32: ⌊(32 + 2 − 3)/1⌋ + 1 = 32.',
-        11: 'First conv: (3·3·3 + 1) · 16 = 28 · 16 = 448. Three input channels because the image is RGB.',
-        18: 'Second conv: (3·3·16 + 1) · 32 = 145 · 32 = 4,640. C_in is 16 — the previous layer\'s filter count.',
-        25: '8 · 8 · 32 = 2,048 flattened, times 10 classes, plus 10 biases = 20,490.',
-        27: 'The punchline: two conv layers hold 5,088 parameters; the single dense layer holds 20,490 — 80% of the model.',
-        28: 'Global average pooling collapses each 8×8 map to its mean, giving a 32-vector. Dense 32→10 = 330. The model shrinks 4.7× and stops being resolution-locked.',
-      },
-    },
-    {
-      type: 'intuition',
-      title: 'Global average pooling: deleting the last dense layer',
-      md: `That 80% figure is not a toy artifact. VGG-16's first fully connected layer alone (7×7×512 = 25,088 inputs → 4,096 units) is 25,088 × 4,096 + 4,096 ≈ **102.8 million** parameters, out of ~138M total.
-
-- **Global average pooling (GAP)** replaces flatten+dense: average each C_out feature map down to a single number, giving a length-C_out vector.
-- Cost: **zero parameters**. Then one small dense layer maps C_out → classes.
-- Second win: the network stops caring about input resolution. Flatten hardcodes the spatial size into the dense layer's shape; GAP averages whatever it gets.
-- Third win: fewer parameters in the classifier means far less overfitting — GAP acts as a structural regulariser.
-- Every modern classifier (ResNet onward) ends conv → GAP → one dense layer. If you write flatten → 4096 → 4096 today, you are writing 2014.`,
-    },
-    {
-      type: 'note',
-      md: `Two formulas carry this entire module, and both get asked in the first ten minutes of a vision interview: **shape** = ⌊(n + 2p − k)/s⌋ + 1, applied per layer; **parameters** = (k_h × k_w × C_in + 1) × C_out, and the input size is nowhere in it. Everything else here — weight sharing, pooling, receptive fields, the VGG stack, the bottleneck — is an argument about *why* those numbers come out small.`,
+- **Two 3x3 beat one 5x5.** Two stacked 3x3 convolutions reach 5x5 of input, the same as one 5x5, as the receptive-field argument earlier shows. With 64 channels in and out, one 5x5 costs (25 x 64 + 1) x 64 = 102,464 while two 3x3 cost 2 x (9 x 64 + 1) x 64 = 73,856. That is 28% cheaper for the same reach, and it puts two activation functions in the path instead of one. This is why nearly every modern network is a tower of 3x3 kernels.
+- **The 1x1 convolution.** A 1x1 kernel sees a single pixel, which sounds useless, but it still spans every channel. On a 256-channel input each filter is a 256-long vector of weights, so a 1x1 conv is a learned mixing of the channels at each position. Its main job is changing the channel count cheaply: 256 down to 64 costs (256 + 1) x 64 = 16,448 parameters and touches no spatial extent at all.
+- **Strided convolution instead of pooling.** A conv with S = 2 halves the size just as a 2x2 pool does, but it *learns* how to summarise the window rather than always taking the max. It costs parameters where pooling costs none. Most networks after ResNet downsample this way.
+- **Global average pooling.** Instead of flattening the final feature maps into a giant dense layer, average each feature map down to a single number, giving one number per channel. It costs zero parameters, and it kills exactly the 80%-of-the-model dense layer from the worked case. It also stops the network caring about input resolution, because averaging works on any size. What it gives up is coarse position information, which is fine for classification and wrong for anything that must say *where*.`,
     },
   ],
   quiz: [
     {
-      question:
-        'Input is 28×28×1. You apply a conv layer with 6 filters, kernel 5×5, stride 1, no padding. What is the output shape?',
+      question: 'Input is 28x28 with 1 channel. Conv layer: 6 filters, kernel 5x5, stride 1, no padding. What is the output shape?',
       options: [
         {
-          text: '24×24×6',
-          explanation:
-            'Correct. Spatial: (28 + 0 − 5)/1 + 1 = 24, both dimensions. Depth = number of filters = 6. This is literally LeNet-5 layer one.',
+          text: '24x24x6',
+          explanation: 'Correct. (28 - 5 + 0) / 1 + 1 = 24 in each direction, and the depth is the number of filters, which is 6.',
         },
         {
-          text: '28×28×6',
-          explanation:
-            'That would need padding p=2 to hold the size. With no padding, a 5×5 kernel eats 4 pixels off each dimension.',
+          text: '28x28x6',
+          explanation: 'That would need P = 2 to hold the size. With no padding a 5x5 kernel eats 2 pixels off each side.',
         },
         {
-          text: '24×24×1',
-          explanation:
-            'The spatial part is right but the depth is wrong: each of the 6 filters produces its own feature map, so output depth is 6.',
+          text: '24x24x1',
+          explanation: 'The spatial part is right, but each of the 6 filters produces its own feature map, so the depth is 6.',
         },
       ],
       correct: 0,
     },
     {
-      question: 'A 3×3 conv layer takes a 64-channel input and produces 128 channels, with biases. How many parameters?',
+      question: 'A 3x3 conv layer takes a 64-channel input and produces 128 channels, biases included. How many parameters?',
       options: [
         {
           text: '1,152',
-          explanation:
-            'This is 3·3·128 — it forgot that the kernel spans ALL 64 input channels. Each filter is a 3×3×64 cube, not a 3×3 square.',
+          explanation: 'This is 3 x 3 x 128, which forgets that each filter spans all 64 input channels. A filter here is a 3x3x64 cube, not a 3x3 square.',
         },
         {
           text: '73,728',
-          explanation:
-            'Close: 3·3·64·128 = 73,728 is the weight count, but it drops the biases. One bias per filter adds 128 more.',
+          explanation: 'That is 3 x 3 x 64 x 128, the weight count with the biases dropped. One bias per filter adds 128 more.',
         },
         {
           text: '73,856',
-          explanation:
-            'Correct. (3 × 3 × 64 + 1) × 128 = 577 × 128 = 73,856. Kernel area × input channels + bias, all times output channels.',
+          explanation: 'Correct. (3 x 3 x 64 + 1) x 128 = 577 x 128 = 73,856.',
         },
       ],
       correct: 2,
     },
     {
-      question: 'Input 64×64. Conv with kernel 3, stride 2, padding 1. Output spatial size?',
+      question: 'Input 64x64. Conv with kernel 3, stride 2, padding 1. What is the output spatial size?',
       options: [
         {
           text: '31',
-          explanation:
-            'This is what you get if you forget the +1 at the end: ⌊63/2⌋ = 31 is only the number of jumps, not the number of positions.',
+          explanation: 'This drops the + 1 at the end. 63 / 2 rounded down is 31, but that counts the jumps, not the starting positions.',
         },
         {
           text: '32',
-          explanation:
-            'Correct. ⌊(64 + 2 − 3)/2⌋ + 1 = ⌊63/2⌋ + 1 = 31 + 1 = 32. Stride 2 with same-style padding halves the size — the standard downsampling conv.',
+          explanation: 'Correct. (64 - 3 + 2) / 2 + 1 = 63 / 2 rounded down + 1 = 31 + 1 = 32. Stride 2 roughly halves the size.',
         },
         {
           text: '64',
-          explanation: 'Stride 2 means the kernel visits every other position; the output cannot stay at input size.',
+          explanation: 'Stride 2 means the kernel visits every other position, so there is no way the output stays at input size.',
         },
       ],
       correct: 1,
     },
     {
-      question: 'What does "weight sharing" actually mean in a conv layer?',
+      question: 'What does parameter sharing mean in a conv layer?',
       options: [
         {
-          text: 'The same kernel values are reused at every spatial position of the input',
-          explanation:
-            'Correct. One set of k×k×C_in weights is applied at every location — which is why the parameter count does not depend on image size, and why a detected feature transfers across positions.',
+          text: 'The same kernel numbers are used at every position of the input',
+          explanation: 'Correct. One set of K x K x C_in weights is applied at every stop, which is exactly why the parameter count does not contain the picture size.',
         },
         {
-          text: 'All filters in the layer share one set of weights',
-          explanation:
-            'No — filters are independent and each learns a different pattern. Sharing happens across positions, not across filters.',
+          text: 'All filters in the layer use one shared set of weights',
+          explanation: 'No. Filters are independent and each learns a different pattern. The sharing is across positions, not across filters.',
         },
         {
-          text: 'Weights are shared between the training and inference passes',
-          explanation:
-            'True of every layer in any network, and not what the term means. Sharing here is spatial.',
+          text: 'The weights are shared between the forward and backward pass',
+          explanation: 'That is true of every layer in any network and is not what the term means. The sharing here is spatial.',
         },
       ],
       correct: 0,
     },
     {
-      question: 'Why do architectures stack two 3×3 convs instead of using one 5×5?',
+      question: 'How many learnable parameters does a 2x2 max-pooling layer with stride 2 have?',
       options: [
         {
-          text: 'The 5×5 has a larger receptive field, but 3×3 is faster per layer',
-          explanation:
-            'The receptive fields are the SAME — two stacked 3×3 convs reach 5×5 of input. That equality is the whole basis of the argument.',
+          text: '4, one per window cell',
+          explanation: 'Pooling has no kernel to learn. Taking the largest value in a window is a fixed rule with nothing to tune.',
         },
         {
-          text: 'Same 5×5 receptive field, ~28% fewer parameters, and two non-linearities instead of one',
-          explanation:
-            'Correct. With 64 channels: 73,856 vs 102,464 parameters, identical reach, plus an extra ReLU of expressiveness. The VGG argument.',
+          text: '0, because pooling is a fixed operation',
+          explanation: 'Correct. Zero, whatever the number of channels. That is also the argument for replacing pooling with a stride-2 convolution, which pays parameters in exchange for learning how to summarise.',
         },
         {
-          text: '3×3 kernels can detect diagonal edges that 5×5 kernels cannot',
-          explanation:
-            'Kernel size does not restrict orientation — a 5×5 can represent anything a 3×3 can, and more. The argument is cost and depth, not capability.',
+          text: 'It depends on the number of input channels',
+          explanation: 'Pooling runs separately on each channel but still learns nothing, so the count is 0 regardless of depth.',
         },
       ],
       correct: 1,
     },
     {
-      question: 'How many learnable parameters does a 2×2 max-pooling layer with stride 2 have?',
-      options: [
-        {
-          text: '4 — one per window cell',
-          explanation:
-            'Pooling has no kernel to learn. Taking the max is a fixed operation with nothing to tune.',
-        },
-        {
-          text: '0 — pooling is a fixed operation',
-          explanation:
-            'Correct. Zero parameters. That is also the argument for replacing it with a stride-2 conv, which pays parameters in exchange for learning HOW to downsample.',
-        },
-        {
-          text: 'Depends on the number of input channels',
-          explanation:
-            'Pooling runs independently per channel but still learns nothing — the count is 0 regardless of depth.',
-        },
-      ],
-      correct: 1,
-    },
-    {
-      question: 'What is a 1×1 convolution good for?',
-      options: [
-        {
-          text: 'Mixing information across channels and changing the channel count cheaply',
-          explanation:
-            'Correct. It has no spatial extent but spans all C_in channels, so it is a learned per-pixel channel projection — the basis of the bottleneck block (256→64→256).',
-        },
-        {
-          text: 'Nothing — it just copies the input',
-          explanation:
-            'That would be true only for a single-channel input with weight 1. Across 256 channels it is a full linear mixing of the depth dimension.',
-        },
-        {
-          text: 'Increasing the receptive field without adding parameters',
-          explanation:
-            'A 1×1 conv leaves the receptive field completely unchanged. Growing the field without parameters is what DILATION does.',
-        },
-      ],
-      correct: 0,
-    },
-    {
-      question:
-        'A conv layer is fed 32×32 images, then later the same layer is fed 512×512 images. What changes?',
+      question: 'The same conv layer is fed 32x32 images, then later 512x512 images. What changes?',
       options: [
         {
           text: 'The parameter count grows with the image size',
-          explanation:
-            'The classic trap. Look at the formula: (k_h × k_w × C_in + 1) × C_out contains no n. Weights are shared across positions, so image size is absent.',
+          explanation: 'Look at the formula: (K x K x C_in + 1) x C_out has no width or height in it. Weights are shared across positions.',
         },
         {
           text: 'Nothing changes at all',
-          explanation:
-            'The weights are unchanged, but activation memory and FLOPs scale with the number of positions — a 512×512 input is 256× more positions to compute.',
+          explanation: 'The weights are unchanged, but a 512x512 input has 256 times more kernel positions, so the compute and the feature-map memory both grow.',
         },
         {
-          text: 'Parameters stay identical; activation memory and FLOPs scale with the number of positions',
-          explanation:
-            'Correct. Weights are fixed by (k, C_in, C_out); the cost of *running* the layer scales with spatial size. Separating weights from activations is the point of the question.',
+          text: 'The parameters stay identical, while compute and feature-map memory grow with the number of positions',
+          explanation: 'Correct. Weights are fixed by kernel size and channel counts; the cost of running the layer scales with the picture size. Keeping those two budgets separate is the point.',
         },
       ],
       correct: 2,
@@ -482,180 +545,135 @@ print(f'global avg pool instead: {c * 10 + 10} params, total {total - p + c * 10
   ],
   interviewQuestions: [
     {
-      question:
-        'Why not just flatten an image and use dense layers? Give me the numbers.',
+      question: 'Why not just flatten an image and use dense layers? Give me numbers.',
       answer:
-        'Three reasons, and lead with the arithmetic: a 224×224×3 image is 150,528 inputs, so one dense layer of 1000 units is 150,528,000 weights — more than GPT-2 small, for a single layer. Beyond cost: (1) flattening destroys spatial structure — adjacent pixels become arbitrary indices and the network must relearn adjacency from data; (2) no translation invariance — a cat shifted 20 pixels hits an entirely different set of weights, so the model learns "cat at position X". A convolution encodes locality and position-independence as an architectural prior instead of hoping the data teaches them. A dense layer is not wrong, it is just an enormously wasteful way to express a function we already know the shape of.',
-      isCaseBased: false,
-    },
-    {
-      question:
-        'Count the parameters: input 224×224×3, then conv 7×7/64 filters, then conv 3×3/128, then conv 1×1/32. Walk me through it.',
-      answer:
-        'Formula: (k_h × k_w × C_in + 1) × C_out. Layer 1: (7·7·3 + 1) × 64 = (147+1) × 64 = 148 × 64 = 9,472. Layer 2: C_in is now 64, so (3·3·64 + 1) × 128 = 577 × 128 = 73,856. Layer 3: (1·1·128 + 1) × 32 = 129 × 32 = 4,128. Total 87,456. Two things to say unprompted: the input resolution 224 appears nowhere — weights are shared across positions, so parameters are independent of image size; and each layer\'s C_in is the previous layer\'s filter count, which is where most people slip. If the layer feeds a BatchNorm, drop the +1: the bias is redundant because BN subtracts the mean anyway.',
+        'Lead with the arithmetic. A 200x200 colour image is 200 x 200 x 3 = 120,000 numbers, so one dense layer of 1,000 units is 120,000,000 weights, for a single layer, on a small photo. Cost is only the first problem. Second, flattening throws away which pixels were adjacent: two touching pixels become arbitrary far-apart indices, and the layer has to learn adjacency from data. Third, there is no translation invariance: shift the picture one pixel and every value lands on a different weight, so the model learns "cat in the middle" rather than "cat". A convolution builds locality and position-independence into the layer instead of hoping the data teaches them, and the same job costs 448 parameters with 16 filters.',
       isCaseBased: false,
     },
     {
       question: 'Give me the output-size formula and explain each term physically.',
       answer:
-        'out = ⌊(n + 2p − k)/s⌋ + 1. n is the input side; 2p is padding added on both sides; subtracting k accounts for the kernel needing k pixels to sit anywhere at all; dividing by s counts how many strided jumps fit; the +1 counts the starting position itself. The floor drops the final incomplete window. Worked: n=32, k=3, p=1, s=1 → 32 (that is \'same\', which for stride 1 needs p=(k−1)/2). n=224, k=7, p=3, s=2 → ⌊223/2⌋+1 = 112, the ResNet stem. With dilation d the kernel effectively becomes d(k−1)+1 wide, so substitute that for k. Pooling uses the same formula with the pool window as k.',
+        'out = floor((W - K + 2P) / S) + 1. It is a count of how many places the kernel fits. W is the input side. 2P is the padding added to both sides. Subtracting K accounts for the kernel needing K pixels of room to sit anywhere at all, so the last legal starting position is W + 2P - K. Dividing by S counts how many strided jumps fit into that span, and the + 1 counts the starting position itself. The floor drops a final window that would hang off the edge. Worked: W = 32, K = 3, P = 1, S = 1 gives 32, which is what \'same\' padding means; \'same\' at stride 1 needs P = (K - 1) / 2. Pooling uses the identical formula with the window size in place of K.',
       isCaseBased: false,
     },
     {
-      question: 'What is a receptive field, how do you compute it, and why should anyone care?',
+      question: 'Count the parameters: input 224x224x3, then conv 7x7 with 64 filters, then conv 3x3 with 128 filters, then conv 1x1 with 32 filters.',
       answer:
-        'It is the region of the *input image* that can influence one particular output unit. Compute it with r_l = r_{l−1} + (k_l − 1)·j_{l−1}, where j is the cumulative stride (j_l = j_{l−1}·s_l), starting at r=1, j=1. Two 3×3 convs give 5; add a 2×2/s2 pool and the jump doubles, so subsequent layers grow the field twice as fast. Why care: if the receptive field is smaller than the object you are trying to recognise, no amount of training fixes it — the unit physically cannot see the whole thing. It is the first thing to check when a segmentation model handles small objects well and large ones badly. Growth levers: depth (adds capacity too), stride/pooling (cheap but loses resolution), dilation (free reach, but can cause gridding artifacts).',
+        'Formula: (K x K x C_in + 1) x C_out. Layer 1: (7 x 7 x 3 + 1) x 64 = 148 x 64 = 9,472. Layer 2: C_in is now 64, the previous filter count, so (3 x 3 x 64 + 1) x 128 = 577 x 128 = 73,856. Layer 3: (1 x 1 x 128 + 1) x 32 = 129 x 32 = 4,128. Total 87,456. Two things worth saying unprompted: the 224 never appears, because weights are shared across positions, so parameters are independent of image size; and each layer\'s C_in is the previous layer\'s number of filters, which is where most slips happen.',
       isCaseBased: false,
     },
     {
-      question: 'Max pooling vs average pooling vs strided convolution — pick one and defend it.',
+      question: 'What is a receptive field, and why should anyone care?',
       answer:
-        'Max pooling asks "did this feature appear anywhere in the window" and discards where — it gives a small translation invariance and is the classic default. Average pooling preserves intensity and smooths, which is why it survives as *global* average pooling at the head but rarely mid-network: averaging a strong activation with three weak ones dilutes the signal. Strided convolution is the modern default mid-network: it downsamples like pooling but *learns* the summary instead of hardcoding max, at the cost of parameters and compute. My default: stride-2 convs for downsampling inside the network, global average pooling at the head, max pooling only in a stem where cheapness matters. The honest caveat: the empirical difference is modest — this is a defensible-preference question, not a right-answer question.',
+        'The receptive field of one output number is the patch of input pixels that can influence it. One 3x3 conv gives a 3x3 field. Stack a second 3x3 and each of its nine inputs already saw a 3x3 patch, and those overlap, so the reach becomes 5x5. Add a 2x2 stride-2 pool and every later step now moves two input pixels at a time, so the field grows twice as fast from there on. Why it matters: if the receptive field is smaller than the object you want to recognise, no amount of training fixes it, because the unit physically cannot see the whole object. It is the first thing to check when a model handles small objects well and large ones badly, and it costs nothing to check because it is pure arithmetic.',
       isCaseBased: false,
     },
     {
-      question:
-        'Explain why almost every architecture after 2014 is built from 3×3 convolutions.',
+      question: 'Max pooling, average pooling, or a stride-2 convolution. Pick one for downsampling and defend it.',
       answer:
-        'Two stacked 3×3 convs have the same 5×5 receptive field as one 5×5 conv, but with 64 channels cost 73,856 parameters instead of 102,464 — 28% less — and give two ReLUs instead of one, so strictly more expressive for less money. Three 3×3 reach 7×7 for 27C² versus 49C², 45% cheaper. So any large kernel can be decomposed into a cheaper, deeper, more non-linear stack. The exception that proves it: the 7×7 stem, which runs on a 3-channel input where large kernels are cheap and you want a big early receptive field on the full-resolution image. (Large kernels have made a partial comeback in ConvNeXt-style depthwise designs, where the cost math is different — worth mentioning if you want to show you keep up.)',
+        'Max pooling asks "did this feature appear anywhere in the window" and discards where, which buys a small translation invariance for zero parameters. Average pooling keeps the mean, which is smoother and preserves overall intensity, but averaging one strong response with three weak ones dilutes the signal, so it is unpopular mid-network and common at the very end as global average pooling. A stride-2 convolution downsamples the same way but learns how to summarise instead of always taking the max, at the cost of parameters and compute. My default is stride-2 convs for downsampling inside the network and global average pooling at the head. The honest caveat is that the measured difference is modest; this is a defensible-preference question, not a right-answer question.',
       isCaseBased: false,
     },
     {
-      question:
-        'Case: your CNN hits 96% on the validation set but collapses in production. Investigation shows the training images always had the object centred; production images have it anywhere in frame. What went wrong and how do you fix it?',
+      question: 'Case: a colleague hardcodes the flatten size as 32 x 32 x 32 after three 3x3 conv layers on 32x32 input, and the model errors at the dense layer. Diagnose it.',
       answer:
-        'Convolutions give translation *equivariance*, not invariance — a shifted input produces a shifted feature map, which is only useful if the head ignores position. If the model ends in flatten → dense, that head is position-*dependent*: each spatial location has its own weights, so an off-centre object lands on weights that never learned it. Fixes, in order: (1) replace flatten+dense with **global average pooling** — averaging over positions makes the head genuinely translation-invariant and kills most of the failure; (2) **random-crop and translate augmentation** so the training distribution actually contains off-centre objects; (3) check whether pooling was stripped out — some invariance comes from there. Tradeoff to name: GAP throws away coarse position information, which is fine for classification and wrong for localisation — a detector needs that spatial head, and would fix this with augmentation and anchor design instead.',
+        'They assumed convolutions preserve size, which is only true with \'same\' padding. The library default is \'valid\', meaning P = 0, so apply the formula three times: (32 - 3) + 1 = 30, then (30 - 3) + 1 = 28, then (28 - 3) + 1 = 26. The real flatten size is 26 x 26 x 32 = 21,632, not 32,768, so the dense layer was built for 32,768 inputs and handed 21,632. Mechanically, a 3x3 kernel with no padding eats one pixel off each side per layer because it needs room to sit fully inside, so three layers cost six pixels. Two fixes: pass padding=\'same\' so the assumption becomes true, or never hardcode a flatten size and print the shape after every layer instead. A stride greater than 1 or a pooling layer causes the same class of bug, and the one formula catches all of them.',
       isCaseBased: true,
     },
     {
-      question:
-        'Case: your CNN has only 5 million parameters but training OOMs at batch size 32 on a 24GB GPU. A colleague says "just prune the model". Is that the right move?',
+      question: 'Case: a CNN reaches 96% on validation but collapses in production. Training images always had the object centred; production images have it anywhere in frame. What went wrong and how do you fix it?',
       answer:
-        'Almost certainly not — the memory is in activations, not weights. 5M parameters in fp32 is ~20MB, ~60MB with Adam states; that is not what filled 24GB. Early conv layers operate at high resolution with many channels: a 224×224×64 activation is 3.2M floats per image, and backprop must retain activations for every layer to compute gradients, times batch size 32. Diagnosis: print per-layer output shapes and multiply out. Fixes ranked: (1) reduce batch size and use gradient accumulation — zero quality cost; (2) mixed precision (fp16/bf16) — roughly halves activation memory; (3) gradient checkpointing — recompute activations in the backward pass, trading ~30% compute for a large memory saving; (4) downsample earlier in the network (a stride-2 stem) which is a real architecture change; (5) only then touch parameter count. The interview point is the distinction: parameters scale with (k, C_in, C_out); activation memory scales with resolution × channels × batch.',
+        'A convolution gives equivariance, not invariance: shift the input and the feature map shifts with it. That only helps if whatever reads the feature map ignores position. If the model ends in flatten then dense, that head is position-dependent, because each spatial location has its own weights, so an off-centre object lands on weights that never saw it during training. Fixes in order: replace flatten plus dense with global average pooling, which averages over positions and makes the head genuinely position-independent, and which also deletes most of the model\'s parameters; add random-crop and translation augmentation so the training data actually contains off-centre objects; and check whether pooling was removed, since some invariance comes from there. The tradeoff to name out loud: global average pooling throws away coarse position, which is fine for classification and wrong for detection or segmentation, where you keep a spatial head and fix this with augmentation instead.',
       isCaseBased: true,
     },
     {
-      question:
-        'Case: a semantic-segmentation model handles small objects well but produces mush on large ones. What is your hypothesis and what do you try?',
+      question: 'Case: a model has only 5 million parameters but training runs out of memory at batch size 32 on a 24GB GPU. A colleague says to prune the model. Is that right?',
       answer:
-        'First hypothesis: the receptive field is smaller than the large objects. Compute it with the recurrence — if the final layer sees, say, 60 pixels of a 500-pixel input, no unit can ever perceive a large object as a whole, and you get exactly this symptom: locally plausible, globally incoherent output. Options and their costs: (1) **dilated/atrous convolutions** — enlarge the field with no extra parameters and no resolution loss, the standard segmentation answer (DeepLab), but watch for gridding artifacts; (2) add depth or a downsampling stage — grows the field but loses spatial precision you then have to upsample back; (3) **pyramid pooling / ASPP** — parallel branches at several dilation rates so the model sees multiple scales at once; (4) encoder-decoder with skip connections (U-Net) — deep encoder for context, skips to restore fine detail. Second hypothesis, worth ruling out cheaply: class imbalance in the loss, where large objects are dominated by boundary pixels. Check the receptive field first because it is arithmetic and free.',
+        'Almost certainly not, because the memory is in activations, not weights. Five million parameters in 32-bit floats is about 20MB, and roughly 60MB once the optimiser state is counted. That did not fill 24GB. Early conv layers run at high resolution with many channels, so a 224 x 224 x 64 feature map is 3.2 million numbers per image, and training must keep the activations of every layer around for the backward pass, multiplied by a batch of 32. Diagnose by printing each layer\'s output shape and multiplying it out. Fixes ranked: smaller batch with gradient accumulation, which costs no quality; mixed precision, which roughly halves activation memory; gradient checkpointing, which recomputes activations in the backward pass and trades about 30% more compute for a large memory saving; downsampling earlier in the network, which is a real architecture change; and only then touching the parameter count. The distinction to state plainly is that parameters scale with kernel size and channels, while activation memory scales with resolution times channels times batch size.',
       isCaseBased: true,
-    },
-    {
-      question:
-        'Why is the standard block conv → norm → activation rather than conv → activation → norm? And what should the conv\'s bias be?',
-      answer:
-        'Norm before activation because normalising is meant to control the *pre-activation* distribution: it puts values in the responsive region of the non-linearity rather than letting them drift into saturation (sigmoid/tanh) or into a mostly-negative range that ReLU zeros out. BatchNorm\'s learned γ and β then let the layer rescale if the identity was better. On the bias: set it to zero/False on any conv immediately followed by BatchNorm — BN subtracts the batch mean, which cancels any constant offset the bias contributed, so those parameters are exactly useless (BN\'s β is the real bias). Caveat worth adding: post-norm and pre-norm orderings both exist and the debate is live in transformers; for CNNs, conv → BN → ReLU is the convention.',
-      isCaseBased: false,
-    },
-    {
-      question: 'What does global average pooling replace, and what do you gain and lose?',
-      answer:
-        'It replaces flatten → giant dense layer. VGG-16\'s first FC layer alone is 25,088 × 4,096 + 4,096 ≈ 102.8M parameters out of ~138M total — the classifier head is most of the model. GAP averages each of the C_out feature maps to a single number, giving a C_out-vector at zero parameter cost, and one small dense layer maps that to classes. Gains: massive parameter reduction (and hence less overfitting — it acts as a structural regulariser), and the network stops being locked to one input resolution, because flatten hardcodes the spatial size into the dense weights while GAP averages whatever it gets. Loses: all coarse spatial information — the head can no longer say *where*. Fine for classification, unacceptable for detection or segmentation, which keep spatial heads.',
-      isCaseBased: false,
-    },
-    {
-      question:
-        'Explain the 1×1 convolution and the bottleneck block, with the parameter arithmetic.',
-      answer:
-        'A 1×1 conv has no spatial extent but spans every input channel, so it is a learned linear mixing across depth applied identically at each position — cheap channel projection. The bottleneck exploits that: instead of a plain 3×3 at 256→256, which costs (9·256+1)·256 = 590,080, ResNet-50 does 1×1 256→64 (16,448), then 3×3 64→64 (36,928), then 1×1 64→256 (16,640) — 70,016 total, about 8.4× cheaper, because the expensive 3×3 runs in a 64-channel space instead of 256. You also gain two extra norm+ReLU pairs. The cost: representational capacity is squeezed through the narrow middle, which is exactly why the residual connection matters — the identity path carries what the bottleneck would have lost.',
-      isCaseBased: false,
     },
   ],
   flashcards: [
     {
       front: 'Output-size formula',
-      back: 'out = ⌊(n + 2p − k)/s⌋ + 1.  Dilation d: replace k with d(k−1)+1.  \'same\' for s=1 means p = (k−1)/2.',
+      back: 'out = floor((W - K + 2P) / S) + 1. It counts how many places the kernel fits: last legal start is W + 2P - K, divided by the stride, plus the starting position itself.',
     },
     {
       front: 'Conv parameter count',
-      back: '(k_h × k_w × C_in + 1) × C_out.  The +1 is one bias per filter. Input height/width never appear.',
+      back: '(K x K x C_in + 1) x C_out. The + 1 is one bias per filter. Input width and height never appear.',
     },
     {
-      front: 'Weight sharing',
-      back: 'The same kernel is applied at every spatial position. Why 9 numbers replace 14,400, and why parameters are independent of image size.',
+      front: 'Parameter sharing',
+      back: 'The same kernel numbers are used at every position. This is why 9 weights replace 14,400, and why the parameter count does not depend on image size.',
     },
     {
-      front: 'Why dense layers fail on images',
-      back: '224×224×3 → 1000 units = 150.5M weights for one layer; flattening destroys adjacency; no translation invariance.',
+      front: 'Why a dense layer is wrong for images',
+      back: '200x200x3 into 1,000 units is 120,000,000 weights for one layer. Flattening also destroys adjacency, and shifting the picture one pixel changes every input.',
     },
     {
-      front: 'Channels rule',
-      back: 'A kernel spans ALL input channels (3×3 on 64 ch = 3×3×64 = 576 weights per filter). Number of filters = number of output channels.',
+      front: 'Kernel and channels',
+      back: 'A kernel spans ALL input channels, so a 3x3 on a 64-channel input is a 3x3x64 cube of 576 weights. The number of filters is the number of output channels.',
     },
     {
-      front: 'Equivariance vs invariance',
-      back: 'Convolution: shift in → shift out (equivariant). Pooling / global average pooling: shift in → same out (invariant).',
+      front: "'valid' vs 'same' padding",
+      back: "'valid' means P = 0, so the picture shrinks by K - 1 each layer. 'same' means P = (K - 1) / 2 at stride 1, so the output size equals the input size.",
     },
     {
-      front: 'Receptive field recurrence',
-      back: 'r_l = r_{l−1} + (k_l − 1)·j_{l−1};  j_l = j_{l−1}·s_l.  If the field is smaller than the object, the unit cannot see it — full stop.',
+      front: 'Pooling',
+      back: 'Slides a window and summarises it to one number, with zero weights. Max keeps the largest, average keeps the mean. A 2x2 window at stride 2 quarters the number of values and buys small translation invariance.',
     },
     {
-      front: 'Two 3×3 vs one 5×5',
-      back: 'Same 5×5 reach. 73,856 vs 102,464 params at 64 channels (28% less), and two ReLUs instead of one. The VGG argument.',
-    },
-    {
-      front: 'Standard block order',
-      back: 'conv → norm → activation → (pool). Norm first so pre-activations land in the responsive region. Use bias=False on a conv feeding BatchNorm.',
-    },
-    {
-      front: 'Global average pooling',
-      back: 'Averages each feature map to one number. Kills the giant FC head (VGG fc6 alone ≈ 102.8M params), zero parameters, resolution-agnostic — loses spatial location.',
+      front: 'Receptive field',
+      back: 'The patch of input pixels that can influence one output number. One 3x3 conv gives 3x3; two stacked give 5x5. If the field is smaller than the object, the unit cannot see it.',
     },
   ],
   mindmapMarkdown: `- CNNs: Convolution, Pooling & Receptive Fields
-  - Why not dense
-    - 224x224x3 -> 1000 = 150.5M weights
+  - Why not a dense layer
+    - 200x200x3 = 120,000 inputs
+    - x 1000 units = 120,000,000 weights
     - flatten destroys adjacency
-    - no translation invariance
+    - shift 1 pixel -> every input moves
   - Convolution
-    - kernel slides, dot product per stop
-    - output = feature map
-    - cross-correlation really (no flip)
-  - The two savings
-    - weight sharing: same 9 numbers everywhere
-    - local connectivity: 9 inputs, not 150k
-    - 12x12 -> 10x10: 9 params vs 14,400
-  - Hyperparameters
-    - kernel size k
-    - stride s (s=2 halves)
-    - padding: valid vs same
-    - dilation d: reach without params
-  - Output-size formula
-    - out = floor((n + 2p - k)/s) + 1
-    - 32,k3,p1,s1 -> 32
-    - 32,k3,p0,s2 -> 15
-    - 224,k7,p3,s2 -> 112
+    - kernel = small grid of weights
+    - slide, multiply, add -> one number
+    - output grid = feature map
+    - hand example: 5x5, edge kernel -> 30, 30, 0
+  - Output size
+    - counts where the kernel fits
+    - out = floor((W - K + 2P)/S) + 1
+    - 5,3,0,1 -> 3
+    - 5,3,1,1 -> 5 ('same')
+    - 5,3,0,2 -> 2 (rounding drops a window)
+  - Padding
+    - 'valid' = P 0, shrinks
+    - 'same' = P (K-1)/2, size kept
+    - also saves the border pixels
   - Channels
-    - kernel spans ALL C_in
+    - kernel spans ALL input channels
+    - 3x3 on 64 ch = 576 weights per filter
     - filters = output channels
-    - params = (k*k*C_in + 1) * C_out
-    - 3x3, 64 -> 128 = 73,856
-    - n absent: weights vs activations
+  - Parameter counting
+    - (K x K x C_in + 1) x C_out
+    - 3x3, 3 in, 16 out = 448
+    - W and H are absent
+    - conv 448 at any picture size
   - Pooling
-    - max: did it appear anywhere
-    - average: smoother, used globally
-    - downsample + small invariance
-    - modern: strided conv instead
+    - window summarised, zero weights
+    - max: largest in window
+    - average: mean of window
+    - 4x4 -> 2x2 with 2x2 stride 2
   - Receptive field
-    - what one neuron can see
-    - r += (k-1)*j ; j *= s
-    - too small -> cannot see object
-    - grow: depth, stride, dilation
-  - VGG argument
-    - two 3x3 = one 5x5 reach
-    - 73,856 vs 102,464 (28% less)
-    - extra ReLU
-  - Block pattern
-    - conv -> norm -> activation -> pool
-    - norm before activation
-    - bias=False before BatchNorm
-  - Heads and 1x1
-    - 1x1 = channel mixing
-    - bottleneck 256->64->256: 8.4x cheaper
-    - GAP replaces flatten+dense
-    - toy CNN: dense held 80% of params`,
+    - input pixels that reach one output
+    - one 3x3 -> 3x3; two -> 5x5
+    - too small -> cannot see the object
+  - Classic mistake
+    - forgot padding, 32 -> 30 -> 28 -> 26
+    - flatten 21,632 not 32,768
+    - print shapes, never hardcode
+  - Worked case
+    - 32x32x3 -> conv16 -> pool -> conv32 -> pool
+    - 448 + 4,640 + 20,490 = 25,578
+    - dense head holds 80%`,
 }
 
 export default m
