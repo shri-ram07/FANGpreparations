@@ -15,6 +15,7 @@ export const router = createBrowserRouter([
       { path: 'subjects', lazy: () => import('./routes/subjects') },
       { path: 'subject/:subjectId', lazy: () => import('./routes/subject') },
       { path: 'subject/:subjectId/:moduleId', lazy: () => import('./routes/module') },
+      { path: 'practice', lazy: () => import('./routes/practice') },
       { path: 'review', lazy: () => import('./routes/review') },
       { path: 'interview', lazy: () => import('./routes/interview') },
       { path: 'revision', lazy: () => import('./routes/revision') },

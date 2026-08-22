@@ -41,6 +41,9 @@ export function AppShell() {
             <NavLink to="/roadmap" className={navLink}>
               Roadmap
             </NavLink>
+            <NavLink to="/practice" className={navLink}>
+              NeetCode 150
+            </NavLink>
             <NavLink to="/review" className={navLink}>
               <span className="flex items-center justify-between">
                 Review

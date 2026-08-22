@@ -10,6 +10,10 @@ export const migrations: Array<(state: unknown) => unknown> = [
   // Older saves have no lastRecallDay; null means "never done", which is what
   // the dashboard nudge treats as due.
   (state) => ({ ...(state as object), lastRecallDay: null }),
+
+  // v1 -> v2: the NeetCode 150 practice tracker. Older saves have no practice
+  // map; {} means "nothing attempted", which is what the page renders by default.
+  (state) => ({ ...(state as object), practice: {} }),
 ]
 
 export const CURRENT_VERSION = migrations.length

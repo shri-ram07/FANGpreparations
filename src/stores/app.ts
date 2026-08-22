@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import { createPracticeSlice, type PracticeSlice } from './slices/practice'
 import { createProgressSlice, type ProgressSlice } from './slices/progress'
 import { createReviewSlice, type ReviewSlice } from './slices/review'
 import { createSettingsSlice, type SettingsSlice } from './slices/settings'
@@ -9,7 +10,7 @@ import { CURRENT_VERSION, STORAGE_KEY, migrations } from './migrations'
 // ONE store, one persisted key: one export file, one version number, one
 // migrate path. State must stay JSON-plain (no Map/Set/Date) and flat per
 // slice — persist's rehydrate merge is shallow.
-export type AppState = ProgressSlice & ReviewSlice & StreakSlice & SettingsSlice
+export type AppState = ProgressSlice & ReviewSlice & StreakSlice & SettingsSlice & PracticeSlice
 
 export const useApp = create<AppState>()(
   persist(
@@ -18,6 +19,7 @@ export const useApp = create<AppState>()(
       ...createReviewSlice(...a),
       ...createStreakSlice(...a),
       ...createSettingsSlice(...a),
+      ...createPracticeSlice(...a),
     }),
     {
       name: STORAGE_KEY,
