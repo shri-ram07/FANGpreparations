@@ -33,7 +33,8 @@ export type Section =
   | { type: 'intuition'; title?: string; md: string }
   /** Hinglish intuition box — ONLY for plan-marked hard-concept zones. */
   | { type: 'hinglish'; md: string }
-  | { type: 'note'; md: string }
+  /** Bordered callout. `label` names its job (THE TRAP, THE FORMULA); defaults to NOTE. */
+  | { type: 'note'; md: string; label?: string }
   /** Collapsed "Show the math" expander; each latex entry renders display-mode. */
   | { type: 'math'; intro?: string; latex: string[] }
   | {
