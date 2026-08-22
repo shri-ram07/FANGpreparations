@@ -43,8 +43,9 @@ export const ml: SubjectDef = {
   - Tuning
     - Grid / random / Bayesian (Optuna)`,
   modules: [
-    mod('ml-l0-learning-setup', 0, 'What "Learning From Data" Actually Means', 45, () => import('./l0-learning-setup')),
-    mod('ml-l1-gradient-descent', 1, 'Gradient Descent + Linear Regression', 40, () => import('./l1-gradient-descent')),
+    mod('ml-l0-learning-setup', 0, 'What a Model Is, and Why Data Is Split Three Ways', 22, () => import('./l0-learning-setup')),
+    mod('ml-l0-overfitting-bias-variance', 0, 'Overfitting, Underfitting & the Bias-Variance Trade-off', 20, () => import('./l0-overfitting-bias-variance')),
+    mod('ml-l1-gradient-descent', 1, 'Gradient Descent', 24, () => import('./l1-gradient-descent')),
     mod('ml-l1-regression-regularization', 1, 'Polynomials, Overfitting, and Regularisation: Ridge vs Lasso', 38, () => import('./l1-regression-regularization')),
     mod('ml-l2-logistic-regression', 2, 'Logistic Regression: Sigmoid, Cross-Entropy & Decision Boundaries', 38, () => import('./l2-logistic-regression')),
     mod('ml-l2-knn-naive-bayes', 2, 'k-NN & Naive Bayes: The Two Simplest Classifiers', 52, () => import('./l2-knn-naive-bayes')),
