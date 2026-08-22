@@ -1,0 +1,298 @@
+import type { Module } from '../types'
+
+const m: Module = {
+  id: 'ml-l2-bagging-random-forest',
+  subjectId: 'ml',
+  level: 2,
+  title: 'Bagging and Random Forest',
+  whyItMatters:
+    'Three mediocre models can beat any one of them — but only under a condition most people never state. Random Forest is an entire algorithm built around forcing that condition to hold.',
+  assumes: [
+    'You have read Decision Trees — you know a tree is greedy and unstable',
+    'You know what variance means: how much a model changes when refitted on different rows',
+  ],
+  estMinutes: 22,
+  sections: [
+    {
+      type: 'intuition',
+      title: 'What bagging is',
+      md: `An **ensemble** is a group of models whose answers are combined into one. **Bagging** — short for **b**ootstrap **agg**regating — is the version where they are trained independently and then vote.
+
+Three steps:
+
+1. Draw a **bootstrap sample**: n rows drawn from your n training rows **with replacement**, so some appear twice and some not at all.
+2. Train a model on it.
+3. Repeat, then take a majority vote (or a mean, for regression).
+
+The point is variance reduction. Averaging models that make *different* mistakes cancels those mistakes out.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Three filters at 67%, and their vote at 100%',
+      code: `truth = [1, 1, 1, 0, 0, 0]
+A     = [1, 1, 1, 1, 1, 0]
+B     = [1, 0, 1, 0, 0, 1]
+C     = [0, 1, 0, 0, 0, 0]
+
+def score(guesses):
+    return sum(1 for i in range(6) if guesses[i] == truth[i]) / 6
+
+vote = []
+for i in range(6):
+    votes_for_1 = A[i] + B[i] + C[i]
+    vote.append(1 if votes_for_1 >= 2 else 0)
+
+print('A', round(score(A), 4), 'B', round(score(B), 4), 'C', round(score(C), 4))
+print('vote', vote)
+print('vote score', score(vote))
+
+# ---- real output ----
+# A 0.6667 B 0.6667 C 0.6667
+# vote [1, 1, 1, 0, 0, 0]
+# vote score 1.0`,
+      annotations: {
+        7: 'A generator expression inside sum(): produce a 1 for each position where the guess matches, and sum those. Dividing by 6 turns the count into a fraction.',
+        11: 'Since the labels are 0 and 1, adding the three answers counts the votes for 1. Two or more wins.',
+        16: 'Each filter alone gets 4 of 6. Together they get 6 of 6 — better than every member of the group, from models that were individually mediocre.',
+      },
+    },
+    {
+      type: 'note',
+      label: 'The condition nobody states',
+      md: `That was not luck, but it was not free. It worked because A, B and C are wrong in **different places**.
+
+Make all three wrong on the same two emails and the vote is wrong on exactly those two emails as well. The ensemble scores 4 of 6, identical to each member, and you have paid three times the compute for nothing.
+
+**Averaging cancels independent errors and cannot touch shared ones.** Every ensemble method is really a technique for manufacturing disagreement.`,
+    },
+    {
+      type: 'math',
+      intro:
+        'Why disagreement is the whole game. Average n models each with variance σ² and pairwise correlation ρ. The second term vanishes as n grows, but the first does not — ρσ² is a floor that no amount of trees can get below.',
+      latex: [
+        '\\operatorname{Var}\\!\\left(\\frac{1}{n}\\sum_{i=1}^{n} f_i\\right) \\;=\\; \\underbrace{\\rho\\,\\sigma^{2}}_{\\text{floor}} \\;+\\; \\underbrace{\\frac{1-\\rho}{n}\\,\\sigma^{2}}_{\\rightarrow\\, 0}',
+      ],
+    },
+    {
+      type: 'visual',
+      component: 'Plot',
+      props: {
+        title: 'Adding trees, at three levels of correlation',
+        notice:
+          'Independent trees (ρ = 0) would drive variance to zero as 1/n. Real trees trained on the same data are correlated, and ρ is a floor: at ρ = 0.3 you are stuck at 0.30 no matter how many you add — 200 trees gives 0.303. That floor is why Random Forest bothers to pick a random subset of features at each split. It exists purely to push ρ down.',
+        kind: 'line',
+        xLabel: 'number of trees averaged',
+        yLabel: 'variance of the average',
+        yMin: 0,
+        yMax: 1.05,
+        series: [
+          { name: 'ρ = 0.3', dots: true, points: [[1, 1], [2, 0.65], [3, 0.5333], [5, 0.44], [8, 0.3875], [12, 0.3583], [20, 0.335], [30, 0.3233], [50, 0.314], [80, 0.3088], [120, 0.3058], [200, 0.3035]] },
+          { name: 'ρ = 0.1', dots: true, points: [[1, 1], [2, 0.55], [3, 0.4], [5, 0.28], [8, 0.2125], [12, 0.175], [20, 0.145], [30, 0.13], [50, 0.118], [80, 0.1113], [120, 0.1075], [200, 0.1045]] },
+          { name: 'independent', dots: true, points: [[1, 1], [2, 0.5], [3, 0.3333], [5, 0.2], [8, 0.125], [12, 0.0833], [20, 0.05], [30, 0.0333], [50, 0.02], [80, 0.0125], [120, 0.0083], [200, 0.005]] },
+        ],
+      },
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'How much of the data does one bootstrap sample miss?',
+      code: `import random
+random.seed(0)
+
+rows = list(range(1000))
+left_out = []
+for trial in range(500):
+    sample = []
+    for _ in range(1000):
+        sample.append(random.choice(rows))
+    unique_rows = set(sample)
+    left_out.append((1000 - len(unique_rows)) / 1000)
+
+print('average fraction left out:', round(sum(left_out) / 500, 4))
+print('formula (1 - 1/1000) ** 1000:', round((1 - 1 / 1000) ** 1000, 4))
+
+# ---- real output ----
+# average fraction left out: 0.3669
+# formula (1 - 1/1000) ** 1000: 0.3677`,
+      annotations: {
+        8: 'random.choice picks WITH replacement, which is the definition of a bootstrap sample — the same row can be drawn many times.',
+        9: 'set(sample) discards duplicates, so its length is how many DISTINCT rows made it in.',
+        14: '0.3669 measured over 500 trials against 0.3677 from the formula. Each row has a (1 − 1/n) chance of being missed on each of n draws, and that expression tends to 1/e ≈ 0.368.',
+      },
+    },
+    {
+      type: 'note',
+      label: 'Out-of-bag rows are a free validation set',
+      md: `So a bootstrap sample holds about **63%** of the rows and misses about **37%**. For a given tree, those missed rows are its **out-of-bag** rows — data it has never seen.
+
+Score every row using only the trees that did not train on it, and you get an honest estimate of generalisation error without holding anything back. That is the **OOB score**, and it is close to free: it costs no data and almost no extra compute.
+
+It is a genuine advantage of bagging that boosting does not share.`,
+    },
+    {
+      type: 'intuition',
+      title: 'Random Forest: manufacturing more disagreement',
+      md: `Bag a few hundred trees and you hit the ρ floor. The reason is easy to see: if one feature is far more predictive than the rest, every bootstrap sample still contains it, so every tree splits on it first and they all end up looking alike.
+
+**Random Forest** adds one rule: at every split, consider only a **random subset of the features** — typically √p for classification.
+
+That deliberately handicaps each tree. Individually they get worse; collectively they get better, because they are no longer all telling the same story. It is ρ being pushed down on purpose.`,
+    },
+    {
+      type: 'note',
+      label: 'What this buys and what it costs',
+      md: `**Buys:** strong accuracy out of the box, almost no tuning, a free OOB estimate, resistance to overfitting as trees are added, and no need to scale features.
+
+**Costs:** the model is no longer readable — 500 trees have no single path to point at. Prediction is slower. And feature importances inherit the tree's biases, favouring high-cardinality columns and hiding one of any correlated pair.
+
+For bagging, **more trees is always safe** — variance falls toward the floor and never rises. That sentence is true here and false for boosting.`,
+    },
+  ],
+  quiz: [
+    {
+      question: 'Three filters each score 0.667 and their majority vote scores 1.000. What made that possible?',
+      options: [
+        { text: 'The vote averages away errors that occur in different places', explanation: 'Correct. Each filter is wrong on two emails, but different ones, so on every email at least two of the three are right.' },
+        { text: 'Majority voting is always better than any single model', explanation: 'Not if the members share their mistakes — then the vote scores exactly what each member does.' },
+        { text: 'The filters were trained on more data together', explanation: 'They each saw the same six emails.' },
+        { text: 'Three is the optimal ensemble size', explanation: 'Nothing about three is special; it is the disagreement that matters.' },
+      ],
+      correct: 0,
+    },
+    {
+      question: 'A bootstrap sample of 1,000 rows contains about how many distinct rows?',
+      options: [
+        { text: 'All 1,000', explanation: 'Drawing with replacement means duplicates, so some rows must be missing.' },
+        { text: 'About 632 — roughly 37% are left out', explanation: 'Correct. (1 − 1/1000)^1000 ≈ 0.3677, measured at 0.3669 over 500 trials.' },
+        { text: 'About 500', explanation: 'The limit is 1/e ≈ 0.368 left out, not a half.' },
+        { text: 'It depends on the random seed and cannot be predicted', explanation: 'The seed moves it slightly; the expectation is a fixed 1/e.' },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'At ρ = 0.3, averaging 200 trees gives variance 0.303. Why does it not approach zero?',
+      options: [
+        { text: 'Because 200 trees is not enough', explanation: '200 trees already sits within 0.003 of the floor; a million would not help.' },
+        { text: 'ρσ² is a floor set by how correlated the trees are, and only the second term shrinks with n', explanation: 'Correct. That floor is exactly what Random Forest\'s random feature subsets attack.' },
+        { text: 'Because bagging adds bias', explanation: 'Bagging leaves bias roughly unchanged; it targets variance.' },
+        { text: 'Floating point error accumulates', explanation: 'The floor is analytic, not numerical.' },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'Why does Random Forest consider only a random subset of features at each split?',
+      options: [
+        { text: 'To train faster', explanation: 'It is a side benefit, but not the reason.' },
+        { text: 'To stop every tree splitting on the same dominant feature, which would leave them correlated', explanation: 'Correct. It deliberately weakens individual trees to push ρ down, and the ensemble improves as a result.' },
+        { text: 'To handle missing features', explanation: 'Missingness is handled separately.' },
+        { text: 'To make each tree more accurate', explanation: 'Each tree becomes LESS accurate — that is the trade being made.' },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'What is the out-of-bag score?',
+      options: [
+        { text: 'The score on the test set', explanation: 'It needs no test set — that is its appeal.' },
+        { text: 'Each row scored using only the trees that did not train on it, giving an honest estimate for free', explanation: 'Correct. About 37% of trees miss any given row, and those trees can judge it fairly.' },
+        { text: 'The training score of the forest', explanation: 'The training score is optimistic; OOB deliberately is not.' },
+        { text: 'The average score of the individual trees', explanation: 'That measures the members, not the ensemble, and on their own training rows.' },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'Is "more trees is always safer" true?',
+      options: [
+        { text: 'Yes, for bagging — variance falls toward the floor and never rises', explanation: 'Correct for bagging. The same sentence is false for boosting, where each round fits the previous rounds\' residuals and too many rounds overfit.' },
+        { text: 'Yes, for every ensemble method', explanation: 'Boosting overfits with too many rounds; the number of rounds is a tuned hyperparameter there.' },
+        { text: 'No — more trees always eventually overfits', explanation: 'Bagged trees are trained independently, so adding them cannot increase variance.' },
+        { text: 'Only if the trees are pruned', explanation: 'Random Forest usually grows trees fully and still does not overfit by adding more.' },
+      ],
+      correct: 0,
+    },
+  ],
+  interviewQuestions: [
+    {
+      question: 'When does an ensemble help, and when is it a waste?',
+      answer:
+        'It helps when the members make errors in different places, because averaging cancels independent errors and cannot touch shared ones. Three filters each at 0.667, wrong on different emails, vote to 1.000; the same three wrong on the same emails vote to 0.667 and you have paid triple the compute for nothing. So the real question about any ensemble is what is generating the disagreement — different bootstrap samples, different feature subsets, different model families, different seeds.',
+      isCaseBased: true,
+    },
+    {
+      question: 'Why does Random Forest sample features at each split?',
+      answer:
+        'To break correlation between the trees. Averaging n models with variance σ² and pairwise correlation ρ gives ρσ² + (1−ρ)σ²/n — the second term vanishes with n but ρσ² is a hard floor. With one dominant feature every bootstrap sample still contains it, so every tree splits on it first and ρ stays high. Restricting each split to a random √p features forces trees to explore different structure. Each tree gets worse; the ensemble gets better.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Explain out-of-bag error and when you would still want a held-out set.',
+      answer:
+        'A bootstrap sample contains about 63% of rows, so roughly 37% are out-of-bag for each tree. Score each row using only the trees that never saw it and you get an honest generalisation estimate without holding data back — very useful when data is scarce. I would still keep a genuine test set when I am tuning hyperparameters against OOB, because selecting on OOB contaminates it exactly as selecting on validation does, and when rows are not independent, since bootstrap resampling assumes they are.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Random Forest or gradient boosting?',
+      answer:
+        'Random Forest when I want a strong result with almost no tuning, when I need an OOB estimate, or when training is parallel and time-boxed — it is very hard to make it much worse by getting a hyperparameter wrong. Gradient boosting when I want the best achievable accuracy on tabular data and can afford to tune, because it usually wins by a real margin. The practical difference is the failure mode: a badly configured forest is mediocre, a badly configured boosted model overfits badly.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Your Random Forest reports one feature with importance 0.6 and a near-duplicate at 0.02. What do you conclude?',
+      answer:
+        'Not that the second is useless. Tree importance is credit for impurity reduction, and once one of a correlated pair has been split on, the other has nothing left to reduce — so it looks worthless even though it would have served equally well alone. Drop the first and the second\'s importance jumps. I would check correlation between them before acting, and prefer permutation importance or SHAP if the number is going to inform a decision. There is also a known bias toward high-cardinality features.',
+      isCaseBased: true,
+    },
+    {
+      question: 'Does bagging reduce bias or variance?',
+      answer:
+        'Variance, almost entirely. Each bagged model is trained on a resample of the same data, so the average model is roughly the same as a single model — bias is unchanged. What changes is the spread around it: independent errors cancel. That is why bagging is applied to low-bias high-variance learners like fully grown trees, and why bagging a linear model achieves very little.',
+      isCaseBased: false,
+    },
+    {
+      question: 'How many trees should a forest have?',
+      answer:
+        'Enough that OOB error has flattened, and no more. Since variance falls toward ρσ² and never rises, extra trees cannot hurt accuracy — they only cost memory and prediction latency. In practice a few hundred is usually past the knee. The honest answer is to plot OOB error against tree count and stop where the curve goes flat, rather than picking a round number.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Your forest scores 0.94 OOB but 0.71 in production. Where do you look?',
+      answer:
+        'Not at the forest. OOB assumes rows are independent and identically distributed, and a gap that size usually means that assumption broke. Check for grouped rows — several records per customer, so a customer appears both in-bag and out-of-bag. Check for time: OOB shuffles across time, so a model that would never have seen the future in production sees it here. Check for leakage in a feature computed after the label. Only after those would I suspect drift between the training window and production.',
+      isCaseBased: true,
+    },
+  ],
+  flashcards: [
+    { front: 'Bagging, in one sentence', back: 'Train models on bootstrap samples independently, then vote or average. It reduces variance, not bias.' },
+    { front: 'The condition for an ensemble to help', back: 'The members must be wrong in DIFFERENT places. Averaging cancels independent errors and cannot touch shared ones.' },
+    { front: 'Bootstrap sample', back: 'n rows drawn from n with replacement. Contains about 63% distinct rows and misses about 37% — (1 − 1/n)ⁿ → 1/e ≈ 0.368.' },
+    { front: 'Out-of-bag score', back: 'Score each row with only the trees that did not train on it. An honest generalisation estimate that costs no held-out data.' },
+    { front: 'The variance formula', back: 'Var = ρσ² + (1−ρ)σ²/n. The second term vanishes with n; ρσ² is a floor. At ρ = 0.3, 200 trees still gives 0.303.' },
+    { front: 'What Random Forest adds to bagging', back: 'A random subset of features at every split (typically √p). It weakens each tree deliberately to push ρ down.' },
+    { front: 'Is more trees always safe?', back: 'For bagging, yes — variance falls toward the floor and never rises. For boosting, no.' },
+    { front: 'Forest feature importance caveats', back: 'Biased toward high-cardinality features, and with correlated pairs the first one split on absorbs all the credit.' },
+  ],
+  mindmapMarkdown: `- Bagging & Random Forest
+  - Why ensembles work
+    - three filters at 0.667 vote to 1.000
+    - ONLY if wrong in different places
+    - same mistakes -> vote scores 0.667, triple the compute
+  - Bootstrap
+    - n rows from n, with replacement
+    - ~63% distinct, ~37% missed
+    - measured 0.3669 vs formula 0.3677 (1/e)
+    - missed rows = out-of-bag -> free honest score
+  - The variance floor
+    - Var = rho sigma^2 + (1-rho) sigma^2 / n
+    - rho = 0.3 -> stuck at 0.30 (200 trees: 0.303)
+    - independent -> falls as 1/n
+  - Random Forest
+    - + random feature subset per split (sqrt p)
+    - weakens each tree to push rho down
+    - free OOB, no scaling, little tuning
+    - unreadable, slower, biased importances
+  - More trees
+    - bagging: always safe
+    - boosting: NOT`,
+}
+
+export default m
