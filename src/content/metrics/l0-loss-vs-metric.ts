@@ -30,6 +30,29 @@ const m: Module = {
 Hold onto both things we just produced: the six raw output numbers, and the single fraction 0.6667. The rest of this module is about the difference between them.`,
     },
     {
+      type: 'visual',
+      component: 'Plot',
+      props: {
+          title: 'The same training run, measured two ways',
+          notice: 'Between epoch 8 and epoch 11 the loss falls from 0.241 to 0.178 while accuracy does not move at all. The model IS improving — it is getting more confident about answers it already had right — but accuracy only changes when a prediction actually crosses 0.5, so it sits flat and then jumps. Loss is smooth because it can be differentiated; accuracy is a staircase, which is exactly why you cannot train on it.',
+          kind: 'line',
+          xLabel: 'epoch',
+          yLabel: 'value',
+          yMin: 0,
+          yMax: 1.05,
+          series: [
+            {
+              name: 'accuracy',
+              points: [[0, 0.5], [1, 0.5], [2, 0.5], [3, 0.62], [4, 0.62], [5, 0.62], [6, 0.62], [7, 0.75], [8, 0.75], [9, 0.75], [10, 0.75], [11, 0.75], [12, 0.81], [13, 0.81], [14, 0.81], [15, 0.81], [16, 0.88], [17, 0.88], [18, 0.88], [19, 0.88], [20, 0.88], [21, 0.88], [22, 0.94], [23, 0.94], [24, 0.94], [25, 0.94]],
+            },
+            {
+              name: 'loss',
+              points: [[0, 0.69], [1, 0.5964], [2, 0.5171], [3, 0.45], [4, 0.3932], [5, 0.3451], [6, 0.3044], [7, 0.27], [8, 0.2408], [9, 0.2161], [10, 0.1952], [11, 0.1775], [12, 0.1626], [13, 0.1499], [14, 0.1392], [15, 0.1301], [16, 0.1224], [17, 0.1159], [18, 0.1104], [19, 0.1057], [20, 0.1018], [21, 0.0984], [22, 0.0956], [23, 0.0932], [24, 0.0912], [25, 0.0895]],
+            },
+          ],
+        },
+    },
+    {
       type: 'intuition',
       title: 'What a metric is',
       md: `That 0.6667 has a name. It is called **accuracy**: the fraction of examples the model got right.

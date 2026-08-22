@@ -28,6 +28,31 @@ const m: Module = {
 That is not a hypothesis. Run it.`,
     },
     {
+      type: 'visual',
+      component: 'Plot',
+      props: {
+          title: 'The curve every hyperparameter search is walking along',
+          notice: 'Training error only ever falls — a more flexible model can always fit the data it has seen, so it can never tell you when to stop. Validation error falls, bottoms out at degree 10, then climbs: past that point the extra flexibility is memorising noise. Cross-validation exists to find that turn, and the gap between the two lines at the right-hand end is exactly how much the model is overfitting.',
+          kind: 'line',
+          xLabel: 'model complexity (polynomial degree)',
+          yLabel: 'error',
+          yMin: 0,
+          series: [
+            {
+              name: 'validation',
+              points: [[1, 0.7893], [2, 0.586], [3, 0.4396], [4, 0.3351], [5, 0.2617], [6, 0.2113], [7, 0.1781], [8, 0.1577], [9, 0.1471], [10, 0.144], [11, 0.1466], [12, 0.1538], [13, 0.1646], [14, 0.1783], [15, 0.1945]],
+              dots: true,
+            },
+            {
+              name: 'training',
+              points: [[1, 0.7882], [2, 0.582], [3, 0.4312], [4, 0.3208], [5, 0.2401], [6, 0.181], [7, 0.1378], [8, 0.1062], [9, 0.0831], [10, 0.0661], [11, 0.0538], [12, 0.0447], [13, 0.0381], [14, 0.0332], [15, 0.0297]],
+              dots: true,
+            },
+          ],
+          markers: [{ x: 10, y: 0.144, text: 'best: degree 10' }],
+        },
+    },
+    {
       type: 'code',
       lang: 'python',
       title: 'The same model, the same data, five different cuts',

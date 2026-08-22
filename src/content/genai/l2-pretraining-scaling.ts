@@ -31,6 +31,24 @@ Now build the training data out of it. There are no human labels anywhere. Inste
 Six tokens produced five training examples, and a human wrote none of them. The sentence supplied both the question and the answer. That is the whole idea, and the rest of this module is about what happens when you do it a few trillion times.`,
     },
     {
+      type: 'visual',
+      component: 'Plot',
+      props: {
+          title: 'Scaling laws: loss against model size',
+          notice: 'Every step right is 10x the parameters. Going from 1e6 to 1e7 buys 0.64 nats; from 1e11 to 1e12 buys only 0.26. The curve never turns down sharply and never flattens to zero — it is a power law, so improvement keeps coming but each 10x buys less than the last. That is why labs plan budgets in orders of magnitude, not percentages.',
+          kind: 'line',
+          xLabel: 'log10(parameters)',
+          yLabel: 'loss (nats)',
+          series: [
+            {
+              name: 'test loss',
+              points: [[6, 4.0159], [6.25, 3.844], [6.5, 3.6794], [6.75, 3.5219], [7, 3.3712], [7.25, 3.2269], [7.5, 3.0887], [7.75, 2.9565], [8, 2.83], [8.25, 2.7088], [8.5, 2.5929], [8.75, 2.4819], [9, 2.3756], [9.25, 2.2739], [9.5, 2.1766], [9.75, 2.0834], [10, 1.9943], [10.25, 1.9089], [10.5, 1.8272], [10.75, 1.749], [11, 1.6741], [11.25, 1.6024], [11.5, 1.5338], [11.75, 1.4682], [12, 1.4053]],
+              dots: true,
+            },
+          ],
+        },
+    },
+    {
       type: 'intuition',
       title: 'The four words you need before anything else',
       md: `Define these now, because every later sentence uses them.

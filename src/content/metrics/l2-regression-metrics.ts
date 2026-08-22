@@ -29,6 +29,24 @@ Four of the five days are close. The last day is a 12-unit miss on a 50-unit day
 Note what changed since *Regression Losses*. There, MSE and MAE were the numbers the model **minimised while training**. Here they are the numbers you **report afterwards**. Same arithmetic, different job: a reported number does not need a slope, it needs to mean something to a person.`,
     },
     {
+      type: 'visual',
+      component: 'Plot',
+      props: {
+          title: 'Predicted against actual, with the perfect line for comparison',
+          notice: 'Every point would sit exactly on the dashed line if the model were perfect; the vertical gap to that line is the error. Here RMSE = 2.49 and MAE = 2.40 — RMSE is the larger of the two, always, because squaring punishes the big misses more. R² = 0.982 says the model removes 98.2% of the variance that predicting the mean (41.0) would have left.',
+          kind: 'scatter',
+          xLabel: 'actual value',
+          yLabel: 'predicted value',
+          series: [
+            {
+              name: 'predictions',
+              points: [[12, 14], [19, 17], [25, 27], [31, 29], [38, 41], [44, 42], [51, 49], [57, 61], [63, 60], [70, 68]],
+            },
+            { name: 'perfect', points: [[10, 10], [72, 72]], dashed: true },
+          ],
+        },
+    },
+    {
       type: 'intuition',
       title: 'RMSE and MAE: two averages of the same five errors',
       md: `**MAE**, mean absolute error, is the plain answer: drop the plus and minus signs, then average. (2 + 2 + 3 + 2 + 12) / 5 = 21 / 5 = **4.2 units**. Sentence for a meeting: "on a typical day we are off by about 4 units."

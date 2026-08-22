@@ -30,6 +30,29 @@ const m: Module = {
 Every idea in this module is built out of that one move: count the cases, divide by the total. When the symbols get dense later, come back here and start counting again.`,
     },
     {
+      type: 'visual',
+      component: 'Plot',
+      props: {
+          title: 'The normal distribution, and what one standard deviation buys you',
+          notice: 'The curve is tallest at the mean and dies fast: at 1 standard deviation the height is 0.242, at 3 it is 0.004. Area, not height, is probability — 68.3% of everything sits inside ±1σ, 95.4% inside ±2σ, 99.7% inside ±3σ. That is why "3-sigma event" means rare: it leaves 0.3% of the area, split between the two tails.',
+          kind: 'area',
+          xLabel: 'standard deviations from the mean',
+          yLabel: 'density',
+          yMin: 0,
+          series: [
+            {
+              name: 'density',
+              points: [[-4, 0.0001], [-3.9, 0.0002], [-3.8, 0.0003], [-3.7, 0.0004], [-3.6, 0.0006], [-3.5, 0.0009], [-3.4, 0.0012], [-3.3, 0.0017], [-3.2, 0.0024], [-3.1, 0.0033], [-3, 0.0044], [-2.9, 0.006], [-2.8, 0.0079], [-2.7, 0.0104], [-2.6, 0.0136], [-2.5, 0.0175], [-2.4, 0.0224], [-2.3, 0.0283], [-2.2, 0.0355], [-2.1, 0.044], [-2, 0.054], [-1.9, 0.0656], [-1.8, 0.079], [-1.7, 0.094], [-1.6, 0.1109], [-1.5, 0.1295], [-1.4, 0.1497], [-1.3, 0.1714], [-1.2, 0.1942], [-1.1, 0.2179], [-1, 0.242], [-0.9, 0.2661], [-0.8, 0.2897], [-0.7, 0.3123], [-0.6, 0.3332], [-0.5, 0.3521], [-0.4, 0.3683], [-0.3, 0.3814], [-0.2, 0.391], [-0.1, 0.397], [0, 0.3989], [0.1, 0.397], [0.2, 0.391], [0.3, 0.3814], [0.4, 0.3683], [0.5, 0.3521], [0.6, 0.3332], [0.7, 0.3123], [0.8, 0.2897], [0.9, 0.2661], [1, 0.242], [1.1, 0.2179], [1.2, 0.1942], [1.3, 0.1714], [1.4, 0.1497], [1.5, 0.1295], [1.6, 0.1109], [1.7, 0.094], [1.8, 0.079], [1.9, 0.0656], [2, 0.054], [2.1, 0.044], [2.2, 0.0355], [2.3, 0.0283], [2.4, 0.0224], [2.5, 0.0175], [2.6, 0.0136], [2.7, 0.0104], [2.8, 0.0079], [2.9, 0.006], [3, 0.0044], [3.1, 0.0033], [3.2, 0.0024], [3.3, 0.0017], [3.4, 0.0012], [3.5, 0.0009], [3.6, 0.0006], [3.7, 0.0004], [3.8, 0.0003], [3.9, 0.0002], [4, 0.0001]],
+            },
+          ],
+          markers: [
+            { x: -1, y: 0.242, text: '-1σ' },
+            { x: 1, y: 0.242, text: '+1σ  (68.3% between)' },
+            { x: 3, y: 0.0044, text: '+3σ' },
+          ],
+        },
+    },
+    {
       type: 'intuition',
       title: 'Conditional probability: count inside a smaller group',
       md: `Same 1000 students. Now we know two things about each one: whether they like ML, and whether they write C++.

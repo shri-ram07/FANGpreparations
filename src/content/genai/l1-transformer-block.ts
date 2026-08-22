@@ -30,6 +30,21 @@ A transformer does four things to that list, in this order, and then does the sa
 That bundle of four is called a **block**. The whole architecture is: embed the tokens, run the block, run another block with different numbers inside it, run another, and after the last one convert each token vector into a guess at the next token. Nothing else.`,
     },
     {
+      type: 'visual',
+      component: 'Plot',
+      props: {
+          title: 'Where the parameters actually live in one transformer block',
+          notice: 'For d_model = 768: attention needs four d×d matrices (Q, K, V and the output projection) = 2,359,296 parameters. The feed-forward network expands to 4d and back, so it is two 768×3072 matrices = 4,718,592. The FFN holds twice what attention does. Attention gets all the attention, but two thirds of the block is the boring MLP — which is also where most of the compute and most of the memorised facts sit.',
+          kind: 'bar',
+          yLabel: 'parameters (millions)',
+          bars: [
+            { label: 'attention (4d²)', value: 2.3593, color: 0 },
+            { label: 'feed-forward (8d²)', value: 4.7186, color: 1 },
+          ],
+          unit: 'M',
+        },
+    },
+    {
       type: 'intuition',
       title: 'Block, stack, depth',
       md: `Three words you will now see everywhere, defined once.

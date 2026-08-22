@@ -27,6 +27,27 @@ const m: Module = {
 Nothing new is happening mathematically. The chain rule is still the chain rule, and it is still the one you derived by hand. PyTorch is bookkeeping, done for you, at speed.`,
     },
     {
+      type: 'visual',
+      component: 'Plot',
+      props: {
+          title: 'The training loop, actually run: 61 steps of gradient descent',
+          notice: 'Real output from fitting y = 2x + 1 starting at w = 0, b = 0 with lr = 0.03 — on a log axis, because on a linear one everything after step 5 looks like a flat zero. Two phases are visible: a near-vertical drop while w races from 0 to about 2, then a slow straight decline while b creeps up from 0 toward 1. That second phase is the one you will spend most of your life watching. After 61 steps w = 2.0383 and b = 0.8642 against the true 2 and 1: the weight arrived long ago, the bias is still coming, because x is large so w gets the bigger gradient.',
+          kind: 'line',
+          xLabel: 'step',
+          yLabel: 'log10(mean squared error)',
+          series: [
+            {
+              name: 'loss',
+              points: [[0, 1.6782], [1, 0.9012], [2, 0.135], [3, -0.5758], [4, -1.0886], [5, -1.3042], [6, -1.3659], [7, -1.3899], [8, -1.4069], [9, -1.4227], [10, -1.4383], [11, -1.4538], [12, -1.4694], [13, -1.4849], [14, -1.5005], [15, -1.516], [16, -1.5315], [17, -1.5471], [18, -1.5626], [19, -1.5781], [20, -1.5937], [21, -1.6092], [22, -1.6248], [23, -1.6403], [24, -1.6558], [25, -1.6714], [26, -1.6869], [27, -1.7024], [28, -1.718], [29, -1.7335], [30, -1.7491], [31, -1.7646], [32, -1.7801], [33, -1.7957], [34, -1.8112], [35, -1.8267], [36, -1.8423], [37, -1.8578], [38, -1.8733], [39, -1.8889], [40, -1.9044], [41, -1.92], [42, -1.9355], [43, -1.951], [44, -1.9666], [45, -1.9821], [46, -1.9976], [47, -2.0132], [48, -2.0287], [49, -2.0442], [50, -2.0598], [51, -2.0753], [52, -2.0909], [53, -2.1064], [54, -2.1219], [55, -2.1375], [56, -2.153], [57, -2.1685], [58, -2.1841], [59, -2.1996], [60, -2.2152]],
+            },
+          ],
+          markers: [
+            { x: 5, y: -1.3042, text: 'step 5: w already 2.08' },
+            { x: 60, y: -2.2152, text: 'b only 0.86' },
+          ],
+        },
+    },
+    {
       type: 'intuition',
       title: 'A tensor is a grid of numbers, and it is not a Python list',
       md: `A **tensor** is PyTorch's container for numbers. Concretely, the four numbers 1, 2, 3, 4 arranged as two rows of two.

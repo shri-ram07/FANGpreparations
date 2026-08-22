@@ -31,6 +31,24 @@ A language model produces text one piece at a time. Each piece is called a **tok
 Now count the total reading. Run 1 reads 200 tokens, run 2 reads 201, up to run 300 reading 499. Add those up and you get about 105,000 token-readings to produce 300 tokens. You did roughly 350 times more reading than the answer is long, and almost all of it was re-reading the same prompt over and over.`,
     },
     {
+      type: 'visual',
+      component: 'Plot',
+      props: {
+          title: 'The KV cache is what actually fills your GPU',
+          notice: 'For a 32-layer model with d_model 4096 in fp16, every token cached costs 2 × 32 × 4096 × 2 = 524,288 bytes — 0.52 MB per token, per sequence. At 4,096 tokens that is 2.1 GB for ONE user; at 32,768 tokens it is 17.2 GB. The weights are a fixed cost you pay once, but this grows with every token of every concurrent request, which is why long context is expensive to serve.',
+          kind: 'line',
+          xLabel: 'sequence length (tokens)',
+          yLabel: 'KV cache (GB, one sequence)',
+          series: [
+            {
+              name: 'KV cache',
+              points: [[512, 0.2684], [1024, 0.5369], [2048, 1.0737], [4096, 2.1475], [8192, 4.295], [16384, 8.5899], [32768, 17.1799]],
+              dots: true,
+            },
+          ],
+        },
+    },
+    {
       type: 'code',
       lang: 'python',
       title: 'Count the waste before fixing it',

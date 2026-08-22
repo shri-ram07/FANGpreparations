@@ -30,6 +30,38 @@ Here is the concrete failure. Ask for 4871 multiplied by 3229. The true answer, 
 A pocket calculator has never got this wrong. So do not make the model compute. Let it decide that a calculator should be used, and let your code use the calculator.`,
     },
     {
+      type: 'visual',
+      component: 'Plot',
+      props: {
+          title: 'Why long agent chains fail: every step multiplies',
+          notice: 'An agent that is right 95% of the time per step is right 35.8% of the time over 20 steps — worse than a coin flip. Push per-step reliability to 99% and 20 steps still only gets you 81.8%. The arithmetic is p^k, so the exponent hurts far more than the base: cutting a plan from 20 steps to 5 does more for you than improving each step from 95% to 99%.',
+          kind: 'line',
+          xLabel: 'number of steps in the chain',
+          yLabel: 'chance the whole chain succeeds (%)',
+          unit: '%',
+          yMin: 0,
+          yMax: 105,
+          series: [
+            {
+              name: 'p = 0.999',
+              points: [[1, 99.9], [2, 99.8001], [3, 99.7003], [4, 99.6006], [5, 99.501], [6, 99.4015], [7, 99.3021], [8, 99.2028], [9, 99.1036], [10, 99.0045], [11, 98.9055], [12, 98.8066], [13, 98.7078], [14, 98.6091], [15, 98.5105], [16, 98.4119], [17, 98.3135], [18, 98.2152], [19, 98.117], [20, 98.0189], [21, 97.9209], [22, 97.8229], [23, 97.7251], [24, 97.6274], [25, 97.5298], [26, 97.4322], [27, 97.3348], [28, 97.2375], [29, 97.1402], [30, 97.0431]],
+            },
+            {
+              name: 'p = 0.99',
+              points: [[1, 99], [2, 98.01], [3, 97.0299], [4, 96.0596], [5, 95.099], [6, 94.148], [7, 93.2065], [8, 92.2745], [9, 91.3517], [10, 90.4382], [11, 89.5338], [12, 88.6385], [13, 87.7521], [14, 86.8746], [15, 86.0058], [16, 85.1458], [17, 84.2943], [18, 83.4514], [19, 82.6169], [20, 81.7907], [21, 80.9728], [22, 80.1631], [23, 79.3614], [24, 78.5678], [25, 77.7821], [26, 77.0043], [27, 76.2343], [28, 75.4719], [29, 74.7172], [30, 73.97]],
+            },
+            {
+              name: 'p = 0.95',
+              points: [[1, 95], [2, 90.25], [3, 85.7375], [4, 81.4506], [5, 77.3781], [6, 73.5092], [7, 69.8337], [8, 66.342], [9, 63.0249], [10, 59.8737], [11, 56.88], [12, 54.036], [13, 51.3342], [14, 48.7675], [15, 46.3291], [16, 44.0127], [17, 41.812], [18, 39.7214], [19, 37.7354], [20, 35.8486], [21, 34.0562], [22, 32.3534], [23, 30.7357], [24, 29.1989], [25, 27.739], [26, 26.352], [27, 25.0344], [28, 23.7827], [29, 22.5936], [30, 21.4639]],
+            },
+            {
+              name: 'p = 0.90',
+              points: [[1, 90], [2, 81], [3, 72.9], [4, 65.61], [5, 59.049], [6, 53.1441], [7, 47.8297], [8, 43.0467], [9, 38.742], [10, 34.8678], [11, 31.3811], [12, 28.243], [13, 25.4187], [14, 22.8768], [15, 20.5891], [16, 18.5302], [17, 16.6772], [18, 15.0095], [19, 13.5085], [20, 12.1577], [21, 10.9419], [22, 9.8477], [23, 8.8629], [24, 7.9766], [25, 7.179], [26, 6.4611], [27, 5.815], [28, 5.2335], [29, 4.7101], [30, 4.2391]],
+            },
+          ],
+        },
+    },
+    {
       type: 'intuition',
       title: 'The words, defined once',
       md: `Five terms, in the order you will meet them. Nothing here is subtle; the confusion comes from people using the words without saying what they mean.

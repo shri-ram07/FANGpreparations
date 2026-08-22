@@ -28,6 +28,23 @@ const m: Module = {
 So the model needs the sentence. There are only two ways to get a fact into a model: put it in the training data, or put it in the prompt.`,
     },
     {
+      type: 'visual',
+      component: 'Plot',
+      props: {
+          title: 'Chunk size decides how many shots at the answer you get',
+          notice: 'Give the generator a 4,000-token budget for retrieved context. At 128-token chunks you can send 31 of them — 31 independent chances that the right passage is in there, but each one is a fragment that may have lost its context. At 2,048 tokens only one fits: it arrives with its context intact, but if it is the wrong passage there is nothing to fall back on. That trade — more shots versus more context per shot — is the whole chunking decision.',
+          kind: 'bar',
+          yLabel: 'chunks that fit in a 4,000-token budget',
+          bars: [
+            { label: '128', value: 31, color: 0 },
+            { label: '256', value: 15, color: 1 },
+            { label: '512', value: 7, color: 2 },
+            { label: '1024', value: 3, color: 3 },
+            { label: '2048', value: 1, color: 4 },
+          ],
+        },
+    },
+    {
       type: 'intuition',
       title: 'Why training it on your handbook is the wrong tool',
       md: `The obvious idea is to train the model further on your documents. This is called **fine-tuning** - continuing to train an existing model on extra data so its internal numbers shift. It is taught in *Fine-Tuning: Full FT, LoRA & QLoRA*. For facts, it is the wrong tool, for four practical reasons.

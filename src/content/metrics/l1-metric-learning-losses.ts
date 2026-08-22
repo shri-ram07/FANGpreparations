@@ -29,6 +29,25 @@ const m: Module = {
 The problem is not that the model is weak. The problem is that we asked the wrong question. "Which of these 400 people is this?" is a question with a fixed answer list, and this answer list will not hold still.`,
     },
     {
+      type: 'visual',
+      component: 'Plot',
+      props: {
+          title: 'Triplet loss: the hinge that switches off once the gap is big enough',
+          notice: 'x is how much further the negative sits than the positive. While that gap is below the margin of 0.2 the loss is positive and pushes; the moment it passes 0.2 the loss is exactly 0 and this triplet stops contributing anything. That flat zero is the whole design — once a triplet is comfortably right, training ignores it and spends the gradient on the hard ones. It is also why mining hard triplets matters: pick easy ones and you get a batch of zeros.',
+          kind: 'line',
+          xLabel: 'd(anchor, negative) − d(anchor, positive)',
+          yLabel: 'triplet loss',
+          yMin: 0,
+          series: [
+            {
+              name: 'loss',
+              points: [[-0.4, 0.6], [-0.38, 0.58], [-0.36, 0.56], [-0.34, 0.54], [-0.32, 0.52], [-0.3, 0.5], [-0.28, 0.48], [-0.26, 0.46], [-0.24, 0.44], [-0.22, 0.42], [-0.2, 0.4], [-0.18, 0.38], [-0.16, 0.36], [-0.14, 0.34], [-0.12, 0.32], [-0.1, 0.3], [-0.08, 0.28], [-0.06, 0.26], [-0.04, 0.24], [-0.02, 0.22], [0, 0.2], [0.02, 0.18], [0.04, 0.16], [0.06, 0.14], [0.08, 0.12], [0.1, 0.1], [0.12, 0.08], [0.14, 0.06], [0.16, 0.04], [0.18, 0.02], [0.2, 0], [0.22, 0], [0.24, 0], [0.26, 0], [0.28, 0], [0.3, 0], [0.32, 0], [0.34, 0], [0.36, 0], [0.38, 0], [0.4, 0], [0.42, 0], [0.44, 0], [0.46, 0], [0.48, 0], [0.5, 0], [0.52, 0], [0.54, 0], [0.56, 0], [0.58, 0], [0.6, 0], [0.62, 0], [0.64, 0], [0.66, 0], [0.68, 0], [0.7, 0], [0.72, 0], [0.74, 0], [0.76, 0], [0.78, 0], [0.8, 0]],
+            },
+          ],
+          markers: [{ x: 0.2, y: 0, text: 'margin = 0.2' }],
+        },
+    },
+    {
       type: 'intuition',
       title: 'Ask a different question, and define the words for it',
       md: `Change the question to **"are these two faces the same person?"** That question has only two possible answers and it never grows, no matter how many people join. To answer it we need three words.

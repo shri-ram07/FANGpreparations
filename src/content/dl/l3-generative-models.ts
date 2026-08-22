@@ -27,6 +27,33 @@ const m: Module = {
 - Four designs do this, and they build on each other in order: **autoencoder → VAE → GAN → diffusion**. Learn them in that order; each is one change to the previous one.`,
     },
     {
+      type: 'visual',
+      component: 'Plot',
+      props: {
+          title: 'What a bottleneck of size k can possibly keep',
+          notice: 'A 16-dimensional signal whose variance falls off as i^-1.5. Squeeze it through a latent of size 4 and the very best you can do is keep 78.8% of it; at size 8, 90.9%. The gap to 100% is what the decoder has to invent, and inventing it is exactly what makes an autoencoder generative rather than a lossless codec. Notice the curve is steep then flat: the first few latent dimensions do nearly all the work, which is why latent sizes are small.',
+          kind: 'line',
+          xLabel: 'latent size k',
+          yLabel: 'share of the signal (%)',
+          unit: '%',
+          yMin: 0,
+          yMax: 105,
+          series: [
+            {
+              name: 'kept',
+              points: [[1, 47.1683], [2, 63.8449], [3, 72.9224], [4, 78.8185], [5, 83.0373], [6, 86.2467], [7, 88.7936], [8, 90.8782], [9, 92.6251], [10, 94.1167], [11, 95.4096], [12, 96.5443], [13, 97.5506], [14, 98.4511], [15, 99.263], [16, 100]],
+              dots: true,
+            },
+            {
+              name: 'lost',
+              points: [[1, 52.8317], [2, 36.1551], [3, 27.0776], [4, 21.1815], [5, 16.9627], [6, 13.7533], [7, 11.2064], [8, 9.1218], [9, 7.3749], [10, 5.8833], [11, 4.5904], [12, 3.4557], [13, 2.4494], [14, 1.5489], [15, 0.737], [16, 0]],
+              dots: true,
+            },
+          ],
+          markers: [{ x: 4, y: 78.8185, text: 'k=4 keeps 78.8%' }],
+        },
+    },
+    {
       type: 'intuition',
       title: 'The autoencoder: squeeze it small, then rebuild it',
       md: `Describe a photo to a friend on the phone using only ten words. Then ask them to draw it. Whatever survives those ten words is what actually mattered about the photo.

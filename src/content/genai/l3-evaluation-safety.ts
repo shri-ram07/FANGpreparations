@@ -33,6 +33,25 @@ Now try to score them the way you scored a classifier. A classifier gives you a 
 That is the situation for the rest of this module: **many acceptable outputs, no answer key**. Everything below is a way of getting a usable number anyway.`,
     },
     {
+      type: 'visual',
+      component: 'Plot',
+      props: {
+          title: 'How big an eval set has to be before you can trust the number',
+          notice: 'The 95% confidence interval on a pass rate near 50% is ±1.96 × sqrt(p(1−p)/n). With 50 examples that is ±13.9 percentage points: a run scoring 72% and a run scoring 60% are not distinguishable. You need about 1,100 examples to get inside ±3 points. This is the single most common eval mistake — shipping a "3% improvement" measured on 50 prompts, where the measurement error is four times the effect.',
+          kind: 'line',
+          xLabel: 'eval set size',
+          yLabel: '95% confidence interval (± percentage points)',
+          yMin: 0,
+          series: [
+            {
+              name: '± error',
+              points: [[20, 21.9135], [50, 13.8593], [100, 9.8], [200, 6.9296], [500, 4.3827], [1000, 3.099], [2000, 2.1913], [5000, 1.3859]],
+              dots: true,
+            },
+          ],
+        },
+    },
+    {
       type: 'intuition',
       title: 'The two things you measure against',
       md: `You cannot compare version 8 of your prompt against version 7 unless both were asked the same questions. So you fix the questions once and reuse them.

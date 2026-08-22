@@ -31,6 +31,27 @@ That grid has a name: the **user-item matrix**. Rows are people, columns are thi
 One concrete job for the rest of this half: **Eve has not rated Speed. Guess what she would give it.** We will finish that guess by hand.`,
     },
     {
+      type: 'visual',
+      component: 'Plot',
+      props: {
+          title: 'The long tail: how interactions spread across items',
+          notice: 'Item popularity follows roughly 1/rank, so the top item gets 10,000 interactions and item 40 gets 250. The top 8 items out of 40 — one fifth of the catalogue — already account for 64% of all interactions. That imbalance is the central problem in recommendation: a model that just predicts "popular" scores well on average while being useless for the tail, which is where the catalogue actually makes its money.',
+          kind: 'line',
+          xLabel: 'item rank by popularity',
+          yLabel: 'cumulative share of interactions (%)',
+          yMin: 0,
+          yMax: 105,
+          series: [
+            {
+              name: 'cumulative %',
+              points: [[1, 23.3724], [2, 35.0587], [3, 42.8495], [4, 48.6926], [5, 53.3671], [6, 57.2625], [7, 60.6014], [8, 63.523], [9, 66.1199], [10, 68.4571], [11, 70.5819], [12, 72.5296], [13, 74.3275], [14, 75.997], [15, 77.5551], [16, 79.0159], [17, 80.3907], [18, 81.6892], [19, 82.9193], [20, 84.088], [21, 85.2009], [22, 86.2633], [23, 87.2795], [24, 88.2534], [25, 89.1883], [26, 90.0872], [27, 90.9528], [28, 91.7876], [29, 92.5935], [30, 93.3726], [31, 94.1266], [32, 94.8569], [33, 95.5652], [34, 96.2526], [35, 96.9204], [36, 97.5696], [37, 98.2013], [38, 98.8164], [39, 99.4157], [40, 100]],
+            },
+          ],
+          markers: [{ x: 8, y: 63.523, text: 'top 8 items = 64%' }],
+          unit: '%',
+        },
+    },
+    {
       type: 'intuition',
       title: 'Two ways to fill a blank',
       md: `There are two completely different ways to guess Eve's missing number, and every real system is a mix of them.

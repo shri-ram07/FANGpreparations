@@ -31,6 +31,27 @@ const m: Module = {
 So word-counting rates the wrong answer far above the right one. Hold that in mind: it is not a bug we are going to fix in this module, it is the permanent limitation of every score here. By the end you will be able to put a number on it — the correct paraphrase scores **0.0000** and the flipped-meaning sentence scores **0.7559** on the same metric.`,
     },
     {
+      type: 'visual',
+      component: 'Plot',
+      props: {
+          title: 'Perplexity is just cross-entropy, exponentiated',
+          notice: 'Perplexity = e^(cross-entropy), so it answers "how many options is the model effectively choosing between?". Cross-entropy 0 means perplexity 1 — it knows the answer. Cross-entropy 2.303 means perplexity 10, i.e. as confused as guessing uniformly among 10 words. Because the curve is exponential, a cut of 0.7 in loss roughly halves perplexity wherever you are on it — which is why loss improvements that look tiny are reported as large perplexity wins.',
+          kind: 'line',
+          xLabel: 'cross-entropy (nats)',
+          yLabel: 'perplexity',
+          series: [
+            {
+              name: 'perplexity',
+              points: [[0, 1], [0.1, 1.1052], [0.2, 1.2214], [0.3, 1.3499], [0.4, 1.4918], [0.5, 1.6487], [0.6, 1.8221], [0.7, 2.0138], [0.8, 2.2255], [0.9, 2.4596], [1, 2.7183], [1.1, 3.0042], [1.2, 3.3201], [1.3, 3.6693], [1.4, 4.0552], [1.5, 4.4817], [1.6, 4.953], [1.7, 5.4739], [1.8, 6.0496], [1.9, 6.6859], [2, 7.3891], [2.1, 8.1662], [2.2, 9.025], [2.3, 9.9742], [2.4, 11.0232], [2.5, 12.1825], [2.6, 13.4637], [2.7, 14.8797], [2.8, 16.4446], [2.9, 18.1741], [3, 20.0855], [3.1, 22.198], [3.2, 24.5325], [3.3, 27.1126], [3.4, 29.9641], [3.5, 33.1155], [3.6, 36.5982], [3.7, 40.4473], [3.8, 44.7012], [3.9, 49.4024], [4, 54.5982], [4.1, 60.3403], [4.2, 66.6863], [4.3, 73.6998], [4.4, 81.4509], [4.5, 90.0171], [4.6, 99.4843], [4.7, 109.9472], [4.8, 121.5104], [4.9, 134.2898], [5, 148.4132]],
+            },
+          ],
+          markers: [
+            { x: 2.3026, y: 10, text: 'CE 2.303 → 10' },
+            { x: 0, y: 1, text: 'CE 0 → 1' },
+          ],
+        },
+    },
+    {
       type: 'intuition',
       title: 'The two things you can measure instead',
       md: `Since you cannot check meaning by counting, the field split into two moves. Both are in this module.

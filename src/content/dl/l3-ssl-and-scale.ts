@@ -31,6 +31,24 @@ Now the team wants a model that reads a new ticket and says which of six departm
 That gap is the whole motivation. The cheap resource sits idle while everything waits on the expensive one.`,
     },
     {
+      type: 'visual',
+      component: 'Plot',
+      props: {
+          title: 'Why contrastive learning wants enormous batches',
+          notice: 'With K negatives, a model that has learned nothing scores ln(K+1) — that is the loss you get for random guessing, and it is the bar the model has to beat. With 1 negative the bar is 0.693, so beating it proves almost nothing. With 4,096 negatives it is 8.318: to score below that the model must pick the true pair out of thousands. The task only becomes hard, and therefore only teaches anything, when K is large — which is why SimCLR needed batch 4096.',
+          kind: 'line',
+          xLabel: 'log2(number of negatives)',
+          yLabel: 'loss of a model that has learned nothing',
+          series: [
+            {
+              name: 'ln(K+1)',
+              points: [[0, 0.6931], [1, 1.0986], [2, 1.6094], [3, 2.1972], [4, 2.8332], [5, 3.4965], [6, 4.1744], [7, 4.8598], [8, 5.5491], [9, 6.2403], [10, 6.9324], [11, 7.6251], [12, 8.318]],
+              dots: true,
+            },
+          ],
+        },
+    },
+    {
       type: 'intuition',
       title: 'The core trick: invent a label from the data itself',
       md: `Here is the idea, stated as plainly as it can be stated. **Take one raw example, hide part of it, and make the model predict the hidden part.** The hidden part is the label. No human wrote it. It was already inside the data.

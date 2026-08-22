@@ -34,6 +34,29 @@ const m: Module = {
 That is the whole example. Every number in this module comes out of this one list.`,
     },
     {
+      type: 'visual',
+      component: 'Plot',
+      props: {
+          title: 'How much a hit is worth at each rank',
+          notice: 'NDCG divides each hit by log2(rank + 1). A correct result at position 1 counts 1.000; the same result at position 5 counts 0.387, and at position 10 only 0.289. That is the whole reason ranking metrics differ from precision: precision@10 treats all ten slots equally, and users do not.',
+          kind: 'bar',
+          xLabel: 'rank position',
+          yLabel: 'discount weight',
+          bars: [
+            { label: '1', value: 1, color: 0 },
+            { label: '2', value: 0.6309, color: 0 },
+            { label: '3', value: 0.5, color: 0 },
+            { label: '4', value: 0.4307, color: 0 },
+            { label: '5', value: 0.3869, color: 0 },
+            { label: '6', value: 0.3562, color: 0 },
+            { label: '7', value: 0.3333, color: 0 },
+            { label: '8', value: 0.3155, color: 0 },
+            { label: '9', value: 0.301, color: 0 },
+            { label: '10', value: 0.2891, color: 0 },
+          ],
+        },
+    },
+    {
       type: 'intuition',
       title: 'Two words first: relevance, and "@K"',
       md: `Both are used constantly and both are simple.

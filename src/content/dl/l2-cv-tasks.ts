@@ -29,6 +29,21 @@ const m: Module = {
 That is the real difference, and it is the only one worth memorising: the shape of what the model prints.`,
     },
     {
+      type: 'visual',
+      component: 'Plot',
+      props: {
+          title: 'How many numbers each vision task has to predict for one 224×224 image',
+          notice: 'Classification returns 1,000 numbers — one score per class. Detection returns about 500 (100 boxes, each 4 coordinates plus a class). Semantic segmentation labels every pixel: 224 × 224 × 21 = 1,053,696 numbers, over a thousand times more than classification. That gap is why segmentation needs an architecture that rebuilds full resolution, and why it is so much slower to train.',
+          kind: 'bar',
+          yLabel: 'log10(numbers predicted)',
+          bars: [
+            { label: 'classify', value: 3, color: 0 },
+            { label: 'detect', value: 2.699, color: 1 },
+            { label: 'segment', value: 6.0227, color: 2 },
+          ],
+        },
+    },
+    {
       type: 'note',
       md: `A quick consequence of that list. You cannot count objects with semantic segmentation, because touching objects of the same class become one region — three cats sitting together produce one blob, and one blob is not three. And you cannot measure area with detection, because a rectangle around an irregular shape includes a lot that is not the shape. If the business question is "how many", you need detection or instance segmentation. If it is "what fraction of the image", you need segmentation.`,
     },

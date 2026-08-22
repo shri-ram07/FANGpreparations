@@ -32,6 +32,25 @@ const m: Module = {
 Move one gives you compression. Move two gives you a **VAE**. Move three gives you a **GAN**. Nothing below assumes you have met any of those words before.`,
     },
     {
+      type: 'visual',
+      component: 'Plot',
+      props: {
+          title: 'The KL term, and why it pulls the encoder toward a unit Gaussian',
+          notice: 'For an encoder that outputs mean 0 and spread σ, the KL cost is 0.5(σ² − 1 − ln σ²). It is zero only at σ = 1 and rises on both sides: 0.318 at σ = 0.5, 0.807 at σ = 2. So the KL term punishes an encoder that collapses to a spike AND one that spreads out too far. That is what "regularise the latent space toward N(0,1)" means in arithmetic.',
+          kind: 'line',
+          xLabel: 'encoder spread σ',
+          yLabel: 'KL cost',
+          yMin: 0,
+          series: [
+            {
+              name: 'KL',
+              points: [[0.2, 1.1294], [0.25, 0.9175], [0.3, 0.749], [0.35, 0.6111], [0.4, 0.4963], [0.45, 0.3998], [0.5, 0.3181], [0.55, 0.2491], [0.6, 0.1908], [0.65, 0.142], [0.7, 0.1017], [0.75, 0.0689], [0.8, 0.0431], [0.85, 0.0238], [0.9, 0.0104], [0.95, 0.0025], [1, 0], [1.05, 0.0025], [1.1, 0.0097], [1.15, 0.0215], [1.2, 0.0377], [1.25, 0.0581], [1.3, 0.0826], [1.35, 0.1111], [1.4, 0.1435], [1.45, 0.1797], [1.5, 0.2195], [1.55, 0.263], [1.6, 0.31], [1.65, 0.3605], [1.7, 0.4144], [1.75, 0.4716], [1.8, 0.5322], [1.85, 0.5961], [1.9, 0.6631], [1.95, 0.7334], [2, 0.8069], [2.05, 0.8834], [2.1, 0.9631], [2.15, 1.0458], [2.2, 1.1315], [2.25, 1.2203], [2.3, 1.3121], [2.35, 1.4068], [2.4, 1.5045], [2.45, 1.6052], [2.5, 1.7087], [2.55, 1.8152], [2.6, 1.9245], [2.65, 2.0367], [2.7, 2.1517], [2.75, 2.2696], [2.8, 2.3904], [2.85, 2.5139], [2.9, 2.6403], [2.95, 2.7694], [3, 2.9014]],
+            },
+          ],
+          markers: [{ x: 1, y: 0, text: 'minimum at σ = 1' }],
+        },
+    },
+    {
       type: 'intuition',
       title: 'Reconstruction loss: squeeze it, rebuild it, measure the damage',
       md: `Start with the only idea here that needs no new machinery.

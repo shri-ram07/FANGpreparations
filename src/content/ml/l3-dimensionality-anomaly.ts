@@ -29,6 +29,40 @@ const m: Module = {
 That is dimensionality reduction. Not deleting a column, as you will see, but re-describing every row using fewer numbers.`,
     },
     {
+      type: 'visual',
+      component: 'Plot',
+      props: {
+        title: 'The six students, and the direction they lean along',
+        notice:
+          'The dashed line is PC1 — the direction the cloud actually spreads along. Every point sits almost on it, which is why one number per student loses so little: PC1 carries 98.1% of the spread, the direction across it carries 1.9%.',
+        kind: 'scatter',
+        xLabel: 'hours slept',
+        yLabel: 'hours studied (÷10)',
+        series: [
+          {
+            name: 'students',
+            points: [
+              [1.6, 2.3],
+              [3.6, 3.3],
+              [4.0, 5.5],
+              [6.0, 6.5],
+              [6.4, 8.7],
+              [8.4, 9.7],
+            ],
+          },
+          {
+            name: 'PC1',
+            dashed: true,
+            points: [
+              [1.51, 1.75],
+              [8.49, 10.25],
+            ],
+          },
+        ],
+        markers: [{ x: 5, y: 6, text: 'mean (5, 6)' }],
+      },
+    },
+    {
       type: 'intuition',
       title: 'The one move: how far along a direction does this point sit',
       md: `Put a ruler down on the graph paper, lying along the line the points lean along. Now for each point, walk from the point straight to the ruler by the shortest path, and read off the mark you land on.

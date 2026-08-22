@@ -36,6 +36,26 @@ The point moved. It started at (3, 2) and landed at (4, 9). That is what a matri
 Every layer of every neural network is exactly this machine, run on much bigger grids.`,
     },
     {
+      type: 'visual',
+      component: 'Plot',
+      props: {
+          title: 'What the matrix [[2, 1], [0, 1]] does to a square',
+          notice: 'The matrix moves every point; the square becomes a parallelogram. Its columns are where the two unit arrows land: (1,0) goes to (2,0) and (0,1) goes to (1,1) — read them straight off the matrix. The area goes from 1 to 2, and 2 is exactly the determinant. That is what a determinant measures: the factor by which the transformation scales area.',
+          kind: 'line',
+          xLabel: 'x',
+          yLabel: 'y',
+          series: [
+            { name: 'after', points: [[0, 0], [2, 0], [3, 1], [1, 1], [0, 0]], dots: true },
+            {
+              name: 'before',
+              points: [[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]],
+              dots: true,
+              dashed: true,
+            },
+          ],
+        },
+    },
+    {
       type: 'note',
       md: `You have already done the arithmetic in that recipe. "Multiply position by position and add" is the **dot product** from the previous module. So one row of a matrix, dotted with the input vector, produces one number of the output. A matrix with two rows is simply two dot products stacked. That is the only new idea so far, and it is a small one.`,
     },

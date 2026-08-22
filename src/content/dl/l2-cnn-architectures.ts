@@ -29,6 +29,24 @@ Nothing happened because the idea was not the missing piece. Three other things 
 The 2012 network that put these together cut the error rate on that 1.2 million photo benchmark from about 26% to about 15%. That is the whole story of the early years: **the idea was old, the fuel was new.** Everything after this is a genuinely new idea, and each one gets its own section.`,
     },
     {
+      type: 'visual',
+      component: 'Plot',
+      props: {
+          title: 'ImageNet top-5 error, the numbers that drove the architecture race',
+          notice: 'These are the published ILSVRC results. AlexNet at 16.4% in 2012 was the jump that started deep learning in vision; by 2015 ResNet-152 was at 3.57%, below the often-quoted ~5% human benchmark. The interesting part is HOW: VGG got there by stacking more of the same, GoogLeNet by widening, ResNet by adding skip connections so depth stopped hurting.',
+          kind: 'bar',
+          yLabel: 'top-5 error (%)',
+          unit: '%',
+          bars: [
+            { label: 'AlexNet 2012', value: 16.4, color: 0 },
+            { label: 'ZFNet 2013', value: 11.7, color: 1 },
+            { label: 'VGG-16 2014', value: 7.3, color: 2 },
+            { label: 'GoogLeNet 2014', value: 6.7, color: 3 },
+            { label: 'ResNet-152 2015', value: 3.57, color: 4 },
+          ],
+        },
+    },
+    {
       type: 'intuition',
       title: 'Idea one: many small filters beat one big filter',
       md: `Here is the question a 2014 design answered. You want a layer that can see a **5 by 5** patch of the image at once, because a feature like a corner does not fit inside a 3 by 3 patch. You have two ways to build it.

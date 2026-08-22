@@ -30,6 +30,21 @@ That is the whole subject in one comparison. Linear regression can multiply each
 The score used here is **R-squared**: 1.0 means the predictions match the true prices exactly, 0.0 means the model is no better than always guessing the average price.`,
     },
     {
+      type: 'visual',
+      component: 'Plot',
+      props: {
+          title: 'What an unscaled column does to distance',
+          notice: 'Distance squares each column\'s difference and adds them up. Age spans 50, income spans 180,000 — squared, that is 2,500 against 32,400,000,000. Income supplies 99.99999% of the distance and age supplies 0.0000077%, so a "nearest neighbour" is just the nearest income and age is decorative. Standardising each column to the same spread is what makes the comparison mean anything.',
+          kind: 'bar',
+          yLabel: 'share of squared distance (%)',
+          bars: [
+            { label: 'age', value: 0, color: 0 },
+            { label: 'income', value: 100, color: 5 },
+          ],
+          unit: '%',
+        },
+    },
+    {
       type: 'code',
       lang: 'python',
       title: 'Part 1: the two columns we were given',

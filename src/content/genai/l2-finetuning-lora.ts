@@ -29,6 +29,25 @@ There are exactly three routes, and they are not interchangeable:
 The honest ordering: try prompting first, add retrieval when the model is missing *facts*, and fine-tune when the model already has the knowledge but keeps getting the *behaviour* wrong — the wrong format, the wrong tone, the wrong choice among your labels.`,
     },
     {
+      type: 'visual',
+      component: 'Plot',
+      props: {
+          title: 'How little of the model LoRA actually trains',
+          notice: 'A 768×768 weight is 589,824 parameters. LoRA replaces the update with two thin matrices, 768×r and r×768, so it trains 2 × 768 × r instead. At rank 8 that is 12,288 — 2.08% of the layer. The line crosses 100% at rank 384, which is the point where LoRA would cost more than just training the weight; every rank people actually use sits far to the left of it.',
+          kind: 'line',
+          xLabel: 'LoRA rank r',
+          yLabel: 'trainable share of the layer (%)',
+          unit: '%',
+          series: [
+            {
+              name: 'trainable %',
+              points: [[1, 0.2604], [2, 0.5208], [4, 1.0417], [8, 2.0833], [16, 4.1667], [32, 8.3333], [64, 16.6667], [128, 33.3333], [256, 66.6667]],
+              dots: true,
+            },
+          ],
+        },
+    },
+    {
       type: 'intuition',
       title: 'What fine-tuning actually does, and what it costs',
       md: `**Fine-tuning** = continue training an already-trained model on a small dataset of your own examples. Same machinery as the original training, just far fewer examples and far fewer steps.

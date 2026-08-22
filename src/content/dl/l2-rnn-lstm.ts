@@ -32,6 +32,34 @@ And there is a third problem. If you just flatten all the words together, "dog b
 Two words you will need from here on. A **sequence** is an ordered list of items - the words of a sentence, the daily prices of a stock. A **timestep** is one position in that sequence: word 1 is timestep 1, word 2 is timestep 2, and so on. "Time" here just means "position in the order", even when nothing is actually timed.`,
     },
     {
+      type: 'visual',
+      component: 'Plot',
+      props: {
+          title: 'Why a plain RNN forgets: the gradient after t steps',
+          notice: 'Backpropagating through t steps multiplies by roughly the same factor t times. At 0.9 the gradient is 0.0052 after 50 steps — the network cannot connect step 50 to step 0, which is the vanishing gradient. At 1.1 it is 117.4 and still climbing: exploding. Only a factor of exactly 1 is stable, and that is what the LSTM cell state is built to hold.',
+          kind: 'line',
+          xLabel: 'timesteps back through the sequence',
+          yLabel: 'gradient size',
+          yMin: 0,
+          yMax: 12,
+          series: [
+            {
+              name: 'factor 1.1',
+              points: [[0, 1], [1, 1.1], [2, 1.21], [3, 1.331], [4, 1.4641], [5, 1.6105], [6, 1.7716], [7, 1.9487], [8, 2.1436], [9, 2.3579], [10, 2.5937], [11, 2.8531], [12, 3.1384], [13, 3.4523], [14, 3.7975], [15, 4.1772], [16, 4.595], [17, 5.0545], [18, 5.5599], [19, 6.1159], [20, 6.7275], [21, 7.4002], [22, 8.1403], [23, 8.9543], [24, 9.8497], [25, 10.8347], [26, 11.9182], [27, 13.11], [28, 14.421], [29, 15.8631], [30, 17.4494], [31, 19.1943], [32, 21.1138], [33, 23.2252], [34, 25.5477], [35, 28.1024], [36, 30.9127], [37, 34.0039], [38, 37.4043], [39, 41.1448], [40, 45.2593], [41, 49.7852], [42, 54.7637], [43, 60.2401], [44, 66.2641], [45, 72.8905], [46, 80.1795], [47, 88.1975], [48, 97.0172], [49, 106.719], [50, 117.3909]],
+            },
+            {
+              name: 'factor 1.0',
+              points: [[0, 1], [1, 1], [2, 1], [3, 1], [4, 1], [5, 1], [6, 1], [7, 1], [8, 1], [9, 1], [10, 1], [11, 1], [12, 1], [13, 1], [14, 1], [15, 1], [16, 1], [17, 1], [18, 1], [19, 1], [20, 1], [21, 1], [22, 1], [23, 1], [24, 1], [25, 1], [26, 1], [27, 1], [28, 1], [29, 1], [30, 1], [31, 1], [32, 1], [33, 1], [34, 1], [35, 1], [36, 1], [37, 1], [38, 1], [39, 1], [40, 1], [41, 1], [42, 1], [43, 1], [44, 1], [45, 1], [46, 1], [47, 1], [48, 1], [49, 1], [50, 1]],
+              dashed: true,
+            },
+            {
+              name: 'factor 0.9',
+              points: [[0, 1], [1, 0.9], [2, 0.81], [3, 0.729], [4, 0.6561], [5, 0.5905], [6, 0.5314], [7, 0.4783], [8, 0.4305], [9, 0.3874], [10, 0.3487], [11, 0.3138], [12, 0.2824], [13, 0.2542], [14, 0.2288], [15, 0.2059], [16, 0.1853], [17, 0.1668], [18, 0.1501], [19, 0.1351], [20, 0.1216], [21, 0.1094], [22, 0.0985], [23, 0.0886], [24, 0.0798], [25, 0.0718], [26, 0.0646], [27, 0.0581], [28, 0.0523], [29, 0.0471], [30, 0.0424], [31, 0.0382], [32, 0.0343], [33, 0.0309], [34, 0.0278], [35, 0.025], [36, 0.0225], [37, 0.0203], [38, 0.0182], [39, 0.0164], [40, 0.0148], [41, 0.0133], [42, 0.012], [43, 0.0108], [44, 0.0097], [45, 0.0087], [46, 0.0079], [47, 0.0071], [48, 0.0064], [49, 0.0057], [50, 0.0052]],
+            },
+          ],
+        },
+    },
+    {
       type: 'intuition',
       title: 'The RNN: one small model, applied again and again',
       md: `Picture a person reading a book with a single sticky note. They read one word, scribble an updated summary on the note, and move to the next word. The note is the only thing they carry forward.

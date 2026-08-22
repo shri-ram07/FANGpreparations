@@ -28,6 +28,7 @@ export const visuals = {
   NextTokenSampler: lazy(() => import('./NextTokenSampler')),
   OptimizerRace: lazy(() => import('./OptimizerRace')),
   PointerBoxDiagram: lazy(() => import('./PointerBoxDiagram')),
+  Plot: lazy(() => import('./Plot')),
   PythonPlayground: lazy(() => import('./PythonPlayground')),
   RateLimiterSim: lazy(() => import('./RateLimiterSim')),
   RegularizationGeometry: lazy(() => import('./RegularizationGeometry')),

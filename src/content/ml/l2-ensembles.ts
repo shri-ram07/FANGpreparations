@@ -36,6 +36,36 @@ Now combine them by **majority vote**: for each email, take the answer that at l
 The vote gets **six out of six**. Every individual filter got 66.7%; the combination got 100%. Nobody got smarter. Look at why: on every single email, exactly one filter is wrong and the other two are right, so the wrong one is always outvoted.`,
     },
     {
+      type: 'visual',
+      component: 'Plot',
+      props: {
+          title: 'Why averaging many trees helps — and where it stops helping',
+          notice: 'Averaging n models with variance 1 each: if they were independent the variance would fall as 1/n, straight to zero. Real trees trained on the same data are correlated, and correlation ρ is a floor the average can never get below — at ρ = 0.3 you are stuck at 0.30 no matter how many trees you add (200 trees gives 0.303). That floor is why Random Forest bothers to pick a random subset of features at each split: it exists purely to push ρ down.',
+          kind: 'line',
+          xLabel: 'number of trees averaged',
+          yLabel: 'variance of the average',
+          yMin: 0,
+          yMax: 1.05,
+          series: [
+            {
+              name: 'ρ = 0.3',
+              points: [[1, 1], [2, 0.65], [3, 0.5333], [5, 0.44], [8, 0.3875], [12, 0.3583], [20, 0.335], [30, 0.3233], [50, 0.314], [80, 0.3087], [120, 0.3058], [200, 0.3035]],
+              dots: true,
+            },
+            {
+              name: 'ρ = 0.1',
+              points: [[1, 1], [2, 0.55], [3, 0.4], [5, 0.28], [8, 0.2125], [12, 0.175], [20, 0.145], [30, 0.13], [50, 0.118], [80, 0.1113], [120, 0.1075], [200, 0.1045]],
+              dots: true,
+            },
+            {
+              name: 'independent',
+              points: [[1, 1], [2, 0.5], [3, 0.3333], [5, 0.2], [8, 0.125], [12, 0.0833], [20, 0.05], [30, 0.0333], [50, 0.02], [80, 0.0125], [120, 0.0083], [200, 0.005]],
+              dots: true,
+            },
+          ],
+        },
+    },
+    {
       type: 'code',
       lang: 'python',
       title: 'The same six emails, in code',

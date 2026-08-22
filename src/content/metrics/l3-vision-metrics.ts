@@ -28,6 +28,29 @@ const m: Module = {
 That rule is called IoU. Once you have it, precision, recall and the precision-recall curve all work exactly as they did for spam email.`,
     },
     {
+      type: 'visual',
+      component: 'Plot',
+      props: {
+          title: 'How fast IoU falls as a predicted box slides off the true one',
+          notice: 'Two identical 1×1 boxes, the prediction shifted sideways by d. IoU = (1−d)/(1+d), so a shift of just 1/3 of the box already drops IoU to exactly 0.500 — the usual pass mark. Shift by half a box and IoU is 0.333, a fail. The curve is steep near the start, which is why detection scores move so much for what looks like a small misalignment.',
+          kind: 'line',
+          xLabel: 'sideways shift, as a fraction of box width',
+          yLabel: 'IoU',
+          yMin: 0,
+          yMax: 1.05,
+          series: [
+            {
+              name: 'IoU',
+              points: [[0, 1], [0.02, 0.9608], [0.04, 0.9231], [0.06, 0.8868], [0.08, 0.8519], [0.1, 0.8182], [0.12, 0.7857], [0.14, 0.7544], [0.16, 0.7241], [0.18, 0.6949], [0.2, 0.6667], [0.22, 0.6393], [0.24, 0.6129], [0.26, 0.5873], [0.28, 0.5625], [0.3, 0.5385], [0.32, 0.5152], [0.34, 0.4925], [0.36, 0.4706], [0.38, 0.4493], [0.4, 0.4286], [0.42, 0.4085], [0.44, 0.3889], [0.46, 0.3699], [0.48, 0.3514], [0.5, 0.3333], [0.52, 0.3158], [0.54, 0.2987], [0.56, 0.2821], [0.58, 0.2658], [0.6, 0.25], [0.62, 0.2346], [0.64, 0.2195], [0.66, 0.2048], [0.68, 0.1905], [0.7, 0.1765], [0.72, 0.1628], [0.74, 0.1494], [0.76, 0.1364], [0.78, 0.1236], [0.8, 0.1111], [0.82, 0.0989], [0.84, 0.087], [0.86, 0.0753], [0.88, 0.0638], [0.9, 0.0526], [0.92, 0.0417], [0.94, 0.0309], [0.96, 0.0204], [0.98, 0.0101], [1, 0]],
+            },
+          ],
+          markers: [
+            { x: 0.3333, y: 0.5, text: 'shift 1/3 → IoU 0.50' },
+            { x: 0.5, y: 0.3333, text: 'shift 1/2 → IoU 0.33' },
+          ],
+        },
+    },
+    {
       type: 'intuition',
       title: 'How a box is written down',
       md: `Before any arithmetic, fix the notation, because half of all detection bugs are a notation mix-up.

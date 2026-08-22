@@ -30,6 +30,32 @@ Those are real numbers, printed by the program two sections down. Nothing change
 **Initialisation** is the word for choosing the starting values of the weights before any training happens. The three lines above are the whole argument for taking that choice seriously: it is not a detail, it decides whether the network trains at all.`,
     },
     {
+      type: 'visual',
+      component: 'Plot',
+      props: {
+          title: 'What the wrong initialisation does after 20 layers',
+          notice: 'Each layer multiplies the activation variance by a constant factor. He init sets that factor to exactly 1, so the signal arrives at layer 20 the same size it started. Halve the weights and the factor is 0.5: after 20 layers the signal is 9.5e-07 of what went in, and the gradient coming back is just as small. Double them and it is 1.0e+06. Nothing about the architecture changed — only the initial scale.',
+          kind: 'line',
+          xLabel: 'layer depth',
+          yLabel: 'log10(activation variance)',
+          series: [
+            {
+              name: 'factor 2.0',
+              points: [[0, 0], [1, 0.301], [2, 0.6021], [3, 0.9031], [4, 1.2041], [5, 1.5051], [6, 1.8062], [7, 2.1072], [8, 2.4082], [9, 2.7093], [10, 3.0103], [11, 3.3113], [12, 3.6124], [13, 3.9134], [14, 4.2144], [15, 4.5154], [16, 4.8165], [17, 5.1175], [18, 5.4185], [19, 5.7196], [20, 6.0206]],
+            },
+            {
+              name: 'He init (1.0)',
+              points: [[0, 0], [1, 0], [2, 0], [3, 0], [4, 0], [5, 0], [6, 0], [7, 0], [8, 0], [9, 0], [10, 0], [11, 0], [12, 0], [13, 0], [14, 0], [15, 0], [16, 0], [17, 0], [18, 0], [19, 0], [20, 0]],
+              dashed: true,
+            },
+            {
+              name: 'factor 0.5',
+              points: [[0, 0], [1, -0.301], [2, -0.6021], [3, -0.9031], [4, -1.2041], [5, -1.5051], [6, -1.8062], [7, -2.1072], [8, -2.4082], [9, -2.7093], [10, -3.0103], [11, -3.3113], [12, -3.6124], [13, -3.9134], [14, -4.2144], [15, -4.5154], [16, -4.8165], [17, -5.1175], [18, -5.4185], [19, -5.7196], [20, -6.0206]],
+            },
+          ],
+        },
+    },
+    {
       type: 'intuition',
       title: 'Two words we need before the code',
       md: `Both are simple, and both get used constantly from here on.
