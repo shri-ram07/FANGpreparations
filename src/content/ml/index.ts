@@ -63,7 +63,8 @@ export const ml: SubjectDef = {
     mod('ml-l3-feature-engineering', 3, 'Feature Engineering & Data Leakage', 42, () => import('./l3-feature-engineering')),
     mod('ml-l3-cross-validation', 3, 'Cross-Validation', 22, () => import('./l3-cross-validation')),
     mod('ml-l3-hyperparameter-tuning', 3, 'Hyperparameter Tuning', 20, () => import('./l3-hyperparameter-tuning')),
-    mod('ml-l3-recsys-timeseries', 3, 'Recommendation Systems & Time-Series Basics', 48, () => import('./l3-recsys-timeseries')),
+    mod('ml-l3-recommender-systems', 3, 'Recommender Systems', 20, () => import('./l3-recommender-systems')),
+    mod('ml-l3-time-series', 3, 'Time Series Basics', 20, () => import('./l3-time-series')),
     mod('ml-l3-from-scratch-and-projects', 3, 'From Scratch in NumPy + The Projects That Get You Hired', 56, () => import('./l3-from-scratch-and-projects')),
   ],
 }
