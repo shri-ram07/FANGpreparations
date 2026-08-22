@@ -1,0 +1,222 @@
+import type { Module } from '../types'
+
+const m: Module = {
+  id: 'ml-l3-tsne-umap',
+  subjectId: 'ml',
+  level: 3,
+  title: 't-SNE & UMAP: Maps for Looking At Data',
+  whyItMatters:
+    'These are the plots you see in every paper with coloured blobs. They are genuinely useful for one job - checking by eye whether your groups separate at all - and actively harmful for everything else, so it is worth knowing precisely which is which.',
+  assumes: [
+    'You have read PCA - t-SNE is defined here by contrast with it',
+    'You know what a distance between two points is',
+  ],
+  estMinutes: 18,
+  sections: [
+    {
+      type: 'intuition',
+      title: 'What t-SNE is',
+      md: `**t-SNE** (t-distributed Stochastic Neighbor Embedding) places every row somewhere on a 2D page so that rows which were **neighbours** in the original data end up near each other on the page.
+
+That is a different goal from PCA. PCA looks for directions of largest variance and is a rigid, straight projection: every row gets the same linear formula. t-SNE preserves *who is near whom* and is free to bend space to manage it, stretching sparse regions and squeezing dense ones.
+
+**UMAP** does the same job with a different construction. It is faster and holds on to a little more of the large-scale layout, and every warning below applies to it too.`,
+    },
+    {
+      type: 'math',
+      intro:
+        'Two probability distributions and a mismatch to minimise. p is how likely j is a neighbour of i in the ORIGINAL space; q is the same thing on the page. KL is the Kullback-Leibler divergence, a measure of how far q is from p. Note the shapes: p uses a Gaussian, but q uses a Student-t with one degree of freedom.',
+      latex: [
+        'p_{j|i} = \\frac{\\exp(-\\lVert x_i - x_j \\rVert^2 / 2\\sigma_i^2)}{\\sum_{k \\neq i} \\exp(-\\lVert x_i - x_k \\rVert^2 / 2\\sigma_i^2)}',
+        'q_{ij} = \\frac{(1 + \\lVert y_i - y_j \\rVert^2)^{-1}}{\\sum_{k \\neq l}(1 + \\lVert y_k - y_l \\rVert^2)^{-1}}',
+        'KL(P \\Vert Q) = \\sum_{i \\neq j} p_{ij} \\log \\frac{p_{ij}}{q_{ij}}',
+      ],
+    },
+    {
+      type: 'intuition',
+      title: 'Why the two distributions have different shapes',
+      md: `That mismatch is the whole trick, and it has a name: the **crowding problem**. A 2D page has far less room than the original high-dimensional space, so everything wants to pile into the middle.
+
+The fix is to make distant pairs cheap on the page. The Student-t has a heavy tail, so points sitting far apart are not punished nearly as hard as a Gaussian would punish them — which lets clusters push away from each other and leave visible gaps.`,
+    },
+    {
+      type: 'visual',
+      component: 'Plot',
+      props: {
+        title: 'The heavy tail: Gaussian vs Student-t',
+        notice:
+          'Both curves start at 1, so close pairs are treated almost identically. They part company in the tail: at distance 3 the Student-t gives 0.1000 against the Gaussian at 0.0111 - nine times more weight to a distant pair. At distance 5 it is 0.0385 against 0.0000, a factor of over 10,000. That tolerance for far-apart points is exactly what lets t-SNE open gaps between clusters instead of crushing everything into the centre.',
+        kind: 'line',
+        xLabel: 'distance between two points on the page',
+        yLabel: 'unnormalised similarity',
+        yMin: 0,
+        series: [
+          { name: 'Student-t', points: [[0.0, 1.0], [0.1, 0.9901], [0.2, 0.9615], [0.3, 0.9174], [0.4, 0.8621], [0.5, 0.8], [0.6, 0.7353], [0.7, 0.6711], [0.8, 0.6098], [0.9, 0.5525], [1.0, 0.5], [1.1, 0.4525], [1.2, 0.4098], [1.3, 0.3717], [1.4, 0.3378], [1.5, 0.3077], [1.6, 0.2809], [1.7, 0.2571], [1.8, 0.2358], [1.9, 0.2169], [2.0, 0.2], [2.1, 0.1848], [2.2, 0.1712], [2.3, 0.159], [2.4, 0.1479], [2.5, 0.1379], [2.6, 0.1289], [2.7, 0.1206], [2.8, 0.1131], [2.9, 0.1063], [3.0, 0.1], [3.1, 0.0943], [3.2, 0.089], [3.3, 0.0841], [3.4, 0.0796], [3.5, 0.0755], [3.6, 0.0716], [3.7, 0.0681], [3.8, 0.0648], [3.9, 0.0617], [4.0, 0.0588], [4.1, 0.0561], [4.2, 0.0536], [4.3, 0.0513], [4.4, 0.0491], [4.5, 0.0471], [4.6, 0.0451], [4.7, 0.0433], [4.8, 0.0416], [4.9, 0.04], [5.0, 0.0385]] },
+          { name: 'Gaussian', points: [[0.0, 1.0], [0.1, 0.995], [0.2, 0.9802], [0.3, 0.956], [0.4, 0.9231], [0.5, 0.8825], [0.6, 0.8353], [0.7, 0.7827], [0.8, 0.7261], [0.9, 0.667], [1.0, 0.6065], [1.1, 0.5461], [1.2, 0.4868], [1.3, 0.4296], [1.4, 0.3753], [1.5, 0.3247], [1.6, 0.278], [1.7, 0.2357], [1.8, 0.1979], [1.9, 0.1645], [2.0, 0.1353], [2.1, 0.1103], [2.2, 0.0889], [2.3, 0.071], [2.4, 0.0561], [2.5, 0.0439], [2.6, 0.034], [2.7, 0.0261], [2.8, 0.0198], [2.9, 0.0149], [3.0, 0.0111], [3.1, 0.0082], [3.2, 0.006], [3.3, 0.0043], [3.4, 0.0031], [3.5, 0.0022], [3.6, 0.0015], [3.7, 0.0011], [3.8, 0.0007], [3.9, 0.0005], [4.0, 0.0003], [4.1, 0.0002], [4.2, 0.0001], [4.3, 0.0001], [4.4, 0.0001], [4.5, 0.0], [4.6, 0.0], [4.7, 0.0], [4.8, 0.0], [4.9, 0.0], [5.0, 0.0]] },
+        ],
+        markers: [{ x: 3, y: 0.1, text: 'at d=3: 0.1000 vs 0.0111' }],
+      },
+    },
+    {
+      type: 'note',
+      label: 'What the picture does NOT mean',
+      md: `Three things people read off these plots that are not there:
+
+- **Distance between blobs is meaningless.** Two blobs on opposite sides of the page may be more alike than two that touch. Only "these points ended up neighbours" carries information.
+- **Blob size is meaningless.** The method stretches sparse regions and squeezes dense ones as a matter of course, so a big blob is not a common category.
+- **The layout is not stable.** Change the random seed or the perplexity and you get a different picture from the same data.`,
+    },
+    {
+      type: 'note',
+      label: 'Never feed the output to a model',
+      md: `The two numbers per row exist to make a readable picture, not to mean anything, and there is no honest way to place a *new* row into an existing t-SNE plot — the coordinates come from an optimisation over the whole dataset at once.
+
+If you want reduced features for a model, that is PCA (or an autoencoder). t-SNE and UMAP are for your eyes only.`,
+    },
+  ],
+  quiz: [
+    {
+      question: 'What does t-SNE try to preserve?',
+      options: [
+        { text: 'Directions of largest variance', explanation: 'That is PCA. t-SNE has no notion of a variance-maximising direction.' },
+        { text: 'Which points are neighbours of which', explanation: 'Correct. It matches a neighbour-probability distribution in the original space to one on the page.' },
+        { text: 'The exact distance between every pair of points', explanation: 'That is closer to MDS, and t-SNE explicitly does not do it — distances between blobs are meaningless.' },
+        { text: 'The separation between labelled classes', explanation: 'It never sees labels; it is unsupervised.' },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'Why does q use a Student-t while p uses a Gaussian?',
+      options: [
+        { text: 'To make the gradient cheaper to compute', explanation: 'It is slightly cheaper, but that is a side effect rather than the reason.' },
+        { text: 'The heavy tail makes distant pairs cheap, which solves the crowding problem and lets clusters separate', explanation: 'Correct. At distance 3 the Student-t gives 0.1000 against the Gaussian 0.0111 — nine times the tolerance for being far apart.' },
+        { text: 'Because the original data is usually t-distributed', explanation: 'Nothing is assumed about the data distribution.' },
+        { text: 'To make the output symmetric', explanation: 'Symmetrisation is done separately, by averaging p values.' },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'Two clusters sit at opposite corners of a t-SNE plot. What can you conclude?',
+      options: [
+        { text: 'They are the two most dissimilar groups in the data', explanation: 'You cannot conclude this. Between-cluster distances carry no information.' },
+        { text: 'Only that points within each cluster were neighbours of each other', explanation: 'Correct. Neighbourhood is preserved; the gap between blobs is an artefact of the layout.' },
+        { text: 'They differ along the first principal component', explanation: 'There is no principal component here — t-SNE is not a linear projection.' },
+        { text: 'The clusters are of similar size in the data', explanation: 'Blob area is meaningless: sparse regions get stretched and dense ones squeezed.' },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'You want to reduce 300 features to 10 as input to a classifier. Use t-SNE?',
+      options: [
+        { text: 'Yes, it preserves structure better than PCA', explanation: 'It preserves neighbourhoods for viewing, but its coordinates are not meaningful features.' },
+        { text: 'No — use PCA. t-SNE has no way to place a new row into an existing plot', explanation: 'Correct. The coordinates come from optimising the whole dataset at once, so there is no transform to apply at inference time.' },
+        { text: 'Yes, provided you fix the random seed', explanation: 'A fixed seed makes it reproducible, not meaningful, and still gives you no way to embed new rows.' },
+        { text: 'Either works; it is only a speed trade-off', explanation: 'They differ in kind, not speed: one produces a reusable transform and the other does not.' },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'You run t-SNE twice with different seeds and get different pictures. What does that mean?',
+      options: [
+        { text: 'The implementation is buggy', explanation: 'It is expected behaviour — the optimisation starts from a random initialisation.' },
+        { text: 'Nothing is wrong; the layout is not unique, so only stable neighbourhoods should be trusted', explanation: 'Correct. Read what survives across runs, not any single picture.' },
+        { text: 'The data has no cluster structure', explanation: 'Real clusters usually persist across seeds even when the layout moves.' },
+        { text: 'Perplexity was set too low', explanation: 'Perplexity changes the picture too, but variation across seeds happens at any setting.' },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'How does UMAP differ from t-SNE in practice?',
+      options: [
+        { text: 'It is supervised', explanation: 'It is unsupervised by default, though it can optionally use labels.' },
+        { text: 'It is faster and preserves a bit more of the global layout, with the same reading caveats', explanation: 'Correct. It is built differently but is used for the same job and misread in the same ways.' },
+        { text: 'It produces features safe to feed to a model', explanation: 'UMAP does offer a transform for new points, but its coordinates are still shaped for viewing rather than for prediction.' },
+        { text: 'It is a linear method like PCA', explanation: 'It is non-linear, like t-SNE.' },
+      ],
+      correct: 1,
+    },
+  ],
+  interviewQuestions: [
+    {
+      question: 'When would you use t-SNE rather than PCA?',
+      answer:
+        'When the question is "do my groups look separable at all?" and the answer will be read by a human eye. t-SNE preserves neighbourhoods and can reveal non-linear cluster structure PCA would flatten. When the output has to be reusable — features for a model, a transform for new rows, an interpretable direction — PCA, because t-SNE gives you none of those.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Explain the crowding problem.',
+      answer:
+        'A 2D page has far less room than a high-dimensional space: in high dimensions a point can have many mutually distant neighbours, and there is no way to arrange them that way on a plane. Everything therefore gets pushed toward the middle. t-SNE fixes it by using a heavy-tailed Student-t for the page distribution, which charges far less for distant pairs — nine times less than a Gaussian at distance 3 — so clusters can spread apart and leave gaps.',
+      isCaseBased: false,
+    },
+    {
+      question: 'A colleague shows a t-SNE plot and says two clusters are "far apart, so very different". What do you say?',
+      answer:
+        'That the plot does not support the claim. t-SNE preserves neighbourhoods, not distances, so the gap between two blobs is an artefact of the layout and changes with the seed and the perplexity. If they want a statement about how different two groups are, measure it in the original space — centroid distance, a classifier ability to tell them apart, or a statistical test on the features.',
+      isCaseBased: true,
+    },
+    {
+      question: 'What is perplexity and how should it be set?',
+      answer:
+        'Perplexity sets the effective number of neighbours each point considers, by controlling the per-point Gaussian width sigma_i. Low values emphasise very local structure and fragment the picture; high values smooth toward global structure and merge clusters. Typical range is 5 to 50, and the honest practice is to run several values and only trust structure that persists across all of them.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Why can t-SNE not embed a new data point?',
+      answer:
+        'Because there is no fitted function to apply. The coordinates are the solution of an optimisation over all pairwise similarities in the dataset simultaneously; adding a point changes the objective. PCA, by contrast, produces a matrix you can multiply any new row by. UMAP does offer an approximate transform, which is one practical reason to prefer it.',
+      isCaseBased: false,
+    },
+    {
+      question: 'You see beautiful clusters in a t-SNE of random noise. Is that possible?',
+      answer:
+        'Yes, and it is a well-known failure. t-SNE will impose visible groupings on structureless data, particularly at low perplexity, because the algorithm is built to separate things. The defence is to check the same data with a method that has an objective baseline — a clustering quality measure in the original space, or simply testing whether a classifier can distinguish the "clusters" better than chance.',
+      isCaseBased: true,
+    },
+    {
+      question: 'How would you sanity-check a t-SNE plot before showing it to anyone?',
+      answer:
+        'Re-run at two or three perplexities and two or three seeds, and keep only what appears in all of them. Colour by a known variable — batch, date, source file — because clusters that turn out to be collection batches are the most common false discovery. Compare against a PCA scatter: if PCA already separates the groups, the simpler plot is the more defensible one.',
+      isCaseBased: true,
+    },
+    {
+      question: 'Is t-SNE deterministic, and does it matter?',
+      answer:
+        'Not by default — it starts from a random initialisation, so the layout differs run to run. Fixing the seed makes it reproducible but no more meaningful, since the seed had no claim to being right. What matters is stability of neighbourhoods across runs; if that changes too, the structure is not real.',
+      isCaseBased: false,
+    },
+  ],
+  flashcards: [
+    { front: 't-SNE, in one sentence', back: 'Place rows on a 2D page so that points which were neighbours in the original data stay neighbours on the page.' },
+    { front: 'What t-SNE minimises', back: 'KL(P||Q): the mismatch between neighbour probabilities in the original space (p, Gaussian) and on the page (q, Student-t).' },
+    { front: 'The crowding problem', back: 'A 2D page cannot hold high-dimensional neighbourhood structure, so points pile into the middle. The heavy-tailed Student-t makes distant pairs cheap and lets clusters separate.' },
+    { front: 'Gaussian vs Student-t at distance 3', back: '0.0111 against 0.1000 — nine times more weight for a distant pair. By distance 5 the ratio is over 10,000.' },
+    { front: 'Three things a t-SNE plot does NOT tell you', back: 'Distance between blobs, size of blobs, and any stable layout — all change with seed and perplexity.' },
+    { front: 'Why not feed t-SNE output to a model?', back: 'The coordinates are shaped for viewing, and there is no transform to place a new row into an existing plot. Use PCA for reusable features.' },
+    { front: 'Perplexity', back: 'The effective number of neighbours each point considers. Typically 5 to 50; trust only structure that survives several values.' },
+    { front: 't-SNE vs UMAP', back: 'Same job, different construction. UMAP is faster, keeps a bit more global layout, and offers an approximate transform for new points. Every reading caveat still applies.' },
+  ],
+  mindmapMarkdown: `- t-SNE & UMAP
+  - Goal
+    - preserve NEIGHBOURS, not distances
+    - contrast with PCA: linear, variance, reusable
+  - Mechanism
+    - p: Gaussian neighbour probability in original space
+    - q: Student-t on the page
+    - minimise KL(P||Q)
+    - crowding problem -> heavy tail
+      - d=3: 0.1000 vs 0.0111 (9x)
+      - d=5: 0.0385 vs 0.0000
+  - Cannot be read as
+    - distance between blobs
+    - size of blobs
+    - a stable layout (seed, perplexity)
+  - Never
+    - feed to a model
+    - embed a new row
+  - Perplexity
+    - effective neighbour count, 5-50
+    - trust only what survives several values`,
+}
+
+export default m
