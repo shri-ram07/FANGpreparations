@@ -1,0 +1,269 @@
+import type { Module } from '../types'
+
+const m: Module = {
+  id: 'ml-l3-projects',
+  subjectId: 'ml',
+  level: 3,
+  title: 'Running an ML Project',
+  whyItMatters:
+    'Four project briefs, written as checklists rather than essays. One finished project you can defend beats ten copied notebooks, and the discipline that makes the difference is almost entirely in the first step and the last.',
+  assumes: [
+    'You have read Cross-Validation and Class Imbalance',
+    'You can fit and score a model in scikit-learn',
+  ],
+  estMinutes: 18,
+  sections: [
+    {
+      type: 'intuition',
+      title: 'Before any model, ship a stupid one',
+      md: `The first rule of a project is the cheapest one: build a deliberately trivial model and score it properly. **Always predict the majority class.** Predict the mean. Predict yesterday's value.
+
+Two things come from it. You learn what score is unimpressive, so you cannot be fooled later. And you build the whole pipeline — load, split, score, report — while the model is too simple to hide a bug in.
+
+On imbalanced data this baseline is brutal, and it is why accuracy gets abandoned within one line of code.`,
+    },
+    {
+      type: 'math',
+      intro:
+        'F1 is the harmonic mean of precision and recall. The harmonic mean is used rather than the ordinary one because it is dragged down by the smaller of the two - a model with recall 0 scores F1 0 no matter how good its precision looks. That is exactly the property the baseline comparison below needs.',
+      latex: ['F_1 = 2 \\cdot \\frac{\\text{precision} \\cdot \\text{recall}}{\\text{precision} + \\text{recall}}'],
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'The baseline that exposes accuracy',
+      code: `import numpy as np
+from sklearn.datasets import make_classification
+from sklearn.model_selection import train_test_split
+from sklearn.dummy import DummyClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score, f1_score
+
+X, y = make_classification(n_samples=4000, n_features=10, n_informative=4,
+                           weights=[0.95], flip_y=0.0, random_state=0)
+Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.3, stratify=y, random_state=0)
+print('positive rate in test:', round(yte.mean(), 4))
+
+for name, model in [('dummy', DummyClassifier(strategy='most_frequent')),
+                    ('logreg', LogisticRegression(max_iter=2000))]:
+    p = model.fit(Xtr, ytr).predict(Xte)
+    print(f"{name:7} accuracy {accuracy_score(yte, p):.4f}   f1 {f1_score(yte, p):.4f}")
+
+# ---- real output ----
+# positive rate in test: 0.05
+# dummy   accuracy 0.9500   f1 0.0000
+# logreg  accuracy 0.9592   f1 0.3099`,
+      annotations: {
+        13: "DummyClassifier with strategy='most_frequent' is scikit-learn's built-in do-nothing model. It exists precisely so this comparison is one line.",
+        18: 'The dummy scores 0.9500 accuracy having never predicted a single positive — its F1 is exactly 0.',
+        19: 'The real model scores 0.9592. On accuracy that is a 0.9-point improvement and reads as noise; on F1 it is 0.0000 against 0.3099, which is the difference between a model that never fires and one that catches roughly a third. Same two models, same test set.',
+      },
+    },
+    {
+      type: 'note',
+      label: 'Project A — tabular classification',
+      md: `Churn, credit default or fraud. Roughly 10k–200k rows, 20–50 mixed columns, positives at 2–10%.
+
+1. Split **first**, stratified. Everything after this touches training data only.
+2. Dummy baseline. Record accuracy *and* a rank-based metric.
+3. Logistic regression in a Pipeline with scaling and encoding.
+4. Gradient-boosted trees. Tune learning rate and depth, early-stop on validation.
+5. Choose the threshold from the cost of a miss against a false alarm — not 0.5.
+6. Report precision and recall at that threshold, plus PR-AUC.`,
+    },
+    {
+      type: 'note',
+      label: 'Project B — regression',
+      md: `House prices, demand, delivery time. Continuous target, usually skewed, mixed drivers.
+
+1. Look at the target's distribution first. If it spans orders of magnitude, model log(y) and remember to invert before reporting.
+2. Baseline: predict the mean, and record its MAE.
+3. Linear model with regularisation, then gradient-boosted trees.
+4. Report MAE **and** RMSE. If they diverge sharply you have a few large errors dominating, and that is worth naming.
+5. Plot residuals against the prediction. Structure there means a missing feature.`,
+    },
+    {
+      type: 'note',
+      label: 'Project C — clustering and PCA',
+      md: `Unlabelled customer data — recency, frequency, spend. There is no target, so there is no accuracy, and the deliverable is a description someone can act on.
+
+1. Scale every column. Both K-Means and PCA are distance-based.
+2. PCA first to see how many directions carry the variance.
+3. K-Means over a range of K, chosen by silhouette, not by inertia.
+4. **Name each cluster** from its centroid in original units — "buys often, spends little" — because an unnamed segment is not a result.
+5. Check stability: re-cluster a bootstrap sample and see whether the same groups reappear.`,
+    },
+    {
+      type: 'note',
+      label: 'Project D — one competition, finished',
+      md: `Pick one tabular Playground competition and finish it. One completed properly beats ten forked notebooks.
+
+1. Reproduce the public baseline before changing anything, so you know your pipeline is sound.
+2. Build your own validation that matches the leaderboard split. If they disagree, trust yours and find out why.
+3. Change one thing at a time and log the validation score for each.
+4. Submit early and often — the gap between your CV and the public score is itself information.
+5. Stop when the marginal gain stops justifying the time. Finishing is the skill being practised.`,
+    },
+    {
+      type: 'note',
+      label: 'The README is the product',
+      md: `The code is the appendix. In order:
+
+**One sentence of "so what", in business units.** "Catches 62% of fraud at 200 alerts a day" — not "0.83 AUC".
+
+Then: **Problem** (what decision this supports) · **Data** (rows, columns, class balance, time span) · **Baseline** and its score · **Approach** and why · **Result** against the baseline · **Limitations** — what would break it, what you did not test, where you would not trust it.
+
+The limitations section is what makes the rest credible. A project with no stated limitations reads as one whose author did not look.`,
+    },
+  ],
+  quiz: [
+    {
+      question: 'The dummy scored 0.9500 accuracy and the real model 0.9592. What does the F1 comparison add?',
+      options: [
+        { text: 'Nothing — accuracy already showed the improvement', explanation: 'Accuracy made the entire result look like 0.9 points of noise.' },
+        { text: 'F1 0.0000 against 0.3099 shows the dummy never fires at all, which accuracy cannot reveal', explanation: 'Correct. A 0.9-point accuracy gap reads as noise; the F1 gap is the whole result.' },
+        { text: 'F1 is always the better metric', explanation: 'It is better here because of imbalance, not universally.' },
+        { text: 'It shows the model is overfitting', explanation: 'Both numbers are on the same held-out test set.' },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'Why build a deliberately trivial model first?',
+      options: [
+        { text: 'To learn what score is unimpressive, and to exercise the whole pipeline while it is too simple to hide a bug', explanation: 'Correct — both reasons matter, and the second is the one people skip.' },
+        { text: 'Because it might be good enough to ship', explanation: 'Occasionally true, but not the reason for the discipline.' },
+        { text: 'To satisfy a reporting requirement', explanation: 'It is a working tool, not paperwork.' },
+        { text: 'To warm up the caches', explanation: 'Not a real consideration.' },
+      ],
+      correct: 0,
+    },
+    {
+      question: 'In a clustering project, what makes a segment a result?',
+      options: [
+        { text: 'A high silhouette score', explanation: 'Necessary evidence, but not something anyone can act on.' },
+        { text: 'A name derived from its centroid in original units, that someone can act on', explanation: 'Correct. An unnamed cluster is a number, not a finding.' },
+        { text: 'Using the right value of K', explanation: 'K matters, but the deliverable is the description.' },
+        { text: 'Low inertia', explanation: 'Inertia falls with K and cannot be compared across K values.' },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'MAE and RMSE diverge sharply on your regression. What does that tell you?',
+      options: [
+        { text: 'A bug in one of the metrics', explanation: 'Both are simple and correct; the divergence is informative.' },
+        { text: 'A few large errors dominate, since RMSE squares before averaging', explanation: 'Correct, and it is worth naming explicitly rather than reporting one number.' },
+        { text: 'The model is underfitting', explanation: 'Underfitting raises both roughly together.' },
+        { text: 'The target needs scaling', explanation: 'Scaling the target changes both metrics proportionally and does not change their ratio.' },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'Your cross-validation and the public leaderboard disagree. What do you do?',
+      options: [
+        { text: 'Trust the leaderboard — it is the real score', explanation: 'The public leaderboard is often a small sample and is easy to overfit by repeated submission.' },
+        { text: 'Trust your own validation and investigate why they differ', explanation: 'Correct. The disagreement usually means your split does not match theirs, and that is worth knowing.' },
+        { text: 'Average the two', explanation: 'They measure different splits; averaging is meaningless.' },
+        { text: 'Submit more often until they agree', explanation: 'That is how you overfit the public leaderboard.' },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'What belongs in the first sentence of a project README?',
+      options: [
+        { text: 'The model architecture', explanation: 'That belongs in Approach, further down.' },
+        { text: 'What it achieves, in business units — "catches 62% of fraud at 200 alerts a day"', explanation: 'Correct. "0.83 AUC" means nothing to the person deciding whether to use it.' },
+        { text: 'The AUC', explanation: 'A metric with no operating point attached is not actionable.' },
+        { text: 'The dataset citation', explanation: 'That belongs in Data.' },
+      ],
+      correct: 1,
+    },
+  ],
+  interviewQuestions: [
+    {
+      question: 'Walk me through how you would approach a new ML project.',
+      answer:
+        'Understand the decision it supports first — what action changes based on the prediction, and what a mistake costs in each direction. Then split the data before touching anything else. Then a dummy baseline, scored on a metric that survives the class balance, which also exercises the whole pipeline while it is too simple to hide a bug. Then a simple model, then a strong one, changing one thing at a time. Then choose the operating point from costs rather than defaults. Report against the baseline, in business units, with limitations stated.',
+      isCaseBased: true,
+    },
+    {
+      question: 'A stakeholder asks whether 0.96 accuracy is good. What do you say?',
+      answer:
+        'That it depends entirely on the base rate, and I would show the comparison rather than argue it. On a dataset with 5% positives, a model that never predicts a positive scores 0.9500 — so 0.9592 is a 0.9-point improvement over doing nothing at all, which reads as noise. The same two models on F1 score 0.0000 and 0.3099, which is the difference between a model that never fires and one that catches roughly a third of the positives. I would then reframe the number in operational terms: how many cases caught, at how many alerts.',
+      isCaseBased: true,
+    },
+    {
+      question: 'How do you decide when a project is finished?',
+      answer:
+        'When the marginal gain stops justifying the effort, and that is a business judgement rather than a technical one. Concretely: when the validation improvement per day of work has fallen below what the improvement is worth, when the remaining error is close to the irreducible noise you estimated at the start, or when the bottleneck has moved somewhere else entirely — data quality, latency, adoption. Projects that do not define this in advance tend to run until someone gets bored.',
+      isCaseBased: false,
+    },
+    {
+      question: 'What goes in a project README, and why does it matter?',
+      answer:
+        'A one-sentence result in business units first, because that is what determines whether anyone reads on. Then problem, data, baseline, approach, result against baseline, and limitations. The limitations section is the one that makes the rest credible — what would break this, what I did not test, where I would not trust it. A project with no stated limitations reads as one whose author did not look, and any reviewer who knows the domain will find the gaps anyway.',
+      isCaseBased: false,
+    },
+    {
+      question: 'How do you present a clustering result to a non-technical audience?',
+      answer:
+        'By naming the segments in their language and in original units — "buys often, spends little" rather than "cluster 2, centroid [0.3, −1.1]". Sizes as counts and percentages, one distinguishing characteristic each, and one suggested action per segment. I would also state how stable the segmentation is, since a stakeholder will build plans on it: if re-clustering a bootstrap sample produces different groups, that needs saying before anyone acts on it.',
+      isCaseBased: true,
+    },
+    {
+      question: 'Why reproduce a public baseline before changing anything?',
+      answer:
+        'Because it separates two failure modes. If your pipeline reproduces the known score, any later difference is attributable to your change. If it does not, you have a bug in loading, splitting, or evaluation, and every experiment you run afterwards is measuring that bug rather than your idea. It costs an hour and saves days of chasing a phantom improvement.',
+      isCaseBased: false,
+    },
+    {
+      question: 'What is the most common way a portfolio project fails to impress?',
+      answer:
+        'No baseline and no limitations. A notebook reporting 0.94 accuracy with no statement of what the trivial model scores tells a reviewer nothing, and it signals that the author does not know the number is meaningless alone. The second is a missing decision — a model with no stated use has no way to be judged, since there is no cost structure to choose a threshold against. Neither problem is technical, which is why they are worth fixing first.',
+      isCaseBased: false,
+    },
+    {
+      question: 'How do you keep experiments honest across a long project?',
+      answer:
+        'Log every run: the change, the validation score, and the seed. Change one thing at a time so an improvement is attributable. Keep the test set genuinely untouched — and if you catch yourself having looked at it, say so, because a contaminated number quietly reported is worse than an honest one. Fix seeds so a difference is a difference rather than noise, and re-run the current best occasionally to confirm the pipeline has not drifted underneath you.',
+      isCaseBased: false,
+    },
+  ],
+  flashcards: [
+    { front: 'The first step of any project', back: 'A deliberately trivial model, scored properly. It calibrates what "good" means and exercises the pipeline while it is too simple to hide a bug.' },
+    { front: 'The baseline, measured', back: 'At a 5% positive rate: dummy accuracy 0.9500 with F1 0.0000; logistic regression 0.9592 with F1 0.3099. Accuracy makes the whole result look like noise.' },
+    { front: 'Tabular classification checklist', back: 'Split stratified first → dummy → logistic in a Pipeline → boosted trees with early stopping → threshold from costs → report precision/recall at it, plus PR-AUC.' },
+    { front: 'Regression checklist', back: 'Look at the target distribution → log it if skewed → mean baseline → regularised linear, then trees → report MAE AND RMSE → plot residuals against prediction.' },
+    { front: 'Clustering deliverable', back: 'Named segments in original units with a suggested action. An unnamed cluster is a number, not a result. Check stability with a bootstrap re-cluster.' },
+    { front: 'MAE vs RMSE diverging', back: 'A few large errors dominate, because RMSE squares before averaging. Worth naming rather than reporting one number.' },
+    { front: 'CV vs leaderboard disagree', back: 'Trust your own validation and find out why. The public leaderboard is a small sample and easy to overfit by resubmitting.' },
+    { front: 'The README order', back: 'One sentence of "so what" in business units, then Problem, Data, Baseline, Approach, Result vs baseline, Limitations. The limitations make the rest credible.' },
+  ],
+  mindmapMarkdown: `- Running an ML project
+  - Start stupid
+    - dummy model, scored properly
+    - calibrates "good", exercises the pipeline
+    - 5% positives: dummy 0.9500 acc / 0.0000 F1
+    - logreg 0.9592 acc / 0.3099 F1
+  - Project A: tabular classification
+    - split stratified FIRST
+    - dummy -> logistic in a Pipeline -> boosted trees
+    - threshold from costs, not 0.5
+  - Project B: regression
+    - check target distribution, log if skewed
+    - mean baseline
+    - report MAE and RMSE; divergence = few big errors
+    - residuals vs prediction
+  - Project C: clustering + PCA
+    - scale everything
+    - silhouette, not inertia
+    - NAME the segments in original units
+    - bootstrap for stability
+  - Project D: one competition
+    - reproduce the baseline first
+    - own validation, one change at a time
+  - The README is the product
+    - so-what in business units
+    - Problem / Data / Baseline / Approach / Result / Limitations`,
+}
+
+export default m

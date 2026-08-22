@@ -106,6 +106,12 @@ A grid with 5 values per parameter tries only **5 distinct values** of the param
 There is a blunter argument too. If 5% of the settings are good enough, each random draw has a 5% chance of finding one, so 60 draws give a 1 − 0.95⁶⁰ ≈ **95%** chance of hitting one. That bound does not depend on how many parameters you are searching.`,
     },
     {
+      type: 'math',
+      intro:
+        'The random-search bound, written out. p is the fraction of settings good enough for you and n is the number of trials. Each draw misses with probability (1 - p), so n independent draws all miss with (1 - p)^n. Note what is absent: the number of hyperparameters. That is why the argument holds however wide the search space is.',
+      latex: ['P(\\text{at least one hit}) = 1 - (1 - p)^{n} \\qquad p = 0.05, \\; n = 60 \\Rightarrow 0.954'],
+    },
+    {
       type: 'visual',
       component: 'Plot',
       props: {
