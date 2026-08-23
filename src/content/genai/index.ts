@@ -50,11 +50,11 @@ export const genai: SubjectDef = {
   - Evaluation
     - Perplexity, LLM-as-judge, guardrails`,
   modules: [
-    mod('genai-l0-tokenization', 0, 'Tokenization: How Text Becomes Numbers', 46, () => import('./l0-tokenization')),
-    mod('genai-l0-self-attention', 0, 'Self-Attention from zero', 46, () => import('./l0-self-attention')),
-    mod('genai-l1-multihead-attention', 1, 'Multi-Head Attention & Causal Masking', 50, () => import('./l1-multihead-attention')),
-    mod('genai-l1-positional-encoding', 1, 'Positional Encoding: Teaching Attention About Order', 44, () => import('./l1-positional-encoding')),
-    mod('genai-l1-transformer-block', 1, 'The Transformer Block: Attention, Feed-Forward, Residual, Norm', 40, () => import('./l1-transformer-block')),
+    mod('genai-l0-tokenization', 0, 'Tokenization: How Text Becomes Numbers', 20, () => import('./l0-tokenization')),
+    mod('genai-l0-self-attention', 0, 'Self-Attention', 20, () => import('./l0-self-attention')),
+    mod('genai-l1-multihead-attention', 1, 'Multi-Head Attention', 18, () => import('./l1-multihead-attention')),
+    mod('genai-l1-positional-encoding', 1, 'Positional Encoding', 18, () => import('./l1-positional-encoding')),
+    mod('genai-l1-transformer-block', 1, 'The Transformer Block', 18, () => import('./l1-transformer-block')),
     mod('genai-l1-build-gpt-capstone', 1, 'CAPSTONE: Code a GPT from Scratch', 70, () => import('./l1-build-gpt-capstone')),
     mod('genai-l2-pretraining-scaling', 2, 'Pretraining & Scaling Laws', 34, () => import('./l2-pretraining-scaling')),
     mod('genai-l2-finetuning-lora', 2, 'Fine-Tuning: Full FT, LoRA & QLoRA', 28, () => import('./l2-finetuning-lora')),
