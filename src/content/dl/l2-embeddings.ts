@@ -6,515 +6,274 @@ const m: Module = {
   level: 2,
   title: 'Embeddings: Meaning as Vectors',
   whyItMatters:
-    'A neural network can only add and multiply numbers. Text is made of words. Embeddings are the bridge: every model that reads text, every search box that understands "cheap flights" and "budget airfare" mean the same thing, starts by turning words into short lists of numbers where being close means being related. This module builds that idea from zero, by hand.',
+    'One-hot encoding gives every word a 50,000-dimensional vector in which "cat" and "kitten" are exactly as unrelated as "cat" and "bureaucracy". Embeddings fix that, and the same idea now underlies search, recommendation and every retrieval system.',
   assumes: [
-    'You can read a Python for loop, a list, and a dictionary',
-    'You know what a square root is',
-    'Helpful but not required: the Math module Vectors & the Dot Product (= Similarity)',
+    'You know what a dot product is',
+    'You have seen a NumPy array',
   ],
-  estMinutes: 33,
+  estMinutes: 20,
   sections: [
     {
       type: 'intuition',
-      title: 'The problem: a network eats numbers, and a word is not a number',
-      md: `A neural network multiplies numbers and adds them up. That is all it does. So before any model can read the sentence "the cat sat", something has to turn the word "cat" into numbers.
+      title: 'The problem with one-hot',
+      md: `To feed a word into a network it must become numbers. The obvious encoding is **one-hot**: a vector as long as the vocabulary, all zeros except a 1 at the word's index.
 
-- A **vocabulary** is the fixed list of words a model is allowed to see. Ours will be tiny: cat, dog, sat, helicopter.
-- A **token** is one item from that vocabulary — for us, one word. (Real systems split rarer words into pieces, but that is a separate topic.)
-- So the question of this whole module is: what numbers do we hand the network for the token "cat"?
-- The first answer everyone invents is one-hot encoding. We will build it, watch it fail, and the way it fails tells us exactly what to build instead.`,
+Two things are wrong with it. It is enormous — 50,000 dimensions per token — and, worse, it carries **no similarity information at all**. Every pair of distinct one-hot vectors has a dot product of exactly 0, so "cat" and "kitten" are as unrelated as "cat" and "bureaucracy".
+
+An **embedding** replaces it with a short dense vector, typically 300 numbers, **learned** so that similar words end up near each other. Nothing about the geometry is designed; it falls out of the training task.`,
     },
     {
-      type: 'code',
-      lang: 'python',
-      title: 'Attempt 1: one-hot encoding, built by hand',
-      code: `vocab = ['cat', 'dog', 'sat', 'helicopter']   # our whole "language": 4 words
+      type: 'note',
+      label: 'The lookup that is secretly a matrix multiply',
+      md: `An embedding layer is a table of shape **V x d** — 50,000 x 300 is 15,000,000 parameters, which is a substantial model on its own.
 
-def one_hot(word):                            # turn one word into a list of numbers
-    row = [0] * len(vocab)                    # start with one zero per vocabulary word
-    row[vocab.index(word)] = 1                # index() gives the word's position; put a 1 there
-    return row                                # hand back the finished list
+Multiplying a one-hot vector by that table selects exactly one row, so the layer is mathematically a matrix multiplication and practically an **array index**. Frameworks implement the index, which is why an embedding lookup is nearly free while the equivalent matrix multiply would not be.
 
-print('cat        ->', one_hot('cat'))          # show the vector for cat
-print('dog        ->', one_hot('dog'))          # and for dog
-print('helicopter ->', one_hot('helicopter'))   # and for helicopter
-
-# ---- real output ----
-# cat        -> [1, 0, 0, 0]
-# dog        -> [0, 1, 0, 0]
-# helicopter -> [0, 0, 0, 1]`,
-      annotations: {
-        1: 'The vocabulary is just a list, and a word\'s position in that list becomes its id number. cat is id 0, dog is id 1, sat is 2, helicopter is 3.',
-        4: '[0] * 4 makes the list [0, 0, 0, 0]. Multiplying a list by a number repeats it — this is list repetition, not arithmetic.',
-        5: 'A one-hot vector is a list that is all zeros except a single 1, sitting in the slot that belongs to this word. "One hot" means exactly one slot is switched on.',
-      },
-    },
-    {
-      type: 'intuition',
-      title: 'Failure 1: it is enormous',
-      md: `Look at the actual vectors. Four words, four numbers each, three of them zero.
-
-- Now scale it. A real vocabulary has about 50,000 words, so "cat" becomes a list of 50,000 numbers with one 1 in it.
-- That is 49,999 zeros carried around for every single token in every sentence.
-- The first layer of the network then needs a weight for each of those 50,000 inputs, most of which are always zero.
-- Wasteful, but survivable. The second failure is the one that kills it.`,
-    },
-    {
-      type: 'code',
-      lang: 'python',
-      title: 'Failure 2: every pair of different words is equally far apart',
-      code: `cat = [1, 0, 0, 0]          # one-hot for cat
-dog = [0, 1, 0, 0]          # one-hot for dog
-helicopter = [0, 0, 0, 1]   # one-hot for helicopter
-
-def dot(a, b):              # dot product: multiply slot by slot, then add it all up
-    total = 0.0             # running sum starts empty
-    for i in range(len(a)): # walk both lists position by position
-        total += a[i] * b[i]
-    return total            # one number: how much the two lists overlap
-
-print('cat . dog        =', dot(cat, dog))
-print('cat . helicopter =', dot(cat, helicopter))   # a totally unrelated pair
-print('cat . cat        =', dot(cat, cat))
-
-# ---- real output ----
-# cat . dog        = 0.0
-# cat . helicopter = 0.0
-# cat . cat        = 1.0`,
-      annotations: {
-        8: 'This is the only line doing arithmetic: multiply the numbers in slot i and add the product to the running total.',
-        11: 'cat has its 1 in slot 0, dog has its 1 in slot 1. Every product is 1 times 0 or 0 times something, so the total is 0.',
-        13: 'A word compared with itself gives 1 — the only pair that is not 0. So the dot product here answers "same word or not", nothing more.',
-      },
-    },
-    {
-      type: 'intuition',
-      title: 'What that zero means',
-      md: `The dot product is our closeness score: bigger means more alike. One-hot gives 0 for **every** pair of different words.
-
-- cat and dog score 0. cat and helicopter score 0. The same number.
-- So in this representation, "cat" is no closer to "dog" than it is to "helicopter".
-- Measured as distance instead of overlap, every distinct pair sits exactly the square root of 2 apart — the same distance, always.
-- The encoding stores identity and nothing else. It is a set of id numbers wearing a vector costume.
-- A model given these has to learn every fact about every word from scratch, with no help from the fact that cats and dogs are both animals.`,
+It is also just a parameter: initialised randomly and trained by backprop like any other weight. The gradient reaches only the rows actually used in the batch, which is why embedding gradients are sparse and why optimizers have special handling for them.`,
     },
     {
       type: 'math',
-      intro: 'The same two failures, written compactly. V is the vocabulary size, e_a is the one-hot vector for word a.',
+      intro:
+        'Cosine similarity, and the embedding layer written as the matrix multiply it secretly is. The division by both norms is what removes magnitude; e_i is the one-hot vector for token i, so the product picks out row i of the table E.',
       latex: [
-        'e_a \\in \\mathbb{R}^{V}, \\qquad e_a \\cdot e_b = 0 \\;\\; \\text{for every } a \\neq b',
-        '\\lVert e_a - e_b \\rVert = \\sqrt{2} \\qquad \\text{for every } a \\neq b \\;\\; \\text{(all pairs equally distant)}',
+        '\\mathrm{cos}(a, b) = \\frac{a \\cdot b}{\\|a\\|\\,\\|b\\|}',
+        'v_i = e_i^{T} E, \\qquad E \\in \\mathbb{R}^{V \\times d}',
       ],
     },
     {
-      type: 'intuition',
-      title: 'The fix: give each word a short address instead of its own axis',
-      md: `Stop giving every word its own slot. Give every word a short list of numbers — say 3 numbers here, 300 in a real system — and let words that mean similar things get similar lists.
-
-- That short list of numbers is the word\'s **embedding**.
-- How many numbers each word gets is the **embedding dimension**, usually written d. Here d = 3.
-- Stack one row per word and you get the **embedding table** (also called the embedding matrix): V rows, d columns.
-- Nobody types those numbers in by hand. They are **learned** — we will see how in a moment. A set of numbers a model figured out for itself, rather than one a human wrote down, is called a **learned representation**.
-- Size check: 50,000 words at d = 300 is 15 million numbers total, versus 50,000 numbers for every single token under one-hot.`,
-    },
-    {
       type: 'code',
       lang: 'python',
-      title: 'The embedding table is literally a lookup by row number',
-      code: `E = [
-    [0.9, 0.1, 0.0],   # row 0 = cat
-    [0.8, 0.2, 0.0],   # row 1 = dog
-    [0.0, 0.9, 0.1],   # row 2 = helicopter
-    [0.2, 0.0, 0.9],   # row 3 = king
-    [0.3, 0.0, 0.8],   # row 4 = queen
-]                      # 5 rows, one per word in this vocabulary
-word_id = {'cat': 0, 'dog': 1, 'helicopter': 2, 'king': 3, 'queen': 4}
+      title: 'What geometry buys you: cosine similarity',
+      code: `import numpy as np
+#                  royal male female person food
+vecs = {
+ 'king':  np.array([1.0, 0.6, 0.0, 0.3, 0.0]),
+ 'queen': np.array([1.0, 0.0, 0.6, 0.3, 0.0]),
+ 'man':   np.array([0.0, 0.6, 0.0, 0.9, 0.0]),
+ 'woman': np.array([0.0, 0.0, 0.6, 0.9, 0.0]),
+ 'apple': np.array([0.0, 0.0, 0.0, 0.0, 1.0]),
+}
 
-print('id of dog    =', word_id['dog'])       # the word's row number
-print('row 1 of E   =', E[1])                 # that row, fetched directly
-print('lookup(dog)  =', E[word_id['dog']])    # the two steps in one line
-print('lookup(king) =', E[word_id['king']])   # any word, same two steps
+def cos(a, b):
+    return float(a @ b / (np.linalg.norm(a) * np.linalg.norm(b)))
+
+for x, y in [('king','queen'), ('king','man'), ('man','woman'), ('king','apple')]:
+    print('cos(%-5s, %-5s) = %.4f' % (x, y, cos(vecs[x], vecs[y])))
 
 # ---- real output ----
-# id of dog    = 1
-# row 1 of E   = [0.8, 0.2, 0.0]
-# lookup(dog)  = [0.8, 0.2, 0.0]
-# lookup(king) = [0.2, 0.0, 0.9]`,
+# cos(king , queen) = 0.7517
+# cos(king , man  ) = 0.4837
+# cos(man  , woman) = 0.6923
+# cos(king , apple) = 0.0000`,
       annotations: {
-        1: 'E is a list of lists: 5 rows (one per word), 3 numbers per row. That is the whole embedding table.',
-        2: 'For this hand-made example the three columns roughly mean animal-ness, machine-ness, royalty. In a real trained table NO column has a name — the numbers are whatever training produced, and reading meaning off one column is a beginner mistake.',
-        8: 'A dictionary mapping each word to its row number. word_id[word] is the token id, and the token id is the row index.',
-        11: 'Looking up an embedding is one array index. No search, no arithmetic — the id IS the row number.',
+        2: 'These five dimensions are named only to make the example readable. A learned embedding has no interpretable axes — the structure is real and the labels are not.',
+        13: 'Cosine similarity is the dot product divided by both magnitudes, so it measures ANGLE only. Two vectors pointing the same way score 1 whatever their lengths.',
+        20: 'king and queen at 0.7517 against king and man at 0.4837 — the shared "royal" dimension outweighs the shared "male" one. Under one-hot both pairs would score exactly 0.',
+        22: 'king and apple at exactly 0: no shared dimension at all. That is the one-hot behaviour, and here it is the exception rather than the rule.',
       },
     },
     {
       type: 'note',
-      md: `That is the whole mechanism, and it is worth saying plainly: **an embedding layer is a table you look rows up in.** Old textbooks describe it as multiplying the one-hot vector by the table, which does give the same row — but multiplying 50,000 numbers to fetch one row is silly, so every library just indexes. Same answer, thousands of times less work. The table has V times d numbers in it, and those numbers are trainable weights like any others.`,
-    },
-    {
-      type: 'intuition',
-      title: 'Measuring closeness: cosine similarity',
-      md: `We now need one number saying how related two embeddings are. The dot product almost works, but it grows when the vectors are simply longer, which has nothing to do with meaning.
+      label: 'Why cosine and not Euclidean distance',
+      md: `Cosine ignores magnitude, and for text that is usually what you want: a word appearing often gets a longer vector without being more or less similar to anything, and a long document should not be less similar to a query than a short one merely for being long.
 
-- **Cosine similarity** fixes that: take the dot product, then divide by the length of each vector.
-- Dividing out both lengths leaves only the angle between the two vectors: +1 pointing the same way, 0 at a right angle, −1 opposite.
-- The length of a vector is the square root of its dot product with itself — the Pythagoras rule extended past two numbers.
-- This is the same tool the Math module builds from scratch in *Vectors & the Dot Product (= Similarity)*. Read that if the geometry feels shaky; here we just use it.`,
+Euclidean distance is right when magnitude carries meaning — physical measurements, counts.
+
+The two are equivalent once vectors are **L2-normalised**, since minimising squared distance on the unit sphere is exactly maximising the dot product. That is why vector databases normalise on insert: it lets one index serve both, and it is what makes the fast inner-product search algorithms applicable.`,
     },
     {
       type: 'code',
       lang: 'python',
-      title: 'Related words score high, unrelated words score low',
-      code: `import math                        # for math.sqrt
-
-cat = [0.9, 0.1, 0.0]             # rows copied out of E above
-dog = [0.8, 0.2, 0.0]             # row 1
-helicopter = [0.0, 0.9, 0.1]      # row 2
-
-def dot(a, b):                    # same dot product as before
-    total = 0.0                   # running sum
-    for i in range(len(a)):       # walk the 3 slots
-        total += a[i] * b[i]      # multiply slot by slot, accumulate
-    return total                  # the overlap score
-
-def cosine(a, b):                 # dot product divided by both lengths
-    return dot(a, b) / (math.sqrt(dot(a, a)) * math.sqrt(dot(b, b)))
-
-print('cosine(cat, dog)        =', round(cosine(cat, dog), 3))
-print('cosine(cat, helicopter) =', round(cosine(cat, helicopter), 3))
+      title: 'The analogy, and what it really shows',
+      code: `target = vecs['king'] - vecs['man'] + vecs['woman']
+print('king - man + woman =', np.round(target, 3).tolist())
+for name, v in vecs.items():
+    print('   cos with %-5s = %.4f' % (name, cos(target, v)))
 
 # ---- real output ----
-# cosine(cat, dog)        = 0.991
-# cosine(cat, helicopter) = 0.11`,
+# king - man + woman = [1.0, 0.0, 0.6, 0.3, 0.0]
+#    cos with king  = 0.7517
+#    cos with queen = 1.0000
+#    cos with man   = 0.2073
+#    cos with woman = 0.4837
+#    cos with apple = 0.0000`,
       annotations: {
-        3: 'These are exactly the rows from the table above, so nothing new is being invented — we are just scoring pairs of rows.',
-        14: 'dot(a, a) is the vector\'s dot product with itself, and its square root is the vector\'s length. Dividing by both lengths is what turns an overlap score into an angle score.',
-        16: 'round(x, 3) keeps three decimals so the printed numbers stay readable.',
-        17: '0.991 versus 0.11. Under one-hot both of these were 0.0 — that gap is the entire point of embeddings.',
-      },
-    },
-    { type: 'visual', component: 'VectorPlayground', props: {} },
-    {
-      type: 'note',
-      md: `Drag the two arrows above. Pointing the same way gives a big positive score, a right angle gives 0, opposite directions give a negative score. That is cosine similarity with 2 numbers per vector instead of 3 — and a real embedding is the same picture with 300 numbers, which nobody can draw but the arithmetic is identical.`,
-    },
-    {
-      type: 'intuition',
-      title: 'Where the numbers come from: ordinary gradient descent',
-      md: `Nothing about the table is hand-written. Here is the honest, complete story of how those numbers appear.
-
-- The table starts filled with **small random numbers**. At that point it means nothing at all: cat and helicopter are as likely to be close as cat and dog.
-- The table is then treated as weights of the network. Training measures how wrong a prediction was, computes how each number should change to be less wrong, and nudges it. That is gradient descent, exactly as in any other layer.
-- Which rows get nudged? Only the rows for the words that appeared in that batch. Untouched words keep their numbers for that step.
-- The prediction task involves nearby words, so any two words used in similar company get nudged in similar directions, over and over, across millions of sentences.
-- The result: words used in similar contexts drift together, and closeness in the table starts to mean relatedness in the language. Nobody programmed that. It falls out of the updates.`,
-    },
-    {
-      type: 'intuition',
-      title: 'word2vec and skip-gram, briefly',
-      md: `word2vec (2013) was the method that made this famous, and the prediction task it used is simple enough to state in a sentence.
-
-- Slide a small window along the text. In "the cat sat on the mat" with the window centred on "sat", the nearby words are cat, on, the.
-- The **skip-gram** task: given the centre word, predict the words around it. Every window in the corpus is one free training example — the raw text is its own answer key, no human labelling anywhere.
-- Getting good at that prediction forces words with similar neighbours to end up with similar rows. That is the entire training signal.
-- The famous demo: take the row for king, subtract man, add woman, and the nearest row is often queen. It suggests the "male to female" change is roughly one fixed direction in the space.
-- Be honest about it: the effect works for a handful of relation families and fails for most others, the published examples are cherry-picked, and the standard scoring rule deletes king, man and woman from the candidate list first — without that deletion an input word frequently wins. Real, interesting, much weaker than the story.`,
-    },
-    {
-      type: 'note',
-      md: `Once you have embeddings, the obvious use is search: embed every document once, embed the query, return the rows with the highest cosine similarity. Doing that over millions of vectors quickly needs approximate nearest-neighbour indexes and vector databases, which are a topic of their own — the GenAI module *Embeddings, Vector Databases & Semantic Search* covers them. This module stops at what an embedding is and how to compare two of them.`,
-    },
-    {
-      type: 'intuition',
-      title: 'Worked case: which word is nearest to "king"?',
-      md: `Using the table above, with king = [0.2, 0.0, 0.9]. First the length of king: 0.2 squared is 0.04, 0.9 squared is 0.81, sum 0.85, square root **0.922**. Now each candidate, dot product first, then divide by both lengths.
-
-- **queen** [0.3, 0.0, 0.8]: dot = 0.06 + 0 + 0.72 = 0.78. Length = √(0.09 + 0.64) = 0.854. Cosine = 0.78 / (0.922 × 0.854) = **0.990**.
-- **cat** [0.9, 0.1, 0.0]: dot = 0.18 + 0 + 0 = 0.18. Length = √(0.81 + 0.01) = 0.906. Cosine = 0.18 / (0.922 × 0.906) = **0.216**.
-- **dog** [0.8, 0.2, 0.0]: dot = 0.16. Length = √(0.64 + 0.04) = 0.825. Cosine = 0.16 / (0.922 × 0.825) = **0.211**.
-- **helicopter** [0.0, 0.9, 0.1]: dot = 0 + 0 + 0.09 = 0.09. Length = 0.906. Cosine = 0.09 / (0.922 × 0.906) = **0.108**.
-- Ranking: queen 0.990, then cat 0.216, dog 0.211, helicopter 0.108. Queen wins by a mile because it is the only other row with a large third number, and in this hand-made table the third column is the royalty one.`,
-    },
-    {
-      type: 'intuition',
-      title: 'The classic mistake: ranking by raw dot product',
-      md: `Here is a bug that ships to production regularly. You have embeddings, you want the nearest word to "cat", and you rank by the dot product because it is one line shorter than cosine.
-
-- Suppose helicopter\'s row came out long: [0.0, 9.0, 1.0] instead of [0.0, 0.9, 0.1]. Same direction, ten times the length.
-- Vector length in a real table mostly tracks how often a word appeared in training, or how long a document was. It is not meaning.
-- Run it and watch the ranking flip.`,
-    },
-    {
-      type: 'code',
-      lang: 'python',
-      title: 'The wrong answer, then the fix',
-      code: `import math                          # for math.sqrt again
-
-cat = [0.9, 0.1, 0.0]                # unchanged
-dog = [0.8, 0.2, 0.0]                # unchanged
-helicopter_long = [0.0, 9.0, 1.0]    # same direction as before, 10x longer
-
-def dot(a, b):                       # same dot product as before
-    total = 0.0                      # running sum
-    for i in range(len(a)):          # 3 slots again
-        total += a[i] * b[i]         # multiply slot by slot, accumulate
-    return total                     # the overlap score
-
-def cosine(a, b):                    # dot divided by both lengths
-    return dot(a, b) / (math.sqrt(dot(a, a)) * math.sqrt(dot(b, b)))   # angle only
-
-print('raw dot:  cat.dog =', round(dot(cat, dog), 3), ' cat.heli =', round(dot(cat, helicopter_long), 3))
-print('cosine:   cat.dog =', round(cosine(cat, dog), 3), ' cat.heli =', round(cosine(cat, helicopter_long), 3))
-
-# ---- real output ----
-# raw dot:  cat.dog = 0.74  cat.heli = 0.9
-# cosine:   cat.dog = 0.991  cat.heli = 0.11`,
-      annotations: {
-        5: 'Every number multiplied by 10. The direction the vector points has not moved at all; only its length changed.',
-        16: 'Raw dot says helicopter (0.9) beats dog (0.74). The ranking is wrong, and nothing about meaning changed to cause it — only length did.',
-        17: 'Cosine gives 0.991 and 0.11, exactly the values from before the scaling. Dividing by both lengths cancels the factor of 10 completely.',
+        1: 'Subtracting "man" removes the male component and adds nothing else; adding "woman" supplies the female one. The royal and person components are untouched.',
+        8: 'The result is queen\'s vector exactly, hence a cosine of 1.0000 — but only because these five vectors were built by hand to make the arithmetic exact.',
+        9: 'Real word2vec vectors do not do this. The analogy holds approximately, and published results routinely exclude the input words from the search, which flatters it considerably. The mechanism is genuine; the tidiness is not.',
       },
     },
     {
       type: 'note',
-      md: `Diagnosis: the raw dot product mixes two different things — how aligned the vectors are, and how long they are. Scaling one vector by 10 multiplies its dot products by 10 against everything, so the longest vector drifts to the top of every result list regardless of the query. Cosine divides both lengths out, so only alignment is left. The practical habit: normalise every vector to length 1 once when you build the table, and after that a plain dot product **is** the cosine, at plain-dot-product cost.
+      label: 'How they are actually learned',
+      md: `**word2vec** trains a model to predict a word from its neighbours (CBOW) or its neighbours from the word (skip-gram), then throws the model away and keeps the embedding table. The training task is a pretext; the by-product is the point.
 
-The sibling mistake, same family: reading meaning out of a table that has not been trained. A freshly initialised table is random numbers, so its similarities are random too. Any "cat is close to helicopter" you find there is noise, not a finding.`,
-    },
-    {
-      type: 'intuition',
-      title: 'Practice problems',
-      md: `Work them out on paper first; the solutions follow in the next block.
+**GloVe** factorises a global co-occurrence matrix instead, reaching similar geometry from aggregate statistics rather than local windows.
 
-1. Vocabulary is [red, green, blue, sky]. Write the one-hot vector for "blue", and give the dot product of one-hot("blue") with one-hot("sky").
-2. Table rows a = [3, 4] and b = [6, 8]. Compute the raw dot product and the cosine similarity. What does the difference between the two tell you?
-3. A vocabulary of 30,000 words with d = 200. How many numbers are in the embedding table, and how many numbers represent a single token — under embeddings, and under one-hot?
-4. u = [1, 0] and v = [0, 1]. Compute the cosine. Then compute the cosine of u with w = [1, 1] (√2 ≈ 1.414). Rank v and w by closeness to u.`,
+Both are **static**: one vector per word, forever. So "bank" gets a single vector averaging the river and the money senses, and no context can move it. **BERT and its successors** produce **contextual** embeddings — the vector for "bank" is computed from the whole sentence, so the two senses land in different places. That is the main thing that changed after 2018.
+
+And it generalises well beyond words: user and item embeddings power recommendation, image embeddings power visual search, and the whole retrieval half of RAG is embedding a query and finding near neighbours.`,
     },
     {
       type: 'note',
-      md: `**1.** blue is at position 2, so one-hot("blue") = [0, 0, 1, 0] and one-hot("sky") = [0, 0, 0, 1]. Their dot product is 0 — as it is for every pair of different words, which is exactly the defect.
+      label: 'The failure mode you must be able to name',
+      md: `Embeddings learn whatever is in the corpus, including its biases. The much-cited case is *man : computer programmer :: woman : homemaker* falling out of word2vec trained on Google News — the model was not taught this, it measured it.
 
-**2.** dot = 3×6 + 4×8 = 18 + 32 = 50. Lengths: √(9+16) = 5 and √(36+64) = 10. Cosine = 50 / (5 × 10) = 1.0. b is a is doubled, so the two point in identical directions; cosine says "identical" while the raw dot says 50, a number that only looks large because b is long.
+Debiasing by projecting out a "gender direction" was proposed and is now considered largely cosmetic: it removes the obvious probe while leaving the association recoverable from the remaining geometry.
 
-**3.** The table holds 30,000 × 200 = 6,000,000 numbers. One token is 200 numbers under embeddings, and 30,000 numbers (29,999 of them zero) under one-hot.
-
-**4.** u·v = 0, both lengths 1, cosine = 0 — a right angle, unrelated. u·w = 1×1 + 0×1 = 1, lengths 1 and 1.414, cosine = 1 / 1.414 = 0.707. So w (0.707) is much closer to u than v (0.0) is.`,
-    },
-    {
-      type: 'intuition',
-      title: 'Beyond the basics - skip this on your first read',
-      md: `Four things you do not need in order to understand embeddings, but will meet later.
-
-- **Negative sampling.** Predicting the correct word out of 50,000 needs a score for all 50,000 every step, which is unaffordable. word2vec instead asks a yes/no question — "is this pair of words a real neighbour pair?" — training on 1 real pair against about 5 to 20 randomly drawn fake ones. Cost per step drops from 50,000 to about 20 for very similar vectors.
-- **Static versus contextual.** word2vec gives one row per word, forever. So "bank" gets a single row that blurs the river sense and the money sense together, and no later layer can unmix them. Contextual models (BERT and today\'s LLMs) compute a fresh vector for each occurrence from the surrounding words, so the two "bank"s land in different places.
-- **Bias is inherited, not invented.** The table learns whatever the corpus contains, stereotypes included — nurse landing near female words, programmer near male ones. It matters because these vectors feed résumé screeners and search ranking. Mitigations exist and are imperfect: the bias often stays recoverable from the geometry even after it stops showing on the obvious tests.
-- **Choosing d.** Classic word vectors use 50 to 300; modern sentence embeddings use 384 to 1536. Too small and distinct meanings collide; too large and you pay memory and search time, and on a small corpus the spare capacity fits noise. Pick it by measuring on your actual task.`,
+Which matters directly when an embedding feeds a decision — résumé screening, search ranking, recommendation. The practical position is that you audit the downstream outcome rather than trusting a geometric fix, because the bias is in the data and the embedding is doing its job faithfully.`,
     },
   ],
   quiz: [
     {
-      question: 'What is the fundamental problem with one-hot encoding for words?',
+      question: 'What is wrong with one-hot encoding beyond its size?',
       options: [
-        {
-          text: 'It is too slow to compute',
-          explanation: 'Building a one-hot is trivially fast. The size is a nuisance; the lack of meaning is the real defect.',
-        },
-        {
-          text: 'Every pair of distinct words is equally distant, so the encoding carries no information about meaning',
-          explanation: 'Correct. Any two different one-hots have dot product 0, so cat/dog and cat/helicopter score identically.',
-        },
-        {
-          text: 'It cannot represent words outside the vocabulary',
-          explanation: 'True, but embeddings share that problem. It is not what embeddings were invented to fix.',
-        },
+        { text: 'It cannot be fed to a neural network', explanation: 'It can; it is just a vector.' },
+        { text: 'Every pair of distinct one-hot vectors has dot product exactly 0, so it carries no similarity information at all', explanation: 'Correct — "cat" and "kitten" are as unrelated as "cat" and "bureaucracy".' },
+        { text: 'It requires a fixed vocabulary', explanation: 'True of embeddings too.' },
+        { text: 'It is not differentiable', explanation: 'The layer that consumes it is differentiable.' },
       ],
       correct: 1,
     },
     {
-      question: 'An embedding table has 40,000 rows and 128 columns. What does looking up the token with id 12 do?',
+      question: 'Why is an embedding lookup nearly free when it is mathematically a matrix multiply?',
       options: [
-        {
-          text: 'Returns row 12 of the table: a list of 128 numbers',
-          explanation: 'Correct. The token id is the row number, and each row is d = 128 numbers long.',
-        },
-        {
-          text: 'Returns column 12: a list of 40,000 numbers',
-          explanation: 'Columns are dimensions shared by every word, not words. One word is one row.',
-        },
-        {
-          text: 'Runs a search through the table for the matching word',
-          explanation: 'No search happens. The id is already the row index, so it is a single array index.',
-        },
-      ],
-      correct: 0,
-    },
-    {
-      question: 'Where do the numbers in an embedding table come from?',
-      options: [
-        {
-          text: 'A linguist assigns each dimension a meaning and fills in the values',
-          explanation: 'No one hand-writes them, and in a trained table no dimension has a nameable meaning.',
-        },
-        {
-          text: 'They start random and are updated by gradient descent, like any other weights',
-          explanation: 'Correct. Training nudges the rows of the words it sees, so words used in similar contexts drift together.',
-        },
-        {
-          text: 'They are computed once from word frequencies with a fixed formula',
-          explanation: 'Frequency alone would not put cat near dog. The numbers come from training on a prediction task.',
-        },
+        { text: 'The matrix is sparse', explanation: 'The embedding table is dense; the one-hot input is sparse.' },
+        { text: 'Multiplying a one-hot by the table selects exactly one row, so frameworks implement it as an array index', explanation: 'Correct, and it is why embedding gradients are sparse — only the used rows receive one.' },
+        { text: 'The table is stored in low precision', explanation: 'Precision is a separate choice.' },
+        { text: 'It is computed once and cached', explanation: 'It is recomputed every batch; the index is simply cheap.' },
       ],
       correct: 1,
     },
     {
-      question: 'Why divide by both vector lengths instead of using the raw dot product?',
+      question: 'cos(king, queen) = 0.7517 and cos(king, man) = 0.4837. What does that show?',
       options: [
-        {
-          text: 'Because raw dot products cannot be negative',
-          explanation: 'Backwards — dot products can certainly be negative, and so can cosine, down to -1.',
-        },
-        {
-          text: 'Because vector length mostly tracks frequency or document length, not meaning, so long vectors would win every ranking',
-          explanation: 'Correct. Scaling helicopter by 10 made it beat dog on raw dot while its cosine never moved.',
-        },
-        {
-          text: 'Because it is cheaper',
-          explanation: 'It is more expensive — a dot product plus two lengths. Unless you pre-normalise, after which cosine is a plain dot product.',
-        },
+        { text: 'The vectors are badly scaled', explanation: 'Cosine ignores scale entirely.' },
+        { text: 'The shared "royal" component outweighs the shared "male" one — similarity is graded, where one-hot would give both pairs exactly 0', explanation: 'Correct. Graded similarity is the whole gain.' },
+        { text: 'queen and man are opposites', explanation: 'Their similarity is positive.' },
+        { text: 'The example has too few dimensions', explanation: 'Five dimensions are enough to show the mechanism.' },
       ],
       correct: 1,
     },
     {
-      question: 'You initialise an embedding table with random numbers and immediately check which words are close to "cat". What have you measured?',
+      question: 'Why is cosine similarity usually preferred to Euclidean distance for text?',
       options: [
-        {
-          text: 'The model\'s prior knowledge of language',
-          explanation: 'There is no prior knowledge. Nothing has been trained on any text yet.',
-        },
-        {
-          text: 'Nothing — the similarities are random noise until the table is trained',
-          explanation: 'Correct. Meaning appears only after gradient descent has moved the rows. Reading an untrained table is a classic beginner mistake.',
-        },
-        {
-          text: 'A weak but usable similarity signal',
-          explanation: 'Random numbers give random neighbours. There is no weak signal to salvage.',
-        },
+        { text: 'It is faster to compute', explanation: 'Both are a handful of operations.' },
+        { text: 'It ignores magnitude — a frequent word or a long document should not be less similar merely for having a longer vector', explanation: 'Correct, and the two become equivalent once vectors are L2-normalised.' },
+        { text: 'Euclidean distance can be negative', explanation: 'It cannot; cosine can.' },
+        { text: 'Cosine works in higher dimensions', explanation: 'Both are defined in any dimension.' },
       ],
       correct: 1,
     },
     {
-      question: 'A colleague demos king - man + woman landing near queen and says the model understands gender. Best response?',
+      question: 'king − man + woman landed exactly on queen with cosine 1.0000. What is the honest caveat?',
       options: [
-        {
-          text: 'Agree — the model has learned the concept of gender',
-          explanation: 'Overclaim. What exists is a geometric regularity from co-occurrence counts, not understanding.',
-        },
-        {
-          text: 'It shows one relation became roughly a fixed direction in the space, but the effect is cherry-picked and the scoring rule excludes the three input words',
-          explanation: 'Correct. The real finding is linear relational structure for a few relation families, and it is weaker than the folklore.',
-        },
-        {
-          text: 'Dismiss it — the result is fake',
-          explanation: 'It is a real, reproducible effect. The problem is the size of the claim, not the existence of the result.',
-        },
+        { text: 'There is none — this is how word2vec behaves', explanation: 'Real vectors give an approximate match, not an exact one.' },
+        { text: 'These five vectors were constructed by hand to make it exact; real analogies hold approximately and published results exclude the input words', explanation: 'Correct. The mechanism is genuine, the tidiness is not.' },
+        { text: 'The arithmetic is wrong', explanation: 'The arithmetic is correct for these vectors.' },
+        { text: 'Cosine is the wrong metric here', explanation: 'It is the standard one for this comparison.' },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'What is the key difference between word2vec and BERT embeddings?',
+      options: [
+        { text: 'BERT vectors are longer', explanation: 'Dimension is a design choice in both.' },
+        { text: 'word2vec is static — one vector per word forever — while BERT computes the vector from the whole sentence, so "bank" differs by sense', explanation: 'Correct, and it is the main thing that changed after 2018.' },
+        { text: 'word2vec cannot handle rare words', explanation: 'Subword methods address that in both.' },
+        { text: 'BERT does not use an embedding table', explanation: 'It has one; contextual layers sit on top of it.' },
       ],
       correct: 1,
     },
   ],
   interviewQuestions: [
     {
-      question: 'Why do we use embeddings instead of one-hot vectors?',
+      question: 'Why embeddings instead of one-hot?',
       answer:
-        'One-hot gives every word its own slot, so any two different words have dot product 0 and sit the same distance apart: cat is as far from dog as from helicopter. The representation stores identity and nothing else, in 50,000 dimensions that are almost entirely zero. An embedding replaces that with a short dense list of learned numbers, maybe 300, where closeness means relatedness. Two practical wins follow. The input layer shrinks by orders of magnitude. And similar words share statistical strength, so a model that has seen "dog" many times generalises to "puppy" that it barely saw, because their rows sit near each other.',
+        'Two reasons, and the second is the important one. Size: 50,000 dimensions per token against 300. And similarity: every pair of distinct one-hot vectors has a dot product of exactly zero, so the encoding asserts that "cat" and "kitten" are precisely as related as "cat" and "bureaucracy" — the representation destroys the structure before the model sees it. An embedding is a learned dense vector where similar things end up geometrically near each other, and nothing about that geometry is designed; it falls out of the training task. The layer itself is a V × d table, mathematically a matrix multiply by a one-hot and practically an array index.',
       isCaseBased: false,
     },
     {
-      question: 'Is an embedding layer a lookup or a matrix multiplication?',
+      question: 'How is word2vec trained?',
       answer:
-        'Both, and the lookup is the optimisation. Formally the input is a one-hot vector and the layer computes one-hot times E, which by construction selects row i of E. Done literally that is V multiply-adds to fetch d numbers, so every framework indexes the row directly instead. Three consequences worth naming: the table is trainable like any weight matrix; its gradient is sparse, since only rows appearing in the batch get updated, which is why sparse optimisers exist for embedding tables; and the parameter count is V times d, which at 50,000 by 768 is about 38 million, often the largest single tensor in a small model.',
+        'On a pretext task whose output is thrown away. Skip-gram takes a word and predicts its context words; CBOW does the reverse. Either way, once training finishes the model is discarded and the embedding table is kept — the task exists only to force the table into a useful shape. The practical detail that made it work at scale is negative sampling: a full softmax over a 50,000-word vocabulary is prohibitive, so instead the model distinguishes the true context word from a handful of random ones, turning one enormous multiclass problem into a few binary ones. Subsampling frequent words and the window size are the other knobs that visibly change the resulting geometry.',
       isCaseBased: false,
     },
     {
-      question: 'How does an embedding table actually learn anything?',
+      question: 'Cosine or Euclidean?',
       answer:
-        'It starts as small random numbers, which mean nothing. It is then treated as ordinary weights inside a prediction task, typically predicting nearby words from a word, or the masked word from its sentence. Each batch computes how wrong the prediction was and nudges the numbers to reduce that error, updating only the rows for tokens that appeared. Because the task is defined by context, two words that keep showing up in the same company keep receiving similar nudges, and over millions of sentences they drift into the same region of the space. Nothing about meaning is programmed in; the structure is a by-product of getting good at the prediction task.',
+        'Cosine for text and most learned embeddings, because magnitude usually encodes something you do not want — word frequency, document length — rather than meaning, and cosine measures angle only. Euclidean when magnitude genuinely carries information, such as physical measurements or counts. The unifying fact is that once vectors are L2-normalised the two are equivalent, since minimising squared distance on the unit sphere is exactly maximising the dot product. That is why vector databases normalise on insert: one index then serves both, and it makes the fast maximum-inner-product search algorithms applicable.',
       isCaseBased: false,
     },
     {
-      question: 'Explain skip-gram in plain terms, including where the labels come from.',
+      question: 'Do word analogies really work?',
       answer:
-        'Slide a window of a few words along the corpus. Take the centre word and train the model to predict each of the surrounding words. In "the cat sat on the mat" centred on "sat", the targets are cat, on and the. The labels are free: the text supplies both the input and the answer, so it is self-supervised and needs no annotation. Getting good at that prediction forces words with similar neighbours towards similar vectors, which is the entire mechanism. The naive version needs a score over the full vocabulary per step, so real implementations use negative sampling: score one real pair against a handful of random fake pairs and train a yes/no classifier instead.',
-      isCaseBased: false,
-    },
-    {
-      question: 'Case: your semantic search returns garbage. Long documents dominate the results regardless of query, and identical texts rank far apart. Debug it.',
-      answer:
-        'Two symptoms, two different bugs, so separate them. Long documents winning every query is the signature of ranking by raw dot product on unnormalised vectors: magnitude grows with length and token count, so the longest chunk wins on norm rather than relevance, exactly like the scaled-up helicopter vector beating dog. Fix by normalising every vector to unit length and ranking by cosine, which is then just a dot product. Identical texts ranking far apart is an encoding inconsistency instead: query and documents embedded by different models or model versions, an asymmetric query-encoder and passage-encoder used symmetrically, a missing instruction prefix some models require, or a stale index built before a model upgrade. Test it directly by embedding the same string through both paths and confirming cosine near 1.0. After that, check chunking, since a chunk spanning unrelated topics averages into a vector that means nothing. Order of work: verify encoder identity end to end, then normalisation, then chunk boundaries.',
+        'Approximately, and less impressively than the famous examples suggest. The mechanism is real — vector offsets do encode relations, so subtracting "man" and adding "woman" moves along something like a gender direction. But the standard evaluation excludes the three input words from the nearest-neighbour search, which flatters it considerably, and analogies outside the well-worn categories fail often. The effect is also stronger for frequent words and for relations that are strongly represented in the corpus. I would present it as evidence that the space has linear structure rather than as a capability you would build on.',
       isCaseBased: true,
     },
     {
-      question: 'Case: you ship a resume-ranking feature on pretrained embeddings. Legal asks whether it can discriminate. What do you say, and what is your plan?',
+      question: 'How do you handle a word the embedding has never seen?',
       answer:
-        'Say yes, it can, and probably does by default. Embeddings absorb the statistics of their corpus, including occupational gender and ethnicity associations, and the ranking model never sees a protected attribute yet still uses it, because the attribute is recoverable from the geometry of ordinary words and names. Plan in four parts. Measure first: association tests on the embedding space, plus a direct audit that swaps names and gendered terms on otherwise identical resumes and reports the rank change. Mitigate at several levels: drop or neutralise name and pronoun features, apply a debiasing projection along an estimated bias direction, fine-tune on in-domain balanced data. State the ceiling honestly: hard-debiasing is known to hide bias from the obvious tests while leaving clusters recoverable, so it is reduction, not removal. Add process controls: human review, ongoing outcome monitoring by group, a documented model card. Name the trade-off out loud, that aggressive debiasing costs some ranking quality and that is the right trade here.',
+        'Static word-level embeddings simply cannot — that is one of their central weaknesses, and the usual fallback is a shared UNK vector, which discards the word entirely. Subword methods fix it properly: FastText represents a word as the sum of its character n-grams, so an unseen word still gets a composed vector, and BPE or WordPiece tokenisation as used by modern models decomposes anything into known pieces, which is why out-of-vocabulary is essentially not a problem any more. That has a cost worth knowing: it makes perplexity comparisons across tokenizers meaningless, since a subword model predicts more and easier tokens.',
       isCaseBased: true,
     },
     {
-      question: 'Case: a teammate hand-labels the columns of a trained 300-dimension embedding table, claiming dimension 42 is "sentiment". How do you respond?',
+      question: 'How would you build a semantic search system?',
       answer:
-        'Ask what evidence supports it, then explain why the claim is almost certainly wrong. Training never assigns meaning to individual axes; the objective only constrains relative positions of the rows, so any rotation of the whole space gives an equally good solution with completely different column values. Meaning is carried by directions in the space, and there is no reason for a meaningful direction to line up with a coordinate axis. If dimension 42 really does correlate with sentiment, the way to show it is a proper probe: fit a simple classifier on the full vectors, compare it against the single-dimension version, and check on held-out words. Usually you find a sentiment direction that is a combination of many dimensions, not one column. The practical risk of the original claim is a feature-engineering pipeline built on one column that silently breaks the next time the table is retrained, since the axes will land differently.',
+        'Embed the documents with a sentence encoder — a sentence-transformer or a hosted embedding model — normalise, and index them in a vector store with an approximate nearest-neighbour structure such as HNSW, since exact search does not scale. At query time, embed the query the same way and retrieve the top k. Two things I would insist on: chunking strategy matters more than model choice in practice, because a chunk that splits mid-argument retrieves badly no matter how good the embedding is; and a hybrid with BM25 keyword search, since embeddings are poor at exact matches like product codes and names. Then rerank the top 50 with a cross-encoder, which is far more accurate and only affordable on a shortlist.',
       isCaseBased: true,
     },
     {
-      question: 'How do you choose the embedding dimension d, and what goes wrong at each extreme?',
+      question: 'What biases do embeddings carry, and can you remove them?',
       answer:
-        'Empirically, by validating on the downstream task. Useful priors: 50 to 300 for classic word vectors, 384 to 1536 for modern sentence embeddings. Too small and there is not enough room to keep distinct meanings apart, so concepts collide and downstream accuracy plateaus low, the underfitting signature. Too large and memory and index size grow linearly in d, similarity search slows, and on a small corpus the spare capacity fits co-occurrence accidents rather than real structure. Two points that land well: the gain per extra dimension flattens quickly, so the curve is cheap to explore; and for retrieval, d interacts with your index and quantisation budget, which makes the choice partly an infrastructure decision rather than a purely modelling one.',
+        'Whatever is in the corpus. The canonical demonstration is man : computer programmer :: woman : homemaker emerging from word2vec trained on Google News — the model was not taught that, it measured it. Debiasing by identifying a gender direction and projecting it out was proposed and is now regarded as largely cosmetic: it removes the obvious probe while leaving the association recoverable from the remaining geometry. So my position is that the geometric fix is not to be trusted, and the real mitigation is auditing the downstream outcome — screening rates, ranking exposure — rather than the embedding itself. The embedding is faithfully reporting the data; the problem is the data and the decision it feeds.',
+      isCaseBased: false,
+    },
+    {
+      question: 'How do you choose the embedding dimension?',
+      answer:
+        'Empirically, with a strong prior from what already works: 100 to 300 for word embeddings, 768 or 1024 for transformer models, and larger only when there is a lot of data. The trade is the usual one — too small and distinct concepts are forced to share directions, too large and the table overfits and costs memory, and a 50,000 × 1024 table is 51 million parameters before any model exists. For categorical features in a recommender there is a common heuristic of roughly the fourth root of the cardinality as a starting point. I would tune it on downstream task performance rather than on any intrinsic measure, since intrinsic embedding benchmarks correlate poorly with what the embedding is actually for.',
       isCaseBased: false,
     },
   ],
   flashcards: [
-    { front: 'What is wrong with one-hot encoding?', back: 'Every pair of distinct words has dot product 0 and equal distance, so cat is as far from dog as from helicopter. It stores identity and no meaning, in V mostly-zero numbers.' },
-    { front: 'Definition of an embedding', back: 'A short, dense list of learned numbers standing for one token, where closeness in the space means relatedness in meaning. How many numbers is the embedding dimension d.' },
-    { front: 'What is the embedding table?', back: 'A V-by-d matrix, one row per vocabulary word. The token id is the row number, so a lookup is a single array index, not a search.' },
-    { front: 'Lookup or matrix multiply?', back: 'Both. One-hot times E selects row i, but doing it literally wastes V multiplications, so libraries index directly. Same math, trainable either way, gradients touch only the used rows.' },
-    { front: 'How do embeddings get learned?', back: 'They start random and are updated by gradient descent like any other weights, on a task that predicts nearby words. Words in similar contexts get similar nudges and drift together.' },
-    { front: 'Cosine similarity', back: 'Dot product divided by both vector lengths. Leaves the angle only: +1 same direction, 0 right angle, -1 opposite. Length tracks frequency, not meaning, so divide it out.' },
-    { front: 'Skip-gram in one line', back: 'Given the centre word of a window, predict each surrounding word. Labels come free from the raw text, so no annotation is needed.' },
-    { front: 'king - man + woman, honestly', back: 'One relation became roughly a fixed direction in the space. But it is cherry-picked, fails for most relations, and the standard scoring deletes the three input words before ranking.' },
+    { front: 'What is wrong with one-hot', back: 'Every pair of distinct one-hot vectors has dot product exactly 0 — no similarity information at all. Plus 50,000 dimensions per token.' },
+    { front: 'The embedding layer', back: 'A V × d table (50,000 × 300 = 15,000,000 params). A one-hot times the table selects one row, so it is implemented as an INDEX.' },
+    { front: 'Sparse gradients', back: 'Only the rows used in the batch receive a gradient, which is why optimizers have special handling for embeddings.' },
+    { front: 'Cosine similarity', back: 'Dot product over both magnitudes — ANGLE only. king/queen 0.7517, king/man 0.4837, king/apple 0.0000.' },
+    { front: 'Cosine vs Euclidean', back: 'Cosine ignores magnitude (word frequency, document length). They are EQUIVALENT once L2-normalised — hence normalising on insert.' },
+    { front: 'The analogy caveat', back: 'king − man + woman hit queen at 1.0000 only because the vectors were hand-built. Real ones match approximately, with the input words excluded from the search.' },
+    { front: 'Static vs contextual', back: 'word2vec/GloVe: one vector per word forever, so "bank" averages both senses. BERT computes it from the sentence, so the senses separate.' },
+    { front: 'The bias problem', back: 'man : programmer :: woman : homemaker came out of word2vec on Google News. Projecting out a "gender direction" is cosmetic — audit the downstream outcome instead.' },
   ],
-  mindmapMarkdown: `- Embeddings: Meaning as Vectors
-  - The problem
-    - a network eats numbers; a word is not a number
-    - vocabulary = allowed word list; token = one item
-  - Attempt 1: one-hot
-    - one 1, rest zeros: cat = [1,0,0,0]
-    - failure 1: 50,000 numbers per token
-    - failure 2: every distinct pair scores 0
-    - cat-dog = cat-helicopter
-  - The embedding
-    - short dense list of learned numbers (d = 300)
-    - embedding table: V rows x d columns
-    - token id = row number, lookup = one index
-    - starts random, learned by gradient descent
-  - Comparing two of them
-    - dot product mixes alignment and length
-    - cosine = dot / (length x length) -> angle only
-    - cat-dog 0.991 vs cat-helicopter 0.11
-    - normalise once, then dot == cosine
-  - word2vec / skip-gram
-    - centre word predicts its neighbours
-    - labels free from raw text
-    - king - man + woman: real but cherry-picked
-  - Classic mistake
-    - ranking by raw dot: longest vector wins everything
-    - reading an untrained random table
-  - Beyond the basics
-    - negative sampling: 1 real pair vs ~20 fakes
-    - static vs contextual: "bank" gets one blurred row
-    - bias inherited from the corpus
-    - choosing d: 50-300 classic, 384-1536 modern
-  - Next
-    - GenAI: Embeddings, Vector Databases & Semantic Search`,
+  mindmapMarkdown: `- Embeddings
+  - Why not one-hot
+    - 50,000 dimensions per token
+    - every distinct pair has dot product EXACTLY 0
+    - cat/kitten = cat/bureaucracy
+  - The layer
+    - a V x d table, 50,000 x 300 = 15M params
+    - one-hot times table = select one row
+    - implemented as an index, so nearly free
+    - gradients are SPARSE (used rows only)
+  - Geometry
+    - cosine = dot / both magnitudes = angle only
+    - king/queen 0.7517, king/man 0.4837, king/apple 0.0
+    - cosine ignores frequency and document length
+    - equals Euclidean once L2-normalised
+  - The analogy
+    - king - man + woman = queen, cos 1.0000
+    - only because these vectors were hand-built
+    - real ones: approximate, inputs excluded from search
+  - How they are learned
+    - word2vec: predict context, throw the model away
+    - negative sampling replaces the 50k softmax
+    - GloVe: factorise a co-occurrence matrix
+    - BERT: CONTEXTUAL, so "bank" splits by sense
+  - The failure mode
+    - man : programmer :: woman : homemaker
+    - projecting out a direction is cosmetic
+    - audit the downstream outcome`,
 }
 
 export default m
