@@ -50,6 +50,6 @@ export const metrics: SubjectDef = {
     mod('metrics-l3-genai-cv-metrics', 3, 'Text Generation Metrics: Perplexity, BLEU & ROUGE', 44, () => import('./l3-genai-cv-metrics')),
     mod('metrics-l3-vision-metrics', 3, 'Vision Metrics: IoU and mAP', 38, () => import('./l3-vision-metrics')),
     mod('metrics-l3-generative-objectives', 3, 'Generative Model Objectives: Reconstruction, ELBO & GANs', 42, () => import('./l3-generative-objectives')),
-    mod('metrics-l3-pick-the-metric', 3, 'Pick the Metric: Case Studies That Decide the Interview', 40, () => import('./l3-pick-the-metric')),
+    mod('metrics-l3-pick-the-metric', 3, 'Pick the Metric: Four Cases', 22, () => import('./l3-pick-the-metric')),
   ],
 }
