@@ -39,8 +39,8 @@ export const metrics: SubjectDef = {
     - BLEU, ROUGE, perplexity; IoU, mAP`,
   modules: [
     mod('metrics-l0-loss-vs-metric', 0, 'Loss vs Metric', 20, () => import('./l0-loss-vs-metric')),
-    mod('metrics-l1-regression-losses', 1, 'Regression Losses: MSE, MAE, Huber & Quantile', 44, () => import('./l1-regression-losses')),
-    mod('metrics-l1-classification-losses', 1, 'Classification Losses: Cross-Entropy, Focal & Hinge', 47, () => import('./l1-classification-losses')),
+    mod('metrics-l1-regression-losses', 1, 'Regression Losses: MSE, MAE, Huber, Quantile', 22, () => import('./l1-regression-losses')),
+    mod('metrics-l1-classification-losses', 1, 'Classification Losses: Cross-Entropy, Focal, Hinge', 22, () => import('./l1-classification-losses')),
     mod('metrics-l1-metric-learning-losses', 1, 'Contrastive & Triplet Loss: Learning What "Similar" Means', 36, () => import('./l1-metric-learning-losses')),
     mod('metrics-l2-confusion-matrix', 2, 'The Confusion Matrix', 22, () => import('./l2-confusion-matrix')),
     mod('metrics-l2-roc-pr-curves', 2, 'ROC, AUC and PR Curves', 22, () => import('./l2-roc-pr-curves')),
