@@ -19,7 +19,7 @@ const m: Module = {
       title: 'What PCA is',
       md: `**Principal Component Analysis (PCA)** takes a table with *n* columns and re-describes every row using *k* new columns, where *k* is smaller than *n*.
 
-The new columns are called **principal components**. Each one is a direction through the data. **PC1** is the direction along which the rows are most spread out, **PC2** is the most spread-out direction at right angles to PC1, and so on.
+The new columns are called **principal components**. Each one is a direction through the data. **PC1** is the direction along which the rows are most spread out, **PC2** is the most spread-out direction at right angles to PC1 — **orthogonal** to it, in the word textbooks and interviewers use — and so on.
 
 - In: a table, say 6 rows × 2 columns.
 - Out: the same 6 rows, described by 1 number each instead of 2.
