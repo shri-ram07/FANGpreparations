@@ -1,0 +1,286 @@
+import type { Module } from '../types'
+
+const m: Module = {
+  id: 'math-l1-expectation-likelihood',
+  subjectId: 'math',
+  level: 1,
+  title: 'Expectation, Variance and Likelihood',
+  whyItMatters:
+    'Every regression model predicts a conditional expectation, every loss is a negative log-likelihood in disguise, and the reason both are computed in log space is that a product of 1,080 probabilities underflows to exactly zero.',
+  assumes: [
+    'You have read *Conditional Probability and Bayes*',
+    'You know what an average is',
+  ],
+  estMinutes: 18,
+  sections: [
+    {
+      type: 'intuition',
+      title: 'Expected value is the long-run average',
+      md: `A **random variable** is a quantity whose value depends on chance — capital Y for the variable, small y for a value it took.
+
+Its **expected value** E[Y] is the long-run average: each possible value weighted by how often it happens. For a fair die that is 3.5, which is not a value the die can produce — expectation is a summary, not a prediction of any single roll.
+
+The version that matters for machine learning is the **conditional** one. **E[Y | X]** is the average of Y among cases with those particular features, and that is exactly what a regression model outputs. A model trained with squared error is estimating E[Y | X]; one trained with absolute error is estimating the conditional *median* instead, which is why the two disagree on skewed data.`,
+    },
+    {
+      type: 'math',
+      intro:
+        'Expectation and variance. Variance is the expected squared distance from the mean, and the standard deviation is its square root — which puts it back into the same units as the data, so it can actually be compared to a value.',
+      latex: [
+        '\\mathbb{E}[Y] = \\sum_y y\\,P(Y = y)',
+        '\\mathrm{Var}(Y) = \\mathbb{E}\\bigl[(Y - \\mathbb{E}[Y])^2\\bigr], \\qquad \\sigma = \\sqrt{\\mathrm{Var}(Y)}',
+      ],
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'A die, and the 68-95-99.7 rule checked rather than trusted',
+      code: `import numpy as np, math
+vals = [1, 2, 3, 4, 5, 6]
+mean = sum(vals) / 6
+var  = sum((v - mean)**2 for v in vals) / 6
+print('fair die:  E = %.4f   Var = %.4f   sd = %.4f' % (mean, var, math.sqrt(var)))
+
+np.random.seed(0)
+data = np.random.normal(10, 2, 100000)
+for k in [1, 2, 3]:
+    print('within %d sd of the mean: %.4f' % (k, np.mean(np.abs(data - 10) < k*2)))
+
+# ---- real output ----
+# fair die:  E = 3.5000   Var = 2.9167   sd = 1.7078
+# within 1 sd of the mean: 0.6860
+# within 2 sd of the mean: 0.9544
+# within 3 sd of the mean: 0.9972`,
+      annotations: {
+        4: 'Variance is the average SQUARED distance, so its units are squared — 2.9167 "squared pips" is not a quantity anyone can reason about. The square root, 1.7078, is in pips and can sit next to a face value.',
+        12: '0.6860, 0.9544, 0.9972 against the quoted 68%, 95%, 99.7%. Worth measuring once rather than memorising, because the rule is specific to the normal distribution and is quoted for data that is not normal all the time.',
+        13: '95% is 1.96 standard deviations, not 2 — 2 gives 95.44%. The 1.96 is where confidence intervals come from, and where the 2 in a "two-sigma" claim quietly rounds.',
+      },
+    },
+    {
+      type: 'intuition',
+      title: 'Likelihood runs the question backwards',
+      md: `Probability asks: given this coin is fair, how likely is this sequence of flips? **Likelihood** asks the reverse: given the flips I actually saw, which coin makes them most probable?
+
+The data is fixed and known; the parameter is what varies. That reversal is the whole of parameter estimation.
+
+**Maximum likelihood** picks the parameter value that scores highest — and for many models the answer is what you would have guessed, which is reassuring rather than trivial. The next snippet scores four candidate coins against the same ten flips.`,
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Four candidate coins, one set of flips',
+      code: `flips = 'HHTHHHTHHT'
+k, n = flips.count('H'), len(flips)
+print('%d flips, %d heads' % (n, k))
+for p in [0.3, 0.5, 0.7, 0.8]:
+    L = p**k * (1-p)**(n-k)
+    print('  p=%.1f  likelihood=%.8f  log-likelihood=%.4f' % (p, L, math.log(L)))
+print('MLE p = k/n = %.1f' % (k/n))
+
+# ---- real output ----
+# 10 flips, 7 heads
+#   p=0.3  likelihood=0.00007501  log-likelihood=-9.4978
+#   p=0.5  likelihood=0.00097656  log-likelihood=-6.9315
+#   p=0.7  likelihood=0.00222357  log-likelihood=-6.1086
+#   p=0.8  likelihood=0.00167772  log-likelihood=-6.3903
+# MLE p = k/n = 0.7`,
+      annotations: {
+        5: 'p to the power of the heads times (1−p) to the power of the tails. The data is fixed at seven heads in ten; p is what changes from row to row.',
+        11: 'p = 0.7 scores highest at 0.00222357, and 7/10 = 0.7. The maximum likelihood estimate for a coin is the observed proportion — the obvious answer, arrived at by a principle rather than by intuition.',
+        10: 'Note how small the numbers are. Ten flips already gives a likelihood of 0.002, and every additional flip multiplies it down further. That is not a curiosity; it is a hard limit, and the next snippet shows where it stops.',
+      },
+    },
+    {
+      type: 'code',
+      lang: 'python',
+      title: 'Why nobody computes a likelihood, only a log-likelihood',
+      code: `prod, s = 1.0, 0.0
+for i in range(1, 2001):
+    prod *= 0.5
+    s += math.log(0.5)
+    if i in (100, 500, 1000, 1074, 1080, 2000):
+        print('after %4d: product = %.3e   sum of logs = %.2f' % (i, prod, s))
+
+# ---- real output ----
+# after  100: product = 7.889e-31   sum of logs = -69.31
+# after  500: product = 3.055e-151   sum of logs = -346.57
+# after 1000: product = 9.333e-302   sum of logs = -693.15
+# after 1074: product = 4.941e-324   sum of logs = -744.44
+# after 1080: product = 0.000e+00    sum of logs = -748.60
+# after 2000: product = 0.000e+00    sum of logs = -1386.29`,
+      annotations: {
+        3: 'Multiplying probabilities against adding their logs — mathematically the same ranking, since log is monotonic, and numerically nothing alike.',
+        12: '4.941e-324 is the smallest number float64 can represent. One more halving and there is nowhere to go.',
+        13: 'At 1,080 terms the product is exactly 0.0. Every parameter setting now scores zero, the comparison is destroyed, and any gradient computed from it is zero — a silent failure that produces no error.',
+        14: 'The sum of logs is at −1,386.29 and perfectly comfortable. This is the entire reason every loss function in machine learning is a log-likelihood: not elegance, arithmetic.',
+      },
+    },
+    {
+      type: 'note',
+      label: 'Every loss you have met is a negative log-likelihood',
+      md: `Maximising a log-likelihood is minimising its negative, and that is where the standard losses come from rather than being invented separately.
+
+**Cross-entropy** is the negative log-likelihood of a categorical model — the log of the probability assigned to the correct class, negated.
+
+**Mean squared error** is the negative log-likelihood of a Gaussian model with constant variance. Assume the noise around the prediction is normal and the algebra falls out as a squared term, which is a real assumption about the data and is exactly why MSE handles outliers badly.
+
+**Mean absolute error** is the same derivation with a Laplace noise assumption, which has heavier tails — hence its robustness.
+
+So choosing a loss is choosing a noise model, whether or not you meant to. And **regularisation** is a prior: L2 corresponds to a Gaussian prior on the weights, L1 to a Laplace one, which is why L1 produces sparsity.`,
+    },
+  ],
+  quiz: [
+    {
+      question: 'What does a regression model trained with squared error actually predict?',
+      options: [
+        { text: 'The most likely single value of Y', explanation: 'That is the mode, which is a different quantity.' },
+        { text: 'E[Y | X] — the conditional mean, the average of Y among cases with those features', explanation: 'Correct, and absolute error would give the conditional median instead.' },
+        { text: 'The variance of Y', explanation: 'The variance is not what a point prediction reports.' },
+        { text: 'P(Y | X)', explanation: 'A full distribution, not a single number.' },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'Why report standard deviation rather than variance?',
+      options: [
+        { text: 'It is easier to compute', explanation: 'It requires computing the variance first.' },
+        { text: 'Variance is in squared units — 2.9167 "squared pips" is not comparable to anything; 1.7078 pips is', explanation: 'Correct, which is exactly why RMSE exists alongside MSE.' },
+        { text: 'Variance can be negative', explanation: 'It cannot; it is an average of squares.' },
+        { text: 'Standard deviation is more accurate', explanation: 'They carry identical information.' },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'The measured proportion within 2 sd was 0.9544, not 0.95. What follows?',
+      options: [
+        { text: 'The sample was too small', explanation: '100,000 draws is ample.' },
+        { text: '95% is 1.96 standard deviations, not 2 — which is where confidence intervals get their 1.96', explanation: 'Correct, and "two-sigma" quietly rounds it.' },
+        { text: 'The data was not normal', explanation: 'It was drawn from a normal distribution.' },
+        { text: 'The rule is wrong', explanation: 'The rule is a rounding of the true values.' },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'What is the difference between probability and likelihood?',
+      options: [
+        { text: 'None — they are the same quantity', explanation: 'They use the same formula and vary different things.' },
+        { text: 'Probability fixes the parameter and varies the data; likelihood fixes the observed data and varies the parameter', explanation: 'Correct, and that reversal is the whole of parameter estimation.' },
+        { text: 'Likelihood is always smaller', explanation: 'They are the same number read differently.' },
+        { text: 'Likelihood applies only to continuous variables', explanation: 'The coin example is discrete.' },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'After 1,080 multiplications of 0.5 the product printed 0.000e+00. Why does that matter so much?',
+      options: [
+        { text: 'It is slow', explanation: 'Speed is not the issue.' },
+        { text: 'Every parameter setting now scores zero, so the comparison is destroyed and any gradient is zero — silently, with no error raised', explanation: 'Correct. That is the whole reason losses are computed in log space.' },
+        { text: 'It raises an exception', explanation: 'It does not, which is what makes it dangerous.' },
+        { text: 'It only affects 32-bit floats', explanation: 'This was float64, the wider format.' },
+      ],
+      correct: 1,
+    },
+    {
+      question: 'What does choosing MSE as a loss implicitly assume?',
+      options: [
+        { text: 'Nothing — it is just a convenient distance', explanation: 'It is the negative log-likelihood of a specific noise model.' },
+        { text: 'That the noise around the prediction is Gaussian with constant variance — which is why it handles outliers badly', explanation: 'Correct, and MAE corresponds to a heavier-tailed Laplace assumption.' },
+        { text: 'That the targets are positive', explanation: 'No such assumption.' },
+        { text: 'That the features are independent', explanation: 'That is naive Bayes, and unrelated.' },
+      ],
+      correct: 1,
+    },
+  ],
+  interviewQuestions: [
+    {
+      question: 'What does a regression model actually predict?',
+      answer:
+        'The conditional expectation E[Y | X] — the average value of the target among cases with those features. That framing is more useful than "it predicts Y", because it explains the behaviour: an expectation is a summary and need not be a value the target can take, which is why a fair die has expectation 3.5. It also explains why the loss choice changes the answer. Squared error gives you the conditional mean; absolute error gives the conditional median; quantile loss gives a chosen percentile. On skewed data those are genuinely different numbers, and which one you want is a decision about the task rather than a technical detail.',
+      isCaseBased: false,
+    },
+    {
+      question: 'What is maximum likelihood estimation?',
+      answer:
+        'Choosing the parameter value that makes the data you actually observed most probable. The reversal is the key idea: probability fixes the parameter and varies the data, likelihood fixes the data and varies the parameter. On ten coin flips with seven heads, scoring candidate values gives p = 0.7 the highest likelihood at 0.00222 against 0.00098 for a fair coin — and 7/10 is the answer you would have guessed, which is reassuring rather than trivial: a principle reproduced the intuition. In practice it is always computed as a log-likelihood, because the raw product underflows.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Why do we work with log-likelihoods?',
+      answer:
+        'Three reasons, and the first is not optional. Underflow: multiplying 1,080 probabilities of 0.5 in float64 gives exactly 0.0 — every parameter setting then scores zero, the comparison is destroyed, and any gradient is zero, all with no error raised. Working in logs, the same quantity is −748.60 and entirely comfortable. Second, sums differentiate far more easily than products, which matters directly for gradient-based optimisation. Third, log turns products into sums, which makes independent observations combine additively and the algebra tractable. Since log is monotonic, the maximising parameter is unchanged.',
+      isCaseBased: true,
+    },
+    {
+      question: 'How do standard loss functions relate to likelihood?',
+      answer:
+        'They are negative log-likelihoods, which is where they come from rather than being invented separately. Cross-entropy is the negative log-likelihood of a categorical model. Mean squared error is the negative log-likelihood of a Gaussian with constant variance — assume normal noise around the prediction and the squared term falls out of the algebra. Mean absolute error is the same derivation under a Laplace assumption, which has heavier tails and is therefore more robust to outliers. The practical consequence is that choosing a loss is choosing a noise model whether or not you meant to, and MSE\'s outlier sensitivity is that Gaussian assumption being violated.',
+      isCaseBased: false,
+    },
+    {
+      question: 'What is the relationship between regularisation and Bayesian priors?',
+      answer:
+        'Regularisation is a prior, and maximum a posteriori estimation is maximum likelihood plus that prior term. L2 corresponds to a Gaussian prior centred on zero — the log of a Gaussian density gives a squared term, so the penalty is the sum of squared weights, and it shrinks smoothly without ever reaching zero. L1 corresponds to a Laplace prior, whose log gives an absolute value, and the sharp peak at zero is exactly why it produces sparsity. The regularisation strength is the inverse of the prior variance: a tight prior means strong regularisation. That framing is useful because it says what you are assuming rather than just what you are penalising.',
+      isCaseBased: false,
+    },
+    {
+      question: 'When would you not use maximum likelihood?',
+      answer:
+        'When the data is small enough that the estimate is unstable, since MLE has no mechanism to pull an extreme estimate back — three heads in three flips gives p = 1.0, which is confidently wrong. A prior fixes that, and even a weak one changes the answer materially at small n. Also when you need uncertainty rather than a point estimate, since MLE gives one number and a Bayesian posterior gives a distribution. And when the likelihood is intractable, which is common in complex generative models — variational methods optimise a bound instead, which is exactly what the ELBO is. Finally, MLE is biased for some quantities, the standard example being that it underestimates variance, which is why the n−1 correction exists.',
+      isCaseBased: true,
+    },
+    {
+      question: 'What does the 68-95-99.7 rule assume, and when is quoting it wrong?',
+      answer:
+        'It assumes normality, and it is quoted constantly for data that is not normal. Measured on 100,000 normal draws it comes out at 0.6860, 0.9544 and 0.9972 — with the detail that 95% is actually 1.96 standard deviations, not 2, which is where confidence intervals get their 1.96. It goes wrong on heavy-tailed data, where far more mass sits beyond three sigma than the rule implies, and financial returns are the standard cautionary example: events the rule calls once-in-a-lifetime happen every few years. So I would check the distribution before quoting the rule, and use empirical quantiles instead when it is not normal.',
+      isCaseBased: false,
+    },
+    {
+      question: 'Explain expectation and variance to someone without a statistics background.',
+      answer:
+        'Expectation is the long-run average — roll a die many times and the average settles at 3.5, even though the die can never show 3.5. That last part matters, because it is why an expected value is a summary rather than a prediction of any single case. Variance is how spread out the values are: the average squared distance from that centre. The squaring makes the units awkward — 2.9167 squared pips means nothing to anyone — so the square root, the standard deviation, is what gets reported, at 1.7078 pips, because it can sit next to an actual value and be compared to it. That units argument is exactly why RMSE is reported instead of MSE.',
+      isCaseBased: true,
+    },
+  ],
+  flashcards: [
+    { front: 'Expected value', back: 'The long-run average, each value weighted by its probability. A fair die: 3.5 — a value the die cannot show. It is a summary, not a prediction.' },
+    { front: 'What a regression model predicts', back: 'E[Y | X], the conditional mean — under squared error. Absolute error gives the conditional MEDIAN, and on skewed data they differ.' },
+    { front: 'Variance vs standard deviation', back: 'Variance is the average SQUARED distance: 2.9167 squared pips, uninterpretable. sd = 1.7078 pips, comparable to a face value.' },
+    { front: 'The 68-95-99.7 rule, measured', back: '0.6860 / 0.9544 / 0.9972. And 95% is 1.96 sd, not 2 — which is where confidence intervals get their 1.96.' },
+    { front: 'Probability vs likelihood', back: 'Probability: fix the parameter, vary the data. Likelihood: fix the observed data, vary the parameter. That reversal IS parameter estimation.' },
+    { front: 'The coin MLE', back: '7 heads in 10: p=0.7 scores 0.00222357 against 0.00097656 for a fair coin. MLE = k/n = the observed proportion.' },
+    { front: 'The underflow wall', back: '1,080 multiplications of 0.5 gives EXACTLY 0.0 in float64. Every parameter then scores zero, gradients are zero, no error is raised. Logs: −748.60.' },
+    { front: 'Every loss is an NLL', back: 'Cross-entropy = categorical. MSE = Gaussian constant variance (hence outlier-sensitive). MAE = Laplace (heavier tails, robust). L2 = Gaussian prior; L1 = Laplace prior.' },
+  ],
+  mindmapMarkdown: `- Expectation, variance and likelihood
+  - Expectation
+    - the long-run average; die = 3.5
+    - a summary, not a prediction
+    - E[Y | X] is what a regression model outputs
+    - squared error -> mean; absolute error -> MEDIAN
+  - Variance
+    - average SQUARED distance from the mean
+    - 2.9167 squared pips is uninterpretable
+    - sd = 1.7078, in the data's own units
+    - 68-95-99.7 measured: 0.6860 / 0.9544 / 0.9972
+    - 95% is 1.96 sd, not 2
+  - Likelihood
+    - probability: fix parameter, vary data
+    - likelihood: fix DATA, vary parameter
+    - 7 heads in 10: p=0.7 wins at 0.00222357
+    - MLE = k/n, the obvious answer from a principle
+  - Why logs
+    - 1,080 x 0.5 = EXACTLY 0.0 in float64
+    - every parameter scores zero, gradients zero
+    - no error raised - silent
+    - sum of logs: -748.60, comfortable
+    - sums also differentiate more easily
+  - Every loss is a negative log-likelihood
+    - cross-entropy = categorical
+    - MSE = Gaussian, constant variance
+    - MAE = Laplace, heavier tails
+    - choosing a loss IS choosing a noise model
+    - L2 = Gaussian prior, L1 = Laplace prior`,
+}
+
+export default m
