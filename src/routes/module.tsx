@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect, useMemo, useState } from 'react'
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router'
 import { findModuleEntry, loadModule } from '@/content/registry'
 import type { Module } from '@/content/types'
@@ -6,6 +6,7 @@ import { useApp } from '@/stores/app'
 import { SectionRenderer } from '@/components/sections/SectionRenderer'
 import { QuizBlock } from '@/components/QuizBlock'
 import { InterviewBlock, WorkedCases } from '@/components/InterviewBlock'
+import { Annotator } from '@/components/Annotator'
 
 const MindMap = lazy(() => import('@/components/MindMap'))
 
@@ -16,6 +17,7 @@ export function Component() {
   const setLastVisited = useApp((s) => s.setLastVisited)
   const completeModule = useApp((s) => s.completeModule)
   const completedOn = useApp((s) => s.completed[moduleId])
+  const bodyRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (found) setLastVisited(found.subject.id, found.entry.id)
@@ -48,7 +50,8 @@ export function Component() {
   const { subject, entry } = found
 
   return (
-    <div className="mx-auto max-w-3xl px-8 py-10">
+    <div className="mx-auto max-w-3xl px-8 py-10 xl:flex xl:max-w-[64rem] xl:gap-8">
+      <div ref={bodyRef} className="min-w-0 xl:max-w-3xl xl:flex-1">
       {/* Hook — renders instantly from registry metadata, before content loads */}
       <nav className="text-sm text-ink-soft">
         <Link to={`/subject/${subject.id}`} className="hover:text-accent">
@@ -123,6 +126,8 @@ export function Component() {
           <div className="h-64 animate-pulse rounded-lg bg-raised" />
         </div>
       )}
+      </div>
+      {module && <Annotator moduleId={module.id} rootRef={bodyRef} contentKey={module.id} />}
     </div>
   )
 }

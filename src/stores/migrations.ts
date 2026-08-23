@@ -14,6 +14,10 @@ export const migrations: Array<(state: unknown) => unknown> = [
   // v1 -> v2: the NeetCode 150 practice tracker. Older saves have no practice
   // map; {} means "nothing attempted", which is what the page renders by default.
   (state) => ({ ...(state as object), practice: {} }),
+
+  // v2 -> v3: highlights and margin notes. Older saves have no annotations map;
+  // {} means "nothing highlighted", which is what a module renders by default.
+  (state) => ({ ...(state as object), annotations: {} }),
 ]
 
 export const CURRENT_VERSION = migrations.length
