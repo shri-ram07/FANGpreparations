@@ -1,0 +1,1 @@
+var e=[`#2450E5`,`#B45309`,`#178A50`,`#7C3AED`,`#0284C7`,`#D33A2C`],t=`#E4E6E1`,n=`#5A5F6A`;export{t as n,e as r,n as t};
