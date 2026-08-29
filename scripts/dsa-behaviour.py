@@ -32,6 +32,30 @@ for mod, blocks in bymod.items():
 
 # Some modules need a structure built before their functions mean anything.
 SETUP = {
+ 'dsa-l1-linked-lists': (
+   "def _mk(vals):"+chr(10)+
+   "    head = None"+chr(10)+
+   "    for v in reversed(vals):"+chr(10)+
+   "        n = ListNode(v); n.next = head; head = n"+chr(10)+
+   "    return head"+chr(10)+
+   "def _out(n):"+chr(10)+
+   "    r = []"+chr(10)+
+   "    while n: r.append(n.val); n = n.next"+chr(10)+
+   "    return r"+chr(10)+
+   "def _cyc(vals, at):"+chr(10)+
+   "    h = _mk(vals); t = h"+chr(10)+
+   "    while t.next: t = t.next"+chr(10)+
+   "    p = h"+chr(10)+
+   "    for _ in range(at): p = p.next"+chr(10)+
+   "    t.next = p"+chr(10)+
+   "    return h"
+ ),
+ 'dsa-l2-tries': (
+   "_t = Trie()"+chr(10)+"_t.insert('apple')"+chr(10)+"_t.insert('app')"
+ ),
+ 'dsa-l2-graphs-advanced': (
+   "_d = DSU(5)"+chr(10)+"_d.unite(0, 1)"+chr(10)+"_d.unite(3, 4)"
+ ),
  'dsa-l2-trees': (
    "def _n(v, l=None, r=None):"+chr(10)+
    "    x = TreeNode(v); x.left, x.right = l, r; return x"+chr(10)+
@@ -75,6 +99,30 @@ CHECKS = {
  ],
  'dsa-l2-recursion-backtracking': [
    ('solveNQueens(4)', 2), ('solveNQueens(8)', 92), ('solveNQueens(6)', 4),
+ ],
+ 'dsa-l1-linked-lists': [
+   ('_out(reverseList(_mk([1,2,3,4,5])))', [5,4,3,2,1]),
+   ('_out(reverseRec(_mk([1,2,3])))', [3,2,1]),
+   ('_out(mergeTwoLists(_mk([1,2,4]), _mk([1,3,4])))', [1,1,2,3,4,4]),
+   ('middleNode(_mk([1,2,3,4,5])).val', 3),
+   ('nthFromEnd(_mk([1,2,3,4,5]), 2).val', 4),
+   ('hasCycle(_cyc([3,2,0,-4], 1))', True),
+   ('hasCycle(_mk([1,2,3]))', False),
+   ('cycleStart(_cyc([3,2,0,-4], 1)).val', 2),
+   # the canonical LeetCode 146 eviction sequence
+   ('_lru(LRUCache)', [1, -1, -1]),
+ ],
+ 'dsa-l2-tries': [
+   ('_t.search("apple")', True), ('_t.search("app")', True),
+   ('_t.search("ap")', False), ('_t.startsWith("ap")', True),
+   ('_t.startsWith("b")', False),
+ ],
+ 'dsa-l2-graphs-advanced': [
+   ('_d.find(0) == _d.find(1)', True), ('_d.find(0) == _d.find(3)', False),
+   ('dijkstra(4, [[(1,4),(2,1)],[(3,1)],[(1,2),(3,5)],[]], 0)', [0,3,1,4]),
+   # Bellman-Ford must agree with Dijkstra on a graph with no negative edges
+   ('bellmanFord(4, [(0,1,4),(0,2,1),(2,1,2),(1,3,1),(2,3,5)], 0)', [0,3,1,4]),
+   ('kruskal(4, [(1,0,1),(1,2,3),(4,0,2),(5,2,3),(2,1,2)])', 4),
  ],
  'dsa-l2-trees': [
    # the three printed traversals the module's own comments claim
@@ -150,6 +198,12 @@ def _cap(fn, *a):
     with contextlib.redirect_stdout(buf): fn(*a)
     return buf.getvalue().strip()
 
+def _lru(LRU):
+    c = LRU(2); c.put(1, 1); c.put(2, 2)
+    a = c.get(1); c.put(3, 3)          # evicts key 2
+    b = c.get(2); c.put(4, 4)          # evicts key 1
+    return [a, b, c.get(1)]
+
 passed = failed = 0
 for mod, cases in CHECKS.items():
     g = ns.get(mod)
@@ -162,7 +216,7 @@ for mod, cases in CHECKS.items():
     for expr, want in cases:
         try:
             with contextlib.redirect_stdout(_io.StringIO()):
-                got = eval(expr, {**g, '_cap': _cap})
+                got = eval(expr, {**g, '_cap': _cap, '_lru': _lru})
             if got == want: passed += 1
             else: failed += 1; bad.append(f'      {expr}\n        got  {got!r}\n        want {want!r}')
         except Exception as e:
