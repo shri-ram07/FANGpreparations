@@ -20,6 +20,13 @@ export type Level = 0 | 1 | 2 | 3
 
 export type CodeLang = 'python' | 'cpp' | 'sql' | 'yaml' | 'bash'
 
+/** The alternate-language half of a code section. */
+export interface CodeVariant {
+  code: string
+  /** 1-based line number -> annotation, keyed to THIS variant's lines. */
+  annotations?: Record<number, string>
+}
+
 /** Derived from the visuals registry: component key and props typecheck together in content files. */
 export type VisualSection = {
   [K in keyof typeof visuals]: {
@@ -44,6 +51,10 @@ export type Section =
       title?: string
       /** 1-based line number -> annotation shown on hover/click. */
       annotations?: Record<number, string>
+      /** Python twin of the SAME algorithm. Its presence is what puts the
+       *  cpp | py switch on the block; it carries its own annotations because
+       *  the two variants never line up line for line. */
+      py?: CodeVariant
     }
   | VisualSection
 

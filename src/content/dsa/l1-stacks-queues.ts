@@ -45,6 +45,31 @@ int mid = d[2];                 // 3 -- and O(1) indexing too`,
         5: 'int x = st.pop() does not compile — pop() returns void. The idiom used in every snippet below: top()/front() to read, pop() to drop. Two calls.',
         13: 'Reach for raw deque when BOTH ends are hot. This is the sliding-window-maximum tool — forward-ref at the end of this module.',
       },
+      py: {
+        code: `st = []                         # LIFO: a plain list IS the stack
+st.append(10)
+st.append(20)
+t = st[-1]                      # 20 -- most recent first
+top = st.pop()                  # removes AND RETURNS 20
+
+from collections import deque
+q = deque()                     # FIFO: deque, never a list
+q.append(1)
+q.append(2)
+f = q[0]                        # 1 -- oldest first
+oldest = q.popleft()            # removes and returns 1, O(1)
+
+d = deque([2, 3])               # the raw structure: O(1) at BOTH ends
+d.appendleft(1)                 # deque([1, 2, 3])
+d.append(4)                     # deque([1, 2, 3, 4])
+mid = d[2]                      # 3 -- but a deque indexes in O(n), not O(1)`,
+        annotations: {
+          1: 'Python ships no stack adapter: list.append/pop ARE the stack, amortized O(1). You lose the C++ safety net where the wrong access pattern fails to compile — the discipline is now yours to keep.',
+          5: 'The opposite of C++: pop() RETURNS the element, so top() + pop() collapses into one call. st[-1] is the peek that does not remove.',
+          8: 'Never use a list as a queue: list.pop(0) shifts every remaining element, O(n). deque.popleft() is O(1). This is the single most common Python performance bug in interview code.',
+          17: 'Reach for deque when BOTH ends are hot — it is the sliding-window-maximum tool. But unlike a C++ deque, indexing the middle walks the blocks: O(n). Ends only.',
+        },
+      },
     },
     {
       type: 'intuition',
@@ -85,6 +110,26 @@ int mid = d[2];                 // 3 -- and O(1) indexing too`,
         9: 'top() to read, pop() to remove — two calls, because pop() returns void.',
         16: 'The "(((" trap: the loop finishes clean but unclosed opens remain. Only an empty stack means fully matched.',
       },
+      py: {
+        code: `def isValid(s: str) -> bool:
+    st = []                               # opens waiting for their closer
+    pairs = {')': '(', ']': '[', '}': '{'}
+    for c in s:
+        if c in '([{':
+            st.append(c)                  # open: park it, keep reading
+        else:
+            if not st:
+                return False              # closer, but nothing is open
+            if st.pop() != pairs[c]:
+                return False              # closes the WRONG bracket
+    return not st                         # leftovers = opens never closed`,
+        annotations: {
+          3: 'A dict of closer -> opener replaces the three-way if chain: data instead of control flow. Adding a new bracket pair is now one entry, not three lines.',
+          8: 'The ")(" trap: the very first character is a closer and the stack is empty. "not st" is the empty test — forgetting it is the number-one bug in this problem.',
+          10: 'One call does what C++ needs two for: pop() removes and returns, so the compare reads as a single line.',
+          12: 'The "(((" trap: the loop finishes clean but unclosed opens remain. Only an empty stack means fully matched.',
+        },
+      },
     },
     {
       type: 'intuition',
@@ -115,6 +160,29 @@ public:
         2: 'Cost: two ints per node. The two-stack variant stores mins only when they change — cheaper when new minimums are rare.',
         5: 'Each node records the min AS OF its push. History is frozen into the stack itself — nothing to recompute later.',
         8: 'This is the whole trick: popping automatically exposes the pair below, which carries the correct older min.',
+      },
+      py: {
+        code: `class MinStack:
+    def __init__(self):
+        self.st = []                     # (value, min of the stack up to here)
+
+    def push(self, x: int) -> None:
+        mn = x if not self.st else min(x, self.st[-1][1])
+        self.st.append((x, mn))          # the min travels WITH the element
+
+    def pop(self) -> None:
+        self.st.pop()                    # previous min re-surfaces: O(1)
+
+    def top(self) -> int:
+        return self.st[-1][0]
+
+    def getMin(self) -> int:
+        return self.st[-1][1]`,
+        annotations: {
+          3: 'A tuple per node, immutable and cheap. The two-stack variant stores mins only when they change — cheaper when new minimums are rare.',
+          7: 'Each node records the min AS OF its push. History is frozen into the stack itself — nothing to recompute later.',
+          10: 'This is the whole trick: popping automatically exposes the tuple below, which carries the correct older min.',
+        },
       },
     },
     {
@@ -266,6 +334,23 @@ public:
         6: 'The nested-loop LOOK. But the while can only pop what a previous iteration pushed — each index enters once and leaves at most once.',
         7: 'Correctness in one line: everything between st.top() and i was smaller (already popped), so a[i] really is the NEAREST greater to the right.',
       },
+      py: {
+        code: `def nextGreater(a: list[int]) -> list[int]:
+    n = len(a)
+    ans = [-1] * n                       # default: no greater exists
+    st = []                              # indices; values DECREASE toward top
+    for i in range(n):
+        while st and a[i] > a[st[-1]]:
+            ans[st[-1]] = a[i]           # a[i] is the first bigger they met
+            st.pop()                     # resolved -- leaves forever
+        st.append(i)                     # i now waits for ITS bigger value
+    return ans                           # [4,2,1,5,3] -> [5,5,5,-1,-1]`,
+        annotations: {
+          4: 'The invariant: values on the stack strictly decrease toward the top (st[-1]). A bigger arrival must pop from the top until the invariant holds again — that popping IS the algorithm.',
+          6: '"while st and ..." — an empty list is falsy, so this is !st.empty() in Python spelling. The nested-loop LOOK is a lie: the while can only pop what a previous iteration pushed, so each index enters once and leaves at most once.',
+          7: 'Correctness in one line: everything between st[-1] and i was smaller (already popped), so a[i] really is the NEAREST greater to the right.',
+        },
+      },
     },
     {
       type: 'note',
@@ -291,6 +376,22 @@ public:
       annotations: {
         7: 'The ONLY change from Next Greater Element: store the gap i - st.top() instead of the value. Storing indices (not values) on the stack is what makes the whole family solvable with one template.',
         12: 'Trace day 2 (temp 75): it waits through 71, 69, 72 and is finally resolved by 76 at day 6 — distance 4. The stack skipped every non-answer in O(1) amortized.',
+      },
+      py: {
+        code: `def dailyTemperatures(t: list[int]) -> list[int]:
+    n = len(t)
+    ans = [0] * n                        # 0 = no warmer day ever comes
+    st = []                              # indices of days still waiting
+    for i in range(n):
+        while st and t[i] > t[st[-1]]:
+            ans[st[-1]] = i - st[-1]     # answer = DISTANCE in days
+            st.pop()
+        st.append(i)
+    return ans   # [73,74,75,71,69,72,76,73] -> [1,1,4,2,1,1,0,0]`,
+        annotations: {
+          7: 'The ONLY change from Next Greater Element: store the gap i - st[-1] instead of the value. Storing indices (not values) on the stack is what makes the whole family solvable with one template.',
+          10: 'Trace day 2 (temp 75): it waits through 71, 69, 72 and is finally resolved by 76 at day 6 — distance 4. The stack skipped every non-answer in O(1) amortized.',
+        },
       },
     },
     {
@@ -328,6 +429,24 @@ public:
         6: 'Increasing stack this time (Next Greater used decreasing). Rule of thumb: hunting for nearest SMALLER neighbors → keep the stack increasing.',
         10: 'The popped bar spans (left, i) exclusive: first shorter bar on each side. Width = i - left - 1. Trace {2,1,5,6,2,3}: when 2 arrives at i=4, bar 6 settles 6x1, bar 5 settles 5x2 = 10 — the answer.',
       },
+      py: {
+        code: `def largestRectangleArea(h: list[int]) -> int:
+    n, best = len(h), 0
+    st = []                              # indices; heights INCREASE toward top
+    for i in range(n + 1):
+        cur = 0 if i == n else h[i]      # sentinel bar of height 0 at the end
+        while st and h[st[-1]] > cur:
+            height = h[st.pop()]         # read and remove in one move
+            left = st[-1] if st else -1
+            best = max(best, height * (i - left - 1))
+        st.append(i)
+    return best                          # [2,1,5,6,2,3] -> 10`,
+        annotations: {
+          5: 'The sentinel trick: i runs to n with a phantom height of 0. It is shorter than every bar, so the stack fully drains and every bar gets settled — no leftover cases.',
+          6: 'Increasing stack this time (Next Greater used decreasing). Rule of thumb: hunting for nearest SMALLER neighbors → keep the stack increasing.',
+          9: 'The popped bar spans (left, i) exclusive: first shorter bar on each side. Width = i - left - 1. Trace [2,1,5,6,2,3]: when 2 arrives at i=4, bar 6 settles 6x1, bar 5 settles 5x2 = 10 — the answer.',
+        },
+      },
     },
     {
       type: 'intuition',
@@ -362,6 +481,37 @@ public:
         4: 'Pouring while out still holds elements would bury older elements under newer ones — order corrupted. The guard IS the correctness.',
         6: 'The double reversal happening live: in has newest-on-top; pushing across flips it, so out ends with OLDEST on top. Exactly FIFO.',
         12: 'Worst case for one call: O(n) full pour. Amortized: each element moves at most twice ever, so n operations cost O(n) total. Say both numbers in the interview.',
+      },
+      py: {
+        code: `class MyQueue:
+    def __init__(self):
+        self.inbox = []                 # arrivals ("in" is a keyword)
+        self.outbox = []                # departures (reversed)
+
+    def _shift(self) -> None:
+        if self.outbox:
+            return                      # pour ONLY when outbox is empty
+        while self.inbox:
+            self.outbox.append(self.inbox.pop())
+
+    def push(self, x: int) -> None:
+        self.inbox.append(x)            # O(1)
+
+    def pop(self) -> int:
+        self._shift()
+        return self.outbox.pop()
+
+    def peek(self) -> int:
+        self._shift()
+        return self.outbox[-1]
+
+    def empty(self) -> bool:
+        return not self.inbox and not self.outbox`,
+        annotations: {
+          7: 'Pouring while outbox still holds elements would bury older elements under newer ones — order corrupted. The guard IS the correctness.',
+          10: 'The double reversal happening live, in one line: inbox.pop() takes the newest, append puts it on outbox — so outbox ends with the OLDEST on top. Exactly FIFO.',
+          17: 'Worst case for one call: O(n) full pour. Amortized: each element moves at most twice ever, so n operations cost O(n) total. Say both numbers in the interview.',
+        },
       },
     },
     {

@@ -42,6 +42,25 @@ const m: Module = {
         3: 'Two child pointers instead of one next — that is the entire structural difference from a linked list.',
         4: 'Every interview snippet assumes this struct (LeetCode ships it). Children start null; you wire them up.',
       },
+      py: {
+        code: `class TreeNode:
+    def __init__(self, val: int):
+        self.val = val
+        self.left = None
+        self.right = None
+
+# The tree every example below uses:
+#
+#          8          <- root: depth 0. Tree height = 2 (edges 8->3->1)
+#         / \\
+#        3   10       <- 3: depth 1, height 1
+#       / \\    \\
+#      1   6    14    <- leaves: no children, height 0`,
+        annotations: {
+          2: '__init__ is the constructor, and LeetCode ships this exact class in its Python stubs too. Children start None; you wire them up.',
+          4: 'Two child attributes instead of one .next — that is the entire structural difference from a linked list.',
+        },
+      },
     },
     {
       type: 'intuition',
@@ -83,6 +102,37 @@ void postorder(TreeNode* n) {   // Left -> Right -> Root
         13: 'Our example tree is a BST — and its inorder comes out sorted. This is not a coincidence; it is an alternative way to validate a BST.',
         19: 'The node speaks only after BOTH children finished — which is why every height/subtree-sum/diameter computation is postorder at heart.',
       },
+      py: {
+        code: `def preorder(n):                # Root -> Left -> Right
+    if not n:
+        return                  # base case: fell off the tree
+    print(n.val, end=' ')       # visit FIRST...
+    preorder(n.left)
+    preorder(n.right)
+                                # prints: 8 3 1 6 10 14
+
+def inorder(n):                 # Left -> Root -> Right
+    if not n:
+        return
+    inorder(n.left)
+    print(n.val, end=' ')       # ...visit BETWEEN...
+    inorder(n.right)
+                                # prints: 1 3 6 8 10 14  (sorted!)
+
+def postorder(n):               # Left -> Right -> Root
+    if not n:
+        return
+    postorder(n.left)
+    postorder(n.right)
+    print(n.val, end=' ')       # ...visit LAST
+                                # prints: 1 6 3 14 10 8`,
+        annotations: {
+          2: '"if not n" works because a plain object is truthy — but "if n is None" is the safer habit: a class that defines __len__ or __bool__ would silently break the shortcut.',
+          4: 'Announce, then descend. This root-first property is exactly why preorder can serialize a tree (see the last section).',
+          14: 'Our example tree is a BST — and its inorder comes out sorted. This is not a coincidence; it is an alternative way to validate a BST.',
+          22: 'The node speaks only after BOTH children finished — which is why every height/subtree-sum/diameter computation is postorder at heart.',
+        },
+      },
     },
     {
       type: 'intuition',
@@ -118,6 +168,25 @@ void postorder(TreeNode* n) {   // Left -> Right -> Root
         6: 'The inner dive is "go left until you cannot". Everything passed on the way is unfinished business — parked on the stack.',
         10: 'Invariant: the stack top is always the next node in inorder. Stop after k pops and you have solved kth-smallest-in-BST.',
         12: 'If cur->right is null, the next loop iteration skips the dive and pops the next ancestor — exactly what recursion would do returning upward.',
+      },
+      py: {
+        code: `def inorderIter(root) -> list[int]:
+    out = []
+    st = []
+    cur = root
+    while cur or st:
+        while cur:                  # dive the left spine,
+            st.append(cur)          # bookmarking every ancestor
+            cur = cur.left
+        cur = st.pop()              # deepest bookmark = next in order
+        out.append(cur.val)         # visit
+        cur = cur.right             # then repeat inside its right subtree
+    return out                      # 1 3 6 8 10 14 -- O(n) time, O(h) space`,
+        annotations: {
+          6: 'The inner dive is "go left until you cannot". Everything passed on the way is unfinished business — parked on the stack.',
+          9: 'Invariant: the stack top is always the next node in inorder. Stop after k pops and you have solved kth-smallest-in-BST. (One call here, not top() + pop().)',
+          11: 'If cur.right is None, the next loop iteration skips the dive and pops the next ancestor — exactly what recursion would do returning upward.',
+        },
       },
     },
     {
@@ -169,6 +238,35 @@ vector<int> rightView(TreeNode* root) {
         13: 'Everything pushed during this inner loop is level d+1 by construction — it sits behind all remaining level-d nodes in the queue.',
         23: 'Right view = what you see standing to the tree\'s right = the LAST node of every level. Left view is the same walk taking .front().',
       },
+      py: {
+        code: `from collections import deque
+
+def levelOrder(root) -> list[list[int]]:
+    out = []
+    if not root:
+        return out
+    q = deque([root])
+    while q:
+        sz = len(q)                      # freeze THIS level's population
+        level = []
+        for _ in range(sz):
+            n = q.popleft()
+            level.append(n.val)
+            if n.left:  q.append(n.left)     # children queue up behind --
+            if n.right: q.append(n.right)    # they are the NEXT level
+        out.append(level)
+    return out                           # [8] [3, 10] [1, 6, 14]
+
+def rightView(root) -> list[int]:
+    return [level[-1] for level in levelOrder(root)]  # last node of each level
+                                         # 8 10 14. Left view: level[0] -> 8 3 1`,
+        annotations: {
+          7: 'deque, never a list: popleft() is O(1) while list.pop(0) is O(n), which would quietly turn this O(n) BFS into O(n²).',
+          9: 'THE trick. len(q) changes as children are appended mid-loop — freezing it into sz is what separates the levels. Loop over q directly and levels bleed together.',
+          14: 'Everything appended during this inner loop is level d+1 by construction — it sits behind all remaining level-d nodes in the queue.',
+          20: 'Right view = what you see standing to the tree\'s right = the LAST node of every level, and level[-1] says exactly that. Left view is the same walk taking level[0].',
+        },
+      },
     },
     {
       type: 'code',
@@ -192,6 +290,28 @@ while (!q.empty()) {
         3: 'std::map keeps columns sorted left-to-right for free — the ordered-vs-unordered choice actually matters here.',
         8: 'BFS order guarantees the FIRST node recorded per column is the highest one — that is exactly why top view falls out of the same walk.',
         13: 'One traversal, three interview answers: vertical order, top view (fronts), bottom view (backs). Left/right views came from levels; top/bottom come from columns.',
+      },
+      py: {
+        code: `from collections import defaultdict, deque
+
+# Vertical order: BFS carrying a column index (root = 0,
+# left child = col-1, right child = col+1).
+cols = defaultdict(list)                    # col -> nodes top-to-bottom
+q = deque([(root, 0)])
+while q:
+    node, c = q.popleft()
+    cols[c].append(node.val)
+    if node.left:  q.append((node.left,  c - 1))
+    if node.right: q.append((node.right, c + 1))
+
+# vertical order = [cols[c] for c in sorted(cols)]
+# TOP view    = cols[c][0]  for each column (first seen from above)
+# BOTTOM view = cols[c][-1] for each column (last one wins looking up)`,
+        annotations: {
+          5: 'Python ships no std::map, so the columns come out unordered and have to be walked as sorted(cols) — an extra O(k log k) the C++ pane gets for free. This is the ordered-vs-unordered choice, made visible.',
+          9: 'BFS order guarantees the FIRST node recorded per column is the highest one — that is exactly why top view falls out of the same walk.',
+          13: 'One traversal, three interview answers: vertical order, top view (index 0), bottom view (index -1). Left/right views came from levels; top/bottom come from columns.',
+        },
       },
     },
     {
@@ -301,6 +421,23 @@ bool isValidBST(TreeNode* root) {
         5: 'Each recursive call narrows exactly one side of the window — the other side rides along unchanged from higher ancestors.',
         9: 'long long bounds so a node holding INT_MIN or INT_MAX still fits STRICTLY inside the initial window. int bounds fail that hidden test; TreeNode* bounds (null = unbounded) also work.',
       },
+      py: {
+        code: `def valid(n, lo: float, hi: float) -> bool:
+    if not n:
+        return True                         # an empty subtree can't violate
+    if n.val <= lo or n.val >= hi:
+        return False                        # outside the inherited window
+    return (valid(n.left, lo, n.val)        # left: ceiling tightens to n.val
+            and valid(n.right, n.val, hi))  # right: floor tightens to n.val
+
+def isValidBST(root) -> bool:
+    return valid(root, float('-inf'), float('inf'))`,
+        annotations: {
+          4: 'One comparison against the whole ancestry, compressed into two numbers. This line is the entire algorithm.',
+          6: 'Each recursive call narrows exactly one side of the window — the other side rides along unchanged from higher ancestors. Wrap the two-line condition in parentheses; a trailing backslash would work too and reads worse.',
+          10: 'float(\'-inf\') / float(\'inf\') retire the whole C++ long long dance: Python ints are unbounded and compare correctly against inf, so the hidden INT_MIN/INT_MAX test cannot bite.',
+        },
+      },
     },
     {
       type: 'note',
@@ -327,6 +464,27 @@ TreeNode* insertBST(TreeNode* root, int v) {
         4: 'Binary search, pointer edition: each comparison discards an entire subtree. No recursion needed for search.',
         9: 'Insertion never rewires the middle of a BST — walk until you fall off, and that null is where the new leaf belongs.',
         12: 'Returning root lets the parent re-attach its (possibly new) child: root->left = insertBST(...). O(h) both ops — log n balanced, n skewed.',
+      },
+      py: {
+        code: `def searchBST(root, target: int):
+    cur = root
+    while cur and cur.val != target:
+        cur = cur.left if target < cur.val else cur.right
+    return cur                           # the node, or None
+
+def insertBST(root, v: int):
+    if not root:
+        return TreeNode(v)               # fell off: the hole IS the spot
+    if v < root.val:
+        root.left = insertBST(root.left, v)
+    else:
+        root.right = insertBST(root.right, v)
+    return root`,
+        annotations: {
+          4: 'Binary search, reference edition: each comparison discards an entire subtree. Python\'s conditional expression reads back-to-front (value if test else value) — the only syntax difference from the C++ ternary.',
+          9: 'Insertion never rewires the middle of a BST — walk until you fall off, and that None is where the new leaf belongs.',
+          14: 'Returning root lets the parent re-attach its (possibly new) child: root.left = insertBST(...). O(h) both ops — log n balanced, n skewed.',
+        },
       },
     },
     {
@@ -369,6 +527,32 @@ TreeNode* lca(TreeNode* root, TreeNode* p, TreeNode* q) {
         15: 'Three base cases in one line: fell off the tree, found p, found q. Finding either one is enough — if the other is below it, this node is already the LCA.',
         18: 'The postorder moment: only after BOTH children report can this node know whether it is the split point. O(n) time, O(h) stack.',
       },
+      py: {
+        code: `def lcaBST(root, p, q):
+    cur = root
+    while cur:
+        if p.val < cur.val and q.val < cur.val:
+            cur = cur.left               # both targets live left: descend
+        elif p.val > cur.val and q.val > cur.val:
+            cur = cur.right              # both live right: descend
+        else:
+            return cur                   # the split point (or cur IS p or q)
+    return None
+
+def lca(root, p, q):
+    if not root or root is p or root is q:
+        return root
+    L = lca(root.left,  p, q)
+    R = lca(root.right, p, q)
+    if L and R:
+        return root                      # p and q surfaced on DIFFERENT sides
+    return L if L else R                 # both on one side (or neither found)`,
+        annotations: {
+          9: 'In our BST: lcaBST for 1 and 6 walks 8 -> 3 (both smaller than 8), then stops: 1 < 3 < 6. The paths part ways at 3.',
+          13: 'Three base cases in one line: fell off the tree, found p, found q. "is", not "==" — the question is node identity, not equal values. Finding either target is enough: if the other is below it, this node is already the LCA.',
+          17: 'The postorder moment: only after BOTH children report can this node know whether it is the split point. O(n) time, O(h) stack.',
+        },
+      },
     },
     {
       type: 'intuition',
@@ -403,6 +587,30 @@ int diameterOfBinaryTree(TreeNode* root) {
         6: 'L and R are heights in NODES, which equals the EDGE count from n down through that child — so L + R is exactly the bending path\'s edge length. The off-by-ones cancel.',
         7: 'The parent only ever needs the height. The diameter answer never travels up the recursion — it leaks out the side into best.',
       },
+      py: {
+        code: `best = 0                            # longest path seen anywhere, in EDGES
+
+def height(n) -> int:               # returns height in NODES (None = 0)
+    global best
+    if not n:
+        return 0
+    L = height(n.left)
+    R = height(n.right)
+    best = max(best, L + R)         # the path that BENDS at n
+    return 1 + max(L, R)            # report plain height upward, as asked
+
+def diameterOfBinaryTree(root) -> int:
+    global best
+    best = 0
+    height(root)
+    return best`,
+        annotations: {
+          1: 'A module global keeps the snippet short — in the interview, nest height() inside diameterOfBinaryTree and use nonlocal, or hang it off self. Never leave a mutable global in submitted code.',
+          4: 'Without this line, "best = ..." below would create a fresh local and the answer would always come back 0. Python needs the declaration; C++ does not.',
+          9: 'L and R are heights in NODES, which equals the EDGE count from n down through that child — so L + R is exactly the bending path\'s edge length. The off-by-ones cancel.',
+          10: 'The parent only ever needs the height. The diameter answer never travels up the recursion — it leaks out the side into best.',
+        },
+      },
     },
     {
       type: 'code',
@@ -422,6 +630,28 @@ bool isBalanced(TreeNode* root) { return check(root) != -1; }`,
         1: 'Heights are never negative, so -1 is a free out-of-band channel: one int carries both the number and the verdict.',
         4: 'Short-circuit: once any subtree fails, no more heights are computed — the -1 just bubbles to the top. This is what keeps it O(n).',
         7: 'The naive version calls a separate height() at every node: O(n²) on a skewed tree. Here every node is visited exactly once.',
+      },
+      py: {
+        code: `def check(n) -> int:               # height, or -1 = "unbalanced below"
+    if not n:
+        return 0
+    L = check(n.left)
+    if L == -1:
+        return -1                  # verdict already in: stop measuring
+    R = check(n.right)
+    if R == -1:
+        return -1
+    if abs(L - R) > 1:
+        return -1                  # THIS node breaks the rule
+    return 1 + max(L, R)
+
+def isBalanced(root) -> bool:
+    return check(root) != -1`,
+        annotations: {
+          1: 'Heights are never negative, so -1 is a free out-of-band channel: one int carries both the number and the verdict.',
+          5: 'Short-circuit: once any subtree fails, no more heights are computed — the -1 just bubbles to the top. This is what keeps it O(n).',
+          12: 'The naive version calls a separate height() at every node: O(n²) on a skewed tree. Here every node is visited exactly once.',
+        },
       },
     },
     {
@@ -459,6 +689,30 @@ TreeNode* deser(istringstream& in) {     // call: istringstream in(s); deser(in)
         2: 'The marker is load-bearing: it is the only thing telling the reader "this branch is over, back up".',
         6: 'Desk-check it on the example tree: 8, then all of 3\'s subtree (3 1 # # 6 # #), then all of 10\'s (10 # 14 # #). Preorder, nulls included.',
         13: 'No counters, no lengths: the stream position IS the recursion state. When deser returns from the left subtree, the stream is sitting exactly at the right subtree\'s first token.',
+      },
+      py: {
+        code: `def ser(n, out: list[str]) -> None:
+    if not n:
+        out.append("#")                  # null marker = "subtree ends here"
+        return
+    out.append(str(n.val))
+    ser(n.left, out)
+    ser(n.right, out)
+# tree above -> ' '.join(out) == "8 3 1 # # 6 # # 10 # 14 # #"
+
+def deser(tokens):                       # call: deser(iter(s.split()))
+    tok = next(tokens)
+    if tok == "#":
+        return None                      # boundary: hand back an empty subtree
+    n = TreeNode(int(tok))
+    n.left  = deser(tokens)              # the reader re-runs the writer's
+    n.right = deser(tokens)              # recursion, consuming tokens in sync
+    return n`,
+        annotations: {
+          3: 'The marker is load-bearing: it is the only thing telling the reader "this branch is over, back up". Collect pieces in a list and join once — repeated string += would be O(n²).',
+          8: 'Desk-check it on the example tree: 8, then all of 3\'s subtree (3 1 # # 6 # #), then all of 10\'s (10 # 14 # #). Preorder, nulls included.',
+          11: 'next() on a shared iterator is the istringstream >>: the ITERATOR POSITION is the recursion state. When deser returns from the left subtree, the iterator sits exactly at the right subtree\'s first token — no counters, no index box to pass around.',
+        },
       },
     },
     {

@@ -31,6 +31,17 @@ reverse(s.begin(), s.end());     // "!gnaaF" -- edits the chars directly`,
         2: 'One line of contrast: in Python this is a TypeError — Python strings are immutable, so every edit allocates a new string.',
         4: 'string is a container, so any algorithm that works on vector<char> works here. No copies, no conversions.',
       },
+      py: {
+        code: `s = "faang"
+s = "F" + s[1:]                  # strings are IMMUTABLE: this builds a NEW string
+s += "!"                         # also a brand new string: "Faang!"
+s = s[::-1]                      # "!gnaaF" -- a fresh string again, not an edit`,
+        annotations: {
+          2: 'The C++ line s[0] = \'F\' is a TypeError in Python. Every "edit" allocates a new string — that is the whole difference between the two panes.',
+          3: 'Because of that, += in a loop is O(n²). Collect pieces in a list and \'\'.join(parts) once — the standard Python fix, and a real interview answer.',
+          4: 'For character-level work: chars = list(s) gives a mutable buffer, \'\'.join(chars) turns it back. That is the Python stand-in for in-place string algorithms.',
+        },
+      },
     },
     {
       type: 'intuition',
@@ -59,6 +70,23 @@ reverse(s.begin(), s.end());     // "!gnaaF" -- edits the chars directly`,
         2: 'Cheap reject first: different lengths can never be anagrams. Costs nothing, skips all the counting.',
         3: '= {0} zero-initializes all 26 slots. A fixed 26-int array is O(1) space — say that, interviewers listen for it.',
         5: 'One array, two passes: s increments, t decrements. Anagrams cancel to all zeros — no second array, no map compare.',
+      },
+      py: {
+        code: `def isAnagram(s: str, t: str) -> bool:
+    if len(s) != len(t):
+        return False
+    cnt = [0] * 26
+    for c in s:
+        cnt[ord(c) - ord('a')] += 1
+    for c in t:
+        cnt[ord(c) - ord('a')] -= 1
+    return all(x == 0 for x in cnt)`,
+        annotations: {
+          2: 'Cheap reject first: different lengths can never be anagrams. Costs nothing, skips all the counting.',
+          4: '[0] * 26 is the fixed 26-slot array — O(1) space whatever the input size. Say that, interviewers listen for it.',
+          5: 'One array, two passes: s increments, t decrements. Anagrams cancel to all zeros — no second array, no map compare.',
+          9: 'The one-liner is return Counter(s) == Counter(t). Write it, then say you can do it in O(1) space with the 26-array — that answer order scores best.',
+        },
       },
     },
     {
@@ -94,6 +122,21 @@ reverse(s.begin(), s.end());     // "!gnaaF" -- edits the chars directly`,
         5: 'The canonical key. Swap these two lines for a count-array key ("1#0#0#...") to drop the log factor: O(n·k) instead of O(n·k log k). Worth doing when words are long.',
         6: 'operator[] on a missing key inserts an empty vector first — the counting idiom working for you, not against you.',
         9: 'Structured bindings + move: hand the buckets over without copying every string again.',
+      },
+      py: {
+        code: `from collections import defaultdict
+
+def groupAnagrams(strs: list[str]) -> list[list[str]]:
+    groups = defaultdict(list)
+    for w in strs:
+        key = ''.join(sorted(w))        # "eat" "tea" "ate" -> all "aet"
+        groups[key].append(w)
+    return list(groups.values())`,
+        annotations: {
+          6: 'The canonical key. sorted() returns a list of chars, so join it back into a string — a list is unhashable and would blow up as a dict key. Swap this for a 26-count tuple to drop the log factor: O(n·k) instead of O(n·k log k).',
+          7: 'defaultdict(list) creates the empty bucket on first touch — the exact behaviour of C++ operator[] on a missing key, working for you rather than against you.',
+          8: 'No copying: .values() hands over the same list objects. This is where C++ needs std::move and Python needs nothing.',
+        },
       },
     },
     {
@@ -131,6 +174,30 @@ bool validPalindrome(const string& s) {   // may delete at most ONE char
         2: 'Invariant: outside [l, r] is already mirror-verified. Every loop iteration shrinks the unverified window by 2.',
         12: 'First mismatch = the only place a deletion can help. Everything before it already matched.',
         13: 'THE branch trick: delete the left char OR the right char, and check the rest both ways. You cannot know which side is the intruder — "abbxa" needs skip-right, "axbba" needs skip-left. Two O(n) checks → still O(n) total.',
+      },
+      py: {
+        code: `def isPal(s: str, l: int, r: int) -> bool:
+    while l < r:
+        if s[l] != s[r]:
+            return False
+        l += 1
+        r -= 1
+    return True
+
+def validPalindrome(s: str) -> bool:   # may delete at most ONE char
+    l, r = 0, len(s) - 1
+    while l < r:
+        if s[l] != s[r]:
+            return isPal(s, l + 1, r) or isPal(s, l, r - 1)
+        l += 1
+        r -= 1
+    return True`,
+        annotations: {
+          2: 'Invariant: outside [l, r] is already mirror-verified. Every loop iteration shrinks the unverified window by 2.',
+          9: 'For a plain palindrome check Python has s == s[::-1] — but that allocates a reversed copy, and it cannot express "skip one char". This version is O(1) extra space and extends.',
+          12: 'First mismatch = the only place a deletion can help. Everything before it already matched.',
+          13: 'THE branch trick: delete the left char OR the right char, and check the rest both ways. You cannot know which side is the intruder — "abbxa" needs skip-right, "axbba" needs skip-left. Two O(n) checks → still O(n) total.',
+        },
       },
     },
     {
@@ -278,6 +345,30 @@ bool validPalindrome(const string& s) {   // may delete at most ONE char
         8: 'Two calls per index = the 2n−1 centers. Drop line 9 and every even-length palindrome ("abba") silently vanishes.',
         11: 'Total: O(n²) time worst case (think "aaaa…"), O(1) extra space. The accepted answer; name-drop Manacher O(n) as the theoretical ceiling.',
       },
+      py: {
+        code: `def longestPalindrome(s: str) -> str:
+    n = len(s)
+    best_l = best_len = 0
+
+    def expand(l: int, r: int) -> None:
+        nonlocal best_l, best_len
+        while l >= 0 and r < n and s[l] == s[r]:
+            l -= 1
+            r += 1
+        if r - l - 1 > best_len:
+            best_l, best_len = l + 1, r - l - 1
+
+    for c in range(n):
+        expand(c, c)        # odd length: center is a character
+        expand(c, c + 1)    # even length: center is the crack after c
+    return s[best_l:best_l + best_len]`,
+        annotations: {
+          6: 'nonlocal is the Python spelling of the C++ lambda capture [&]. Without it, assigning best_l inside expand would create a new local and the answer would always come back empty.',
+          7: 'The loop always overshoots by one step on each side. So the surviving palindrome is (l, r) EXCLUSIVE — length r − l − 1, starting at l + 1. Off-by-one heaven; memorize the formula.',
+          15: 'Two calls per index = the 2n−1 centers. Drop this line and every even-length palindrome ("abba") silently vanishes.',
+          16: 'Slice end is exclusive, so s[best_l : best_l + best_len] is the C++ substr(pos, len). Total: O(n²) time worst case, O(1) extra space; name-drop Manacher O(n) as the ceiling.',
+        },
+      },
     },
     {
       type: 'intuition',
@@ -305,6 +396,21 @@ bool validPalindrome(const string& s) {   // may delete at most ONE char
         2: 'B > alphabet size (31 > 26) so letter-digits stay distinct; M a large prime so remainders spread evenly instead of clumping.',
         5: 'Horner\'s rule: multiply-shift, add the next digit, take the remainder. Mod at every step — waiting until the end overflows long long.',
         8: 'Hand-check: a=1 -> h=1; b: 1*31+2 = 33; c: 33*31+3 = 1026. Map a to 1, not 0, or "a", "aa", "aaa" all hash to 0.',
+      },
+      py: {
+        code: `def polyHash(s: str) -> int:
+    B, M = 31, 1_000_000_007
+    h = 0
+    for c in s:
+        h = (h * B + (ord(c) - ord('a') + 1)) % M
+    return h
+
+# polyHash("abc") = (1*31 + 2)*31 + 3 = 1026`,
+        annotations: {
+          2: 'B > alphabet size (31 > 26) so letter-digits stay distinct; M a large prime so remainders spread evenly instead of clumping. 1_000_000_007 with underscores is just readable spacing.',
+          5: 'Horner\'s rule: multiply-shift, add the next digit, take the remainder. Python ints cannot overflow, so the mod is here for speed and for matching the C++ answer — not for correctness.',
+          8: 'Hand-check: a=1 -> h=1; b: 1*31+2 = 33; c: 33*31+3 = 1026. Map a to 1, not 0, or "a", "aa", "aaa" all hash to 0.',
+        },
       },
     },
     {

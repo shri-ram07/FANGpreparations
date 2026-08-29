@@ -50,6 +50,24 @@ const m: Module = {
         6: 'The discard argument, said out loud: a[r] is the LARGEST partner a[l] can still get. a[l] + a[r] < target means a[l] plus anything remaining is smaller still. a[l] can never be in the answer.',
         7: 'Mirror image: a[l] is the smallest partner left for a[r]. Still too big → a[r] is unpairable. This certainty is what sortedness buys.',
       },
+      py: {
+        code: `def twoSumSorted(a: list[int], target: int) -> list[int]:
+    l, r = 0, len(a) - 1
+    while l < r:
+        total = a[l] + a[r]        # \`sum\` is a builtin — name the variable total
+        if total == target:
+            return [l, r]
+        if total < target:
+            l += 1                 # a[l] is dead: even its best partner was too small
+        else:
+            r -= 1                 # a[r] is dead: even its smallest partner was too big
+    return [-1, -1]                # pointers met: no pair exists`,
+        annotations: {
+          3: 'Invariant: if an answer pair exists, both its indices are still inside [l, r]. Every move must preserve this.',
+          8: 'The discard argument, said out loud: a[r] is the LARGEST partner a[l] can still get. a[l] + a[r] < target means a[l] plus anything remaining is smaller still. a[l] can never be in the answer.',
+          10: 'Mirror image: a[l] is the smallest partner left for a[r]. Still too big → a[r] is unpairable. This certainty is what sortedness buys.',
+        },
+      },
     },
     {
       type: 'visual',
@@ -156,6 +174,22 @@ const m: Module = {
         4: 'Width starts maximal and only shrinks. So a later pair can only win through a taller minimum — which is exactly why the shorter wall must go.',
         6: 'The proof in one breath: keeping the shorter wall while width shrinks can never beat the area we just recorded. Interviewers ask for exactly this sentence.',
       },
+      py: {
+        code: `def maxArea(h: list[int]) -> int:
+    l, r, best = 0, len(h) - 1, 0
+    while l < r:
+        area = min(h[l], h[r]) * (r - l)    # height capped by the SHORTER wall
+        best = max(best, area)
+        if h[l] < h[r]:
+            l += 1                          # shorter wall exhausted -- retire it
+        else:
+            r -= 1
+    return best`,
+        annotations: {
+          4: 'Width starts maximal and only shrinks. So a later pair can only win through a taller minimum — which is exactly why the shorter wall must go.',
+          6: 'The proof in one breath: keeping the shorter wall while width shrinks can never beat the area we just recorded. Interviewers ask for exactly this sentence.',
+        },
+      },
     },
     {
       type: 'intuition',
@@ -201,6 +235,19 @@ const m: Module = {
         3: 'Only the first window is ever summed from scratch. Every later window is the previous one, patched.',
         6: 'The signature line of every fixed-window solution. If your loop re-sums k elements, you are writing the brute force with extra steps.',
       },
+      py: {
+        code: `def maxSumK(a: list[int], k: int) -> int:
+    total = sum(a[:k])                     # build the first window: O(k)
+    best = total
+    for i in range(k, len(a)):
+        total += a[i] - a[i - k]           # one enters, one leaves: O(1) per slide
+        best = max(best, total)
+    return best                            # total O(n), space O(1)`,
+        annotations: {
+          2: 'Only the first window is ever summed from scratch. Every later window is the previous one, patched. (No long long to worry about — Python ints never overflow.)',
+          5: 'The signature line of every fixed-window solution. If your loop re-sums k elements, you are writing the brute force with extra steps.',
+        },
+      },
     },
     {
       type: 'intuition',
@@ -232,6 +279,24 @@ const m: Module = {
         5: 'A while inside a for LOOKS like O(n²). It is not: the while body only ever evicts, and each index can be evicted once in the entire run.',
         6: 'l only moves right, forever. l and r each travel at most n steps total — amortized O(n). Say "amortized" and the interviewer relaxes.',
         8: 'Record AFTER restoring the invariant, never before — otherwise you count a window containing a repeat.',
+      },
+      py: {
+        code: `def lengthOfLongestSubstring(s: str) -> int:
+    inside = set()                    # chars currently inside the window
+    best, l = 0, 0
+    for r, c in enumerate(s):
+        while c in inside:            # s[r] already inside? invariant broken
+            inside.remove(s[l])       # shrink from the left until it is gone
+            l += 1
+        inside.add(c)                 # now s[r] can enter
+        best = max(best, r - l + 1)   # window is valid here, always
+    return best                       # "abcabcbb" -> 3  ("abc")`,
+        annotations: {
+          5: 'A while inside a for LOOKS like O(n²). It is not: the while body only ever evicts, and each index can be evicted once in the entire run.',
+          6: 'Python has no l++, so the C++ one-liner erase(s[l++]) splits into remove-then-advance. Same two steps, spelled out.',
+          7: 'l only moves right, forever. l and r each travel at most n steps total — amortized O(n). Say "amortized" and the interviewer relaxes.',
+          9: 'Record AFTER restoring the invariant, never before — otherwise you count a window containing a repeat.',
+        },
       },
     },
     {
@@ -354,6 +419,21 @@ long long all = pre[8] - pre[0];          // whole array = 31`,
         4: 'Each entry is the previous entry plus one element: a single O(n) pass. long long because prefix totals overflow int long before individual elements do.',
         7: 'Everything before r+1, minus everything before l — what remains is exactly a[l..r]. The +1 is where wrong answers come from; desk-check it once per interview.',
       },
+      py: {
+        code: `a = [3, 1, 4, 1, 5, 9, 2, 6]
+pre = [0] * (len(a) + 1)          # pre[i] = sum of the FIRST i elements
+for i, x in enumerate(a):
+    pre[i + 1] = pre[i] + x       # pre: 0 3 4 8 9 14 23 25 31
+
+# sum of a[l..r] inclusive = pre[r + 1] - pre[l]
+mid = pre[6] - pre[2]             # a[2..5] = 4+1+5+9 = 19
+whole = pre[8] - pre[0]           # whole array = 31`,
+        annotations: {
+          2: 'n+1 slots and pre[0] = 0 — the empty prefix. This sentinel is what makes ranges starting at index 0 need no special case.',
+          4: 'Each entry is the previous entry plus one element: a single O(n) pass. The stdlib one-liner is list(accumulate(a, initial=0)) from itertools — write the loop in an interview, then say you know the one-liner.',
+          7: 'Everything before r+1, minus everything before l — what remains is exactly a[l..r]. The +1 is where wrong answers come from; desk-check it once per interview.',
+        },
+      },
     },
     {
       type: 'intuition',
@@ -388,6 +468,25 @@ long long all = pre[8] - pre[0];          // whole array = 31`,
         8: 'find, not operator[] — operator[] would INSERT a zero for every miss and bloat the map (the STL module trap, live).',
         10: 'Count BEFORE inserting run: a subarray of sum k=0 must not match its own prefix. Order matters here.',
       },
+      py: {
+        code: `from collections import defaultdict
+
+def subarraySum(a: list[int], k: int) -> int:
+    seen = defaultdict(int)           # prefix value -> times seen so far
+    seen[0] = 1                       # the empty prefix, before index 0
+    run = 0
+    count = 0
+    for x in a:
+        run += x                      # run = pre[here]
+        count += seen.get(run - k, 0)  # earlier prefix p with run - p = k?
+        seen[run] += 1
+    return count                      # [1, 2, 3], k=3 -> 2  ([1,2] and [3])`,
+        annotations: {
+          5: 'Forget this line and [1,2] in the example silently vanishes: run=3 needs an earlier prefix 0 to exist.',
+          10: '.get(x, 0), not seen[x] — indexing a defaultdict INSERTS a zero for every miss and bloats the map. Exactly the C++ operator[] trap, in Python spelling.',
+          11: 'Count BEFORE inserting run: a subarray of sum k=0 must not match its own prefix. Order matters here.',
+        },
+      },
     },
     {
       type: 'intuition',
@@ -415,6 +514,18 @@ long long all = pre[8] - pre[0];          // whole array = 31`,
       annotations: {
         2: 'Initialize from a[0], NOT from 0. best = 0 returns 0 for an all-negative array — where the true answer is the largest (least negative) element. Classic silent bug.',
         4: 'a[i] + cur < a[i] exactly when cur < 0 — "the bag is dead weight, drop it". The max() encodes the restart with no if.',
+      },
+      py: {
+        code: `def maxSubArray(a: list[int]) -> int:
+    cur = best = a[0]              # best subarray ending at 0 is just a[0]
+    for x in a[1:]:
+        cur = max(x + cur, x)      # extend the run, or restart at x
+        best = max(best, cur)
+    return best   # [-2,1,-3,4,-1,2,1,-5,4] -> 6  (the run 4,-1,2,1)`,
+        annotations: {
+          2: 'Initialize from a[0], NOT from 0. best = 0 returns 0 for an all-negative array — where the true answer is the largest (least negative) element. Classic silent bug.',
+          4: 'x + cur < x exactly when cur < 0 — "the bag is dead weight, drop it". The max() encodes the restart with no if.',
+        },
       },
     },
     {

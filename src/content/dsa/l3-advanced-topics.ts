@@ -50,6 +50,31 @@ const m: Module = {
         9: 'The shrink condition. Every entry into this loop means the window is valid: record it, then try to make it smaller. Shrink WHILE valid, never before.',
         12: 'The exact moment coverage breaks: giving back s[l] pushed its need positive. have drops, the while exits, r resumes growing. On "ADOBECODEBANC" / "ABC" this lands on "BANC".',
       },
+      py: {
+        code: `from collections import Counter
+
+def minWindow(s: str, t: str) -> str:
+    need = Counter(t)                    # char -> copies still owed
+    have, want = 0, len(t)               # have: useful chars in window
+    best_len, best_start, l = float('inf'), 0, 0
+    for r, c in enumerate(s):
+        if need[c] > 0:
+            have += 1                    # this char was still owed
+        need[c] -= 1                     # negative = surplus copies
+        while have == want:              # window covers t: shrink it
+            if r - l + 1 < best_len:
+                best_len, best_start = r - l + 1, l
+            need[s[l]] += 1              # hand the left char back
+            if need[s[l]] > 0:
+                have -= 1                # it was needed: coverage broke
+            l += 1
+    return "" if best_len == float('inf') else s[best_start:best_start + best_len]`,
+        annotations: {
+          8: 'Counter returns 0 for a char it has never seen — the same free "zero for missing" the C++ pane buys by pre-sizing a 128-slot array. need[c] > 0 means the window is still short of c; a surplus copy does not bump have.',
+          11: 'The shrink condition. Every entry into this loop means the window is valid: record it, then try to make it smaller. Shrink WHILE valid, never before.',
+          15: 'The exact moment coverage breaks: giving back s[l] pushed its need positive. have drops, the while exits, r resumes growing. On "ADOBECODEBANC" / "ABC" this lands on "BANC".',
+        },
+      },
     },
     {
       type: 'intuition',
@@ -84,6 +109,28 @@ const m: Module = {
         8: 'An older element that is ≤ the newcomer can never again be any future window\'s max — the newcomer beats it and stays longer. Evicting it is safe forever.',
         10: 'The invariant pays out: front is the oldest surviving index of the largest value. One O(1) read per window.',
         12: 'Desk-checked: windows [1,3,-1] [3,-1,-3] [-1,-3,5] [-3,5,3] [5,3,6] [3,6,7] → 3 3 5 5 6 7.',
+      },
+      py: {
+        code: `from collections import deque
+
+def maxSlidingWindow(a: list[int], k: int) -> list[int]:
+    dq = deque()                      # indices; their values run decreasing
+    out = []
+    for i, x in enumerate(a):
+        if dq and dq[0] <= i - k:
+            dq.popleft()              # front aged out of the window
+        while dq and a[dq[-1]] <= x:
+            dq.pop()                  # x dominates weaker elders: evict
+        dq.append(i)
+        if i >= k - 1:
+            out.append(a[dq[0]])
+    return out   # a = 1 3 -1 -3 5 3 6 7, k = 3  ->  3 3 5 5 6 7`,
+        annotations: {
+          4: 'Indices, not values: only an index can tell you when the front has aged out. And it must be a real deque — popleft() is O(1), while list.pop(0) is O(n) and would sink the whole O(n) argument.',
+          9: 'An older element that is ≤ the newcomer can never again be any future window\'s max — the newcomer beats it and stays longer. Evicting it is safe forever.',
+          13: 'The invariant pays out: dq[0] is the oldest surviving index of the largest value. One O(1) read per window.',
+          14: 'Desk-checked: windows [1,3,-1] [3,-1,-3] [-1,-3,5] [-3,5,3] [5,3,6] [3,6,7] → 3 3 5 5 6 7.',
+        },
       },
     },
     {
@@ -141,6 +188,33 @@ int splitArray(const vector<int>& a, int k) {
         11: 'lo = max(a) is load-bearing, not an optimization: below it, an oversized element fits in no part and the simple greedy miscounts.',
         18: 'Desk-checked: cap 18 → parts {7,2,5} and {10,8} = 2 ✓; cap 17 forces 3 parts. Answer 18.',
       },
+      py: {
+        code: `def canSplit(a: list[int], k: int, cap: int) -> bool:
+    cur, parts = 0, 1
+    for x in a:
+        if cur + x > cap:
+            parts += 1
+            cur = x                    # open a new part
+        else:
+            cur += x
+    return parts <= k                  # greedy uses the fewest parts possible
+
+def splitArray(a: list[int], k: int) -> int:
+    lo, hi = max(a), sum(a)
+    while lo < hi:                     # the L0 template, verbatim
+        mid = (lo + hi) // 2
+        if canSplit(a, k, mid):
+            hi = mid                   # works: might be the answer
+        else:
+            lo = mid + 1               # too tight: push lo up
+    return lo                          # [7,2,5,10,8], k=2 -> 18 (7+2+5 | 10+8)`,
+        annotations: {
+          4: 'Greedy is optimal for the CHECK: extending the current part never hurts, so this pass finds the minimum number of parts for this cap.',
+          9: 'Monotonic predicate: raise cap and parts can only shrink or stay. That FAIL…PASS shape is the license to binary search.',
+          12: 'max(a) and sum(a): one builtin each, no iterators and no 0LL accumulator. lo = max(a) is load-bearing, not an optimization — below it, an oversized element fits in no part and the greedy check miscounts.',
+          19: 'Desk-checked: cap 18 → parts {7,2,5} and {10,8} = 2 ✓; cap 17 forces 3 parts. Answer 18.',
+        },
+      },
     },
     {
       type: 'intuition',
@@ -191,6 +265,50 @@ int splitArray(const vector<int>& a, int k) {
         15: 'The query trichotomy: disjoint → identity (0 for sum), fully covered → cached value, partial → split. At most ~4 nodes per level stay partial → O(log n).',
         26: 'Only the O(log n) ancestors of the changed leaf are touched. This line is exactly what prefix sums cannot afford.',
       },
+      py: {
+        code: `class SegTree:
+    def __init__(self, a: list[int]):
+        self.n = len(a)
+        self.t = [0] * (4 * self.n)          # t[1] is the root; ~4n slots
+        self.build(a, 1, 0, self.n - 1)
+
+    def build(self, a, node, lo, hi):
+        if lo == hi:
+            self.t[node] = a[lo]             # leaf
+            return
+        mid = (lo + hi) // 2
+        self.build(a, 2 * node, lo, mid)
+        self.build(a, 2 * node + 1, mid + 1, hi)
+        self.t[node] = self.t[2 * node] + self.t[2 * node + 1]
+
+    def query(self, node, lo, hi, l, r):
+        if r < lo or hi < l:
+            return 0                         # disjoint: contribute nothing
+        if l <= lo and hi <= r:
+            return self.t[node]              # fully inside: cached answer
+        mid = (lo + hi) // 2
+        return (self.query(2 * node, lo, mid, l, r)
+                + self.query(2 * node + 1, mid + 1, hi, l, r))
+
+    def update(self, node, lo, hi, pos, val):
+        if lo == hi:
+            self.t[node] = val
+            return
+        mid = (lo + hi) // 2
+        if pos <= mid:
+            self.update(2 * node, lo, mid, pos, val)
+        else:
+            self.update(2 * node + 1, mid + 1, hi, pos, val)
+        self.t[node] = self.t[2 * node] + self.t[2 * node + 1]  # repair upward
+
+# usage: st.query(1, 0, n-1, l, r)   st.update(1, 0, n-1, i, v)`,
+        annotations: {
+          4: 'Heap layout: node x owns children 2x and 2x+1. 4n slots safely covers any n, even when the last level is lopsided. Be honest about the cost in Python: every node is an interpreted call, so this is ~50x slower than the C++ pane — for pure prefix sums, reach for the BIT below.',
+          7: 'Build touches every node once: O(n) total — the one-time cost that buys log-time everything after. Depth is O(log n), so the 1000-frame recursion limit is never a threat here.',
+          17: 'The query trichotomy: disjoint → identity (0 for sum), fully covered → cached value, partial → split. At most ~4 nodes per level stay partial → O(log n).',
+          34: 'Only the O(log n) ancestors of the changed leaf are touched. This line is exactly what prefix sums cannot afford.',
+        },
+      },
     },
     {
       type: 'intuition',
@@ -229,6 +347,34 @@ int splitArray(const vector<int>& a, int k) {
         3: 't[12] (1100₂, lowbit 4) covers a[9..12] in 1-based terms. Every index owns a power-of-two block ending at itself.',
         6: 'add climbs: 5 → 6 → 8 → 16… each +lowbit jump lands on the next larger block that contains position i.',
         11: 'prefix(12) internally reads t[13] + t[12] + t[8]: 13 = 1101₂ has three set bits → three hops. Set-bit count bounds the loop at O(log n).',
+      },
+      py: {
+        code: `class BIT:
+    def __init__(self, n: int):
+        self.n = n
+        self.t = [0] * (n + 1)        # 1-based; t[i] covers lowbit(i) slots
+
+    def add(self, i: int, d: int) -> None:   # a[i] += d   (i is 0-based outside)
+        i += 1
+        while i <= self.n:
+            self.t[i] += d            # climb: every block containing i
+            i += i & -i
+
+    def prefix(self, i: int) -> int:  # sum of a[0..i]
+        s = 0
+        i += 1
+        while i > 0:
+            s += self.t[i]            # strip: blocks tiling the prefix
+            i -= i & -i
+        return s
+
+    def rangeSum(self, l: int, r: int) -> int:
+        return self.prefix(r) - (self.prefix(l - 1) if l else 0)`,
+        annotations: {
+          4: 't[12] (1100₂, lowbit 4) covers a[9..12] in 1-based terms. Every index owns a power-of-two block ending at itself.',
+          10: 'add climbs: 5 → 6 → 8 → 16… each +lowbit jump lands on the next larger block that contains position i. i & -i works exactly as in C++ — this is where Python\'s two\'s complement semantics quietly pay off.',
+          17: 'prefix(12) internally reads t[13] + t[12] + t[8]: 13 = 1101₂ has three set bits → three hops. Set-bit count bounds the loop at O(log n).',
+        },
       },
     },
     {
@@ -391,6 +537,44 @@ vector<int> kmpSearch(const string& text, const string& p) {
         19: 'On mismatch after j matches, only the pattern realigns; the text is read exactly once. j falls at most as much as it ever rose → total work O(n + m).',
         23: 'Do not reset j to 0 after a hit — fail[j−1] preserves overlaps: "aba" occurs at 0 AND 2 in "ababa".',
       },
+      py: {
+        code: `def failTable(p: str) -> list[int]:
+    m = len(p)
+    fail = [0] * m                     # fail[i]: longest proper prefix of
+    length = 0                         #   p[0..i] that is also its suffix
+    i = 1
+    while i < m:
+        if p[i] == p[length]:
+            length += 1
+            fail[i] = length
+            i += 1
+        elif length > 0:
+            length = fail[length - 1]  # fall back, never restart
+        else:
+            fail[i] = 0
+            i += 1
+    return fail                        # "ababaca" -> 0 0 1 2 3 0 1
+
+def kmpSearch(text: str, p: str) -> list[int]:
+    fail = failTable(p)
+    hits = []
+    j = 0                                    # chars of p matched so far
+    for i, c in enumerate(text):
+        while j > 0 and c != p[j]:
+            j = fail[j - 1]                  # slide the needle, keep i
+        if c == p[j]:
+            j += 1
+        if j == len(p):                      # full match ends at i
+            hits.append(i - j + 1)
+            j = fail[j - 1]                  # allow overlapping matches
+    return hits                        # "aba" in "ababa" -> 0 2`,
+        annotations: {
+          8: 'C++ compresses this branch into fail[i++] = ++len. With no ++ and no assignment-in-expression, Python spells it out in three lines — clearer, and the same thing. Note i only ever moves forward, in both functions.',
+          12: 'The subtle line: the failed prefix of length "length" has its own fail entry — jump to the next-shorter prefix that could still work. i does NOT move. (len is a builtin, so the variable is named length.)',
+          23: 'On mismatch after j matches, only the pattern realigns; the text is read exactly once. j falls at most as much as it ever rose → total work O(n + m).',
+          29: 'Do not reset j to 0 after a hit — fail[j−1] preserves overlaps: "aba" occurs at 0 AND 2 in "ababa".',
+        },
+      },
     },
     {
       type: 'intuition',
@@ -432,6 +616,32 @@ vector<int> kmpSearch(const string& text, const string& p) {
         13: 'th == ph proves nothing on its own — different strings can share a hash. The compare() is mandatory; true hits plus rare collisions keep expected cost O(n + m).',
         16: 'The + MOD before the final % keeps the subtraction non-negative. Forgetting it yields negative hashes that never match anything.',
         17: 'The rolling slide: O(1) per window instead of O(m) rehashing. This line is the entire speedup.',
+      },
+      py: {
+        code: `def rabinKarp(text: str, p: str) -> list[int]:
+    B, MOD = 131, 1_000_000_007
+    n, m = len(text), len(p)
+    hits = []
+    if m > n:
+        return hits
+    ph = th = 0
+    pw = pow(B, m - 1, MOD)                     # B^(m-1) mod MOD, in O(log m)
+    for i in range(m):
+        ph = (ph * B + ord(p[i])) % MOD
+        th = (th * B + ord(text[i])) % MOD
+    for i in range(n - m + 1):
+        if th == ph and text[i:i + m] == p:
+            hits.append(i)                      # verified, not just hashed
+        if i + m < n:
+            th = (th - ord(text[i]) * pw) % MOD     # drop left digit
+            th = (th * B + ord(text[i + m])) % MOD  # pull right digit
+    return hits`,
+        annotations: {
+          8: 'Three-argument pow IS modular exponentiation, built in: pow(base, exp, mod) in O(log exp). The C++ pane has to fold it into the setup loop.',
+          13: 'th == ph proves nothing on its own — different strings can share a hash. The slice compare is mandatory; true hits plus rare collisions keep expected cost O(n + m).',
+          16: 'No "+ MOD" correction needed: Python\'s % always returns a value with the sign of the modulus, so a negative intermediate comes back non-negative on its own. The classic C++ bug here simply cannot occur.',
+          17: 'The rolling slide: O(1) per window instead of O(m) rehashing. This line is the entire speedup.',
+        },
       },
     },
   ],

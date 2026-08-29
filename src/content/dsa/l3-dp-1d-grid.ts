@@ -38,6 +38,19 @@ const m: Module = {
         3: 'Two recursive calls per call — a binary tree of work. Depth n, so the call count explodes exponentially: O(2ⁿ).',
         6: 'Not hyperbole: the fib(80) call tree has ~7×10¹⁶ nodes. The answer itself needs 12 digits — hence long long.',
       },
+      py: {
+        code: `def fibNaive(n: int) -> int:
+    if n <= 1:
+        return n                             # fib(0)=0, fib(1)=1
+    return fibNaive(n - 1) + fibNaive(n - 2)
+
+# fibNaive(5) alone recomputes fib(3) twice and fib(2) three times.
+# fibNaive(35) already takes seconds in Python; fibNaive(80) is geological.`,
+        annotations: {
+          4: 'Two recursive calls per call — a binary tree of work. Depth n, so the call count explodes exponentially: O(2ⁿ). And Python\'s per-call overhead is ~50x C++\'s, so the wall hits sooner.',
+          7: 'Not hyperbole: the fib(80) call tree has ~7×10¹⁶ nodes. No long long needed for the answer though — Python ints are arbitrary precision, so fib(80) = 23416728348467685 comes out exact.',
+        },
+      },
     },
     {
       type: 'note',
@@ -71,6 +84,33 @@ long long ans = fibMemo(n, memo);        // n+1 real computations, total`,
         3: 'The line that turns 2ⁿ into n. Every duplicate branch of the call tree dies here in O(1).',
         4: 'Assign and return in one move — the answer is saved on the way out, so the NEXT asker hits line 3.',
         9: '-1 works as "empty" because fib values are never negative. Pick a sentinel your real values cannot collide with.',
+      },
+      py: {
+        code: `from functools import lru_cache
+
+def fibMemo(n: int, memo: list[int]) -> int:
+    if n <= 1:
+        return n
+    if memo[n] != -1:
+        return memo[n]                       # asked before? read the register
+    memo[n] = fibMemo(n - 1, memo) + fibMemo(n - 2, memo)
+    return memo[n]                           # saved on the way out
+
+# call site
+n = 80
+memo = [-1] * (n + 1)                        # -1 = "never solved"
+ans = fibMemo(n, memo)                       # n+1 real computations, total
+
+# the Python shortcut for the same thing:
+@lru_cache(maxsize=None)
+def fib(n: int) -> int:
+    return n if n <= 1 else fib(n - 1) + fib(n - 2)`,
+        annotations: {
+          6: 'The line that turns 2ⁿ into n. Every duplicate branch of the call tree dies here in O(1).',
+          8: 'No assign-and-return in one expression, so this is two lines where C++ is one. Same effect: the answer is stored on the way out, and the next asker stops at line 6.',
+          13: '-1 works as "empty" because fib values are never negative. Pick a sentinel your real values cannot collide with — or use a dict and "if n in memo", which needs no sentinel at all.',
+          17: 'functools.cache (3.9+) — or lru_cache(maxsize=None) — memoizes any pure function on its arguments: one decorator replaces the whole table. Name it in the interview, then show the explicit version: they want to see you know what it does. Caveat: arguments must be hashable, so a list state has to become a tuple.',
+        },
       },
     },
     {
@@ -108,6 +148,28 @@ long long fibRolling(int n) {            // space-optimized: O(1)
       annotations: {
         5: 'Left to right IS a decision — the iteration order must ensure every dp value you read is already computed.',
         12: 'The transition only ever looks back two slots. So keep two variables and throw the whole array away: O(n) → O(1) space.',
+      },
+      py: {
+        code: `def fibTab(n: int) -> int:               # bottom-up: no recursion at all
+    if n <= 1:
+        return n
+    dp = [0] * (n + 1)
+    dp[0], dp[1] = 0, 1                  # base cases go in FIRST
+    for i in range(2, n + 1):
+        dp[i] = dp[i - 1] + dp[i - 2]    # reads only already-final cells
+    return dp[n]
+
+def fibRolling(n: int) -> int:           # space-optimized: O(1)
+    if n <= 1:
+        return n
+    prev2, prev1 = 0, 1
+    for _ in range(2, n + 1):
+        prev2, prev1 = prev1, prev1 + prev2   # slide the two-value window
+    return prev1`,
+        annotations: {
+          6: 'range(2, n + 1) — the stop is EXCLUSIVE, so the +1 is what makes the loop reach n. Left to right is a decision, not a habit: the order must guarantee every value you read is already final.',
+          15: 'The transition only ever looks back two slots, so two names replace the whole list. Simultaneous assignment evaluates the entire right side first — no temp, and no way to clobber prev1 before it is used. C++ needs three statements for this one line.',
+        },
       },
     },
     {
@@ -161,6 +223,22 @@ long long fibRolling(int n) {            // space-optimized: O(1)
         4: 'dp[0] = 1, not 0: there is exactly one way to have gone nowhere. "Ways to do nothing = 1" is a recurring base-case idiom.',
         6: 'Straight to the rolling form — fib already taught us the array is optional when lookback is fixed at 2.',
       },
+      py: {
+        code: `def climbStairs(n: int) -> int:
+    # 1. state: dp[i] = number of distinct ways to stand on step i
+    # 2. transition: dp[i] = dp[i-1] + dp[i-2]  (last hop was +1 or +2)
+    # 3. base: dp[0] = 1, dp[1] = 1
+    # 4. order: i = 2 .. n, left to right
+    prev2, prev1 = 1, 1
+    for _ in range(2, n + 1):
+        prev2, prev1 = prev1, prev1 + prev2
+    return prev1`,
+        annotations: {
+          3: 'ADD, not max — nothing is "best" here, we are counting. The two groups are disjoint because they differ in the final hop.',
+          4: 'dp[0] = 1, not 0: there is exactly one way to have gone nowhere. "Ways to do nothing = 1" is a recurring base-case idiom.',
+          6: 'Straight to the rolling form — fib already taught us the list is optional when lookback is fixed at 2. The loop variable is never read, hence _.',
+        },
+      },
     },
     {
       type: 'intuition',
@@ -192,6 +270,25 @@ long long fibRolling(int n) {            // space-optimized: O(1)
         4: 'Say the state out loud in interviews: "dp[i] is the best loot considering houses 0 through i." One sentence — step 1 of the recipe.',
         8: 'Skipping house i means yesterday\'s best simply carries forward. dp[i-1] does NOT mean house i-1 was robbed — it means the best plan so far.',
         9: 'Robbing house i bans i-1, but i-2 and earlier are untouched — and dp[i-2] is already the best of those. Optimal substructure doing the work.',
+      },
+      py: {
+        code: `def rob(a: list[int]) -> int:
+    n = len(a)
+    if n == 1:
+        return a[0]
+    dp = [0] * n                         # dp[i] = best loot from houses 0..i
+    dp[0] = a[0]
+    dp[1] = max(a[0], a[1])
+    for i in range(2, n):
+        dp[i] = max(dp[i - 1],           # choice 1: skip house i
+                    dp[i - 2] + a[i])    # choice 2: rob it (i-1 forbidden)
+    return dp[-1]`,
+        annotations: {
+          5: 'Say the state out loud in interviews: "dp[i] is the best loot considering houses 0 through i." One sentence — step 1 of the recipe.',
+          9: 'Skipping house i means yesterday\'s best simply carries forward. dp[i-1] does NOT mean house i-1 was robbed — it means the best plan so far.',
+          10: 'Robbing house i bans i-1, but i-2 and earlier are untouched — and dp[i-2] is already the best of those. Optimal substructure doing the work.',
+          11: 'dp[-1] is the last cell — Python\'s negative index, and the one place where it reads better than dp[n-1].',
+        },
       },
     },
     {
@@ -305,6 +402,17 @@ long long fibRolling(int n) {            // space-optimized: O(1)
         2: 'Starting both at 0 = "robbing zero houses earns 0". This also erases the n==1 special case the array version needed.',
         4: 'Identical decision, identical answer, O(1) memory. Time is still O(n) — space tricks never change time.',
       },
+      py: {
+        code: `def rob(a: list[int]) -> int:            # rolling-variables version
+    prev2, prev1 = 0, 0                  # best through i-2, best through i-1
+    for x in a:
+        prev2, prev1 = prev1, max(prev1, prev2 + x)  # same max, zero arrays
+    return prev1`,
+        annotations: {
+          2: 'Starting both at 0 = "robbing zero houses earns 0". This also erases the n == 1 special case the list version needed.',
+          4: 'Identical decision, identical answer, O(1) memory — and iterating the values directly (no index) is what makes it a one-liner. Time is still O(n): space tricks never change time.',
+        },
+      },
     },
     {
       type: 'code',
@@ -327,6 +435,23 @@ long long fibRolling(int n) {            // space-optimized: O(1)
         5: 'The problem lets you START on step 0 or 1 for free — that sentence in the statement IS the base case. Base cases come from the problem text, not habit.',
         7: 'You pay a step\'s cost when you LEAVE it. That is why cost[i-1] pairs with prev1 (dp[i-1]). Desk-check [10,15,20]: dp = 0,0,10,15 → answer 15.',
         12: 'Counting problems ADD the two arrows, best-cost problems MIN/MAX them. Same skeleton as stairs and robber — only the operator changed.',
+      },
+      py: {
+        code: `def minCostClimbingStairs(cost: list[int]) -> int:
+    # state: dp[i] = cheapest total paid to STAND on step i
+    # the "top" is step n -- one past the last priced step
+    n = len(cost)
+    prev2, prev1 = 0, 0                  # dp[0] = dp[1] = 0: starting is free
+    for i in range(2, n + 1):
+        cur = min(prev1 + cost[i - 1],   # arrive from i-1, pay its price
+                  prev2 + cost[i - 2])   # arrive from i-2, pay its price
+        prev2, prev1 = prev1, cur
+    return prev1                         # dp[n] = cost to reach the top`,
+        annotations: {
+          5: 'The problem lets you START on step 0 or 1 for free — that sentence in the statement IS the base case. Base cases come from the problem text, not habit.',
+          7: 'You pay a step\'s cost when you LEAVE it. That is why cost[i-1] pairs with prev1 (dp[i-1]). Desk-check [10,15,20]: dp = 0,0,10,15 → answer 15.',
+          10: 'Counting problems ADD the two arrows, best-cost problems MIN/MAX them. Same skeleton as stairs and robber — only the operator changed.',
+        },
       },
     },
     {
@@ -358,6 +483,21 @@ long long fibRolling(int n) {            // space-optimized: O(1)
         5: 'Row-major order = step 4 of the recipe in the flesh. Both neighbors are final when read. (Column-major would also work — the dependencies allow either.)',
         7: 'For a 3×7 grid this fills to 28. Time O(mn), space O(mn) — rolling-row upgrade below.',
       },
+      py: {
+        code: `def uniquePaths(m: int, n: int) -> int:
+    # state: dp[i][j] = number of paths from (0,0) to (i,j)
+    # transition: dp[i][j] = dp[i-1][j] + dp[i][j-1]  (from up or from left)
+    dp = [[1] * n for _ in range(m)]
+    for i in range(1, m):
+        for j in range(1, n):
+            dp[i][j] = dp[i - 1][j] + dp[i][j - 1]
+    return dp[-1][-1]`,
+        annotations: {
+          4: 'Filling with 1 bakes in the base cases: row 0 and column 0 keep their 1s because both loops start at 1. And the comprehension is mandatory — [[1] * n] * m would alias ONE row m times, so every write would land in every row.',
+          5: 'Row-major order = step 4 of the recipe in the flesh. Both neighbors are final when read. (Column-major would also work — the dependencies allow either.)',
+          8: 'For a 3×7 grid this fills to 28. Time O(mn), space O(mn) — rolling-row upgrade below.',
+        },
+      },
     },
     {
       type: 'note',
@@ -383,6 +523,24 @@ long long fibRolling(int n) {            // space-optimized: O(1)
       annotations: {
         5: 'Edges are the base cases here: one way in, nothing to min over — just accumulate.',
         11: 'The same two arrows as Unique Paths. Counting ADDED them; cheapest-cost MINS them and pays the current cell. One skeleton, two operators.',
+      },
+      py: {
+        code: `def minPathSum(g: list[list[int]]) -> int:
+    m, n = len(g), len(g[0])
+    dp = [[0] * n for _ in range(m)]
+    dp[0][0] = g[0][0]
+    for j in range(1, n):                # top row: only the left neighbor
+        dp[0][j] = dp[0][j - 1] + g[0][j]
+    for i in range(1, m):                # left column: only the up neighbor
+        dp[i][0] = dp[i - 1][0] + g[i][0]
+    for i in range(1, m):
+        for j in range(1, n):
+            dp[i][j] = g[i][j] + min(dp[i - 1][j], dp[i][j - 1])
+    return dp[-1][-1]`,
+        annotations: {
+          5: 'Edges are the base cases here: one way in, nothing to min over — just accumulate.',
+          11: 'The same two arrows as Unique Paths. Counting ADDED them; cheapest-cost MINS them and pays the current cell. One skeleton, two operators.',
+        },
       },
     },
     {
@@ -417,6 +575,24 @@ long long fibRolling(int n) {            // space-optimized: O(1)
         3: 'O(n) space instead of O(mn). The 1D lookback rule, grown up: fixed lookback of one row → keep one row.',
         7: 'The classic bug: skipping the cell with continue leaves LAST row\'s count sitting in row[j] — paths flow straight through the wall. The zero must be written.',
         8: 'row[j] (not yet touched this row) = up. row[j-1] (just updated) = left. Desk-check the 3×3 grid with a center obstacle: result 2.',
+      },
+      py: {
+        code: `def uniquePathsWithObstacles(g: list[list[int]]) -> int:
+    m, n = len(g), len(g[0])
+    row = [0] * n                        # ONE row, reused m times
+    row[0] = 1 if g[0][0] == 0 else 0
+    for i in range(m):
+        for j in range(n):
+            if g[i][j] == 1:
+                row[j] = 0               # obstacle: WRITE the zero
+            elif j > 0:
+                row[j] += row[j - 1]
+    return row[-1]`,
+        annotations: {
+          3: 'O(n) space instead of O(mn). The 1D lookback rule, grown up: fixed lookback of one row → keep one row.',
+          8: 'The classic bug: skipping the cell with continue leaves LAST row\'s count sitting in row[j] — paths flow straight through the wall. The zero must be written.',
+          10: 'row[j] (not yet touched this row) = up. row[j-1] (just updated) = left. Desk-check the 3×3 grid with a center obstacle: result 2.',
+        },
       },
     },
     {

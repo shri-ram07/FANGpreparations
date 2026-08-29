@@ -41,6 +41,22 @@ for (auto [u, v] : edges) {
         4: 'vector of vectors, sized n up front. Space O(n + m). Every graph problem starts with this line.',
         7: 'An undirected edge is two directed edges. Forgetting this line is the #1 "my BFS finds nothing" bug.',
       },
+      py: {
+        code: `n = 5                                       # nodes are 0..4
+edges = [(0, 1), (0, 2), (1, 3), (2, 4)]
+
+adj = [[] for _ in range(n)]                # n empty neighbor lists
+for u, v in edges:
+    adj[u].append(v)
+    adj[v].append(u)                        # undirected: store BOTH directions
+
+# adj[0]=[1,2]  adj[1]=[0,3]  adj[2]=[0,4]  adj[3]=[1]  adj[4]=[2]
+# directed graph? delete line 7 -- that is the entire difference`,
+        annotations: {
+          4: 'Space O(n + m), and note the comprehension: [[]] * n would make n references to ONE list, so appending to adj[0] would appear in every row. That bug costs people whole interviews.',
+          7: 'An undirected edge is two directed edges. Forgetting this line is the #1 "my BFS finds nothing" bug.',
+        },
+      },
     },
     {
       type: 'note',
@@ -83,6 +99,28 @@ for (auto [u, v] : edges) {
         10: 'Mark visited when PUSHING, not when popping. Mark-on-pop lets the same node enter the queue many times — O(m)-sized queue blow-ups and TLE at n = 1e5.',
         11: 'The shortest-path line. Correct because the queue processes ring k fully before ring k+1 — a shorter path to v would have discovered v earlier.',
       },
+      py: {
+        code: `from collections import deque
+
+def bfs(src: int, adj: list[list[int]]) -> list[int]:
+    n = len(adj)
+    dist = [-1] * n                    # -1 = never seen
+    q = deque([src])
+    dist[src] = 0
+    while q:
+        u = q.popleft()
+        for v in adj[u]:
+            if dist[v] == -1:          # dist doubles as the visited array
+                dist[v] = dist[u] + 1  # v sits one ring farther out than u
+                q.append(v)
+    return dist                        # fewest edges src->v, or -1 unreachable`,
+        annotations: {
+          5: 'One list, two jobs: dist[v] == -1 means "not visited". No separate visited array needed.',
+          6: 'deque, not list. popleft() is O(1); pop(0) on a list is O(n) and turns this O(n + m) BFS into O(n²) — the one Python detail that decides TLE here.',
+          11: 'Mark visited when APPENDING, not when popping. Mark-on-pop lets the same node enter the queue many times — queue blow-ups and TLE at n = 1e5.',
+          12: 'The shortest-path line. Correct because the queue processes ring k fully before ring k+1 — a shorter path to v would have discovered v earlier.',
+        },
+      },
     },
     {
       type: 'intuition',
@@ -122,6 +160,29 @@ void dfsIter(int src, vector<vector<int>>& adj, vector<bool>& vis) {
         5: 'Each recursive frame = one unit of string in the maze. Depth = longest simple path from src — the stack-overflow risk lives here.',
         13: 'The iterative version tolerates duplicates in the stack and filters them on pop. Simpler than preventing them, and still O(n + m).',
       },
+      py: {
+        code: `def dfs(u: int, adj: list[list[int]], vis: list[bool]) -> None:
+    vis[u] = True                  # mark on ENTRY, before recursing
+    for v in adj[u]:
+        if not vis[v]:
+            dfs(v, adj, vis)       # the call stack remembers the way back
+
+def dfsIter(src: int, adj: list[list[int]], vis: list[bool]) -> None:
+    st = [src]
+    while st:
+        u = st.pop()
+        if vis[u]:
+            continue               # a node can be pushed twice -- skip repeats
+        vis[u] = True
+        for v in adj[u]:
+            if not vis[v]:
+                st.append(v)`,
+        annotations: {
+          2: 'Mark before recursing, or two branches can both enter the same node and you loop forever.',
+          5: 'Depth = longest simple path from src — and Python caps that at 1000 frames by default. A 1e5-node path graph raises RecursionError where C++ merely gets slow: raise the limit with sys.setrecursionlimit, or use the iterative version below.',
+          11: 'The iterative version tolerates duplicates on the stack and filters them on pop. Simpler than preventing them, and still O(n + m).',
+        },
+      },
     },
     {
       type: 'intuition',
@@ -151,6 +212,21 @@ void dfsIter(int src, vector<vector<int>>& adj, vector<bool>& vis) {
         5: 'The pattern: outer loop finds component starters, inner traversal claims the rest. Memorize the shape.',
         7: 'BFS works identically here. Component counting does not care which traversal you use.',
         9: 'O(n + m) total — the loop looks like it multiplies, but each node is traversed once ever, thanks to vis.',
+      },
+      py: {
+        code: `def countComponents(n: int, adj: list[list[int]]) -> int:
+    vis = [False] * n
+    comps = 0
+    for i in range(n):
+        if not vis[i]:             # still unvisited = a brand-new circle
+            comps += 1
+            dfs(i, adj, vis)       # one call eats the WHOLE component
+    return comps`,
+        annotations: {
+          5: 'The pattern: outer loop finds component starters, inner traversal claims the rest. Memorize the shape.',
+          7: 'BFS works identically here. Component counting does not care which traversal you use.',
+          8: 'O(n + m) total — the loop looks like it multiplies, but each node is traversed once ever, thanks to vis.',
+        },
       },
     },
     {
@@ -193,6 +269,31 @@ void dfsIter(int src, vector<vector<int>>& adj, vector<bool>& vis) {
         9: 'Bounds check first, then the land check. Grid problems live and die on this one if-condition.',
         15: 'Identical shape to countComponents: unvisited starter → count → traverse. Grids are graphs.',
       },
+      py: {
+        code: `def numIslands(g: list[list[str]]) -> int:
+    rows, cols, islands = len(g), len(g[0]), 0
+    DIRS = ((-1, 0), (1, 0), (0, -1), (0, 1))   # up, down, left, right
+
+    def sink(r: int, c: int) -> None:
+        g[r][c] = '0'                           # visited-in-place: land -> water
+        for dr, dc in DIRS:
+            nr, nc = r + dr, c + dc
+            if 0 <= nr < rows and 0 <= nc < cols and g[nr][nc] == '1':
+                sink(nr, nc)
+
+    for r in range(rows):
+        for c in range(cols):
+            if g[r][c] == '1':                  # untouched land = a new island
+                islands += 1
+                sink(r, c)                      # flood the whole island away
+    return islands                              # O(rows*cols): each cell dies once`,
+        annotations: {
+          5: 'A nested def names itself with no ceremony — the std::function dance disappears — and it closes over g, rows and cols for free. It can READ islands, but a rebinding assignment would need nonlocal; that is why islands is counted outside instead.',
+          6: 'Sink BEFORE exploring neighbors — same "mark on entry" rule as DFS. This line IS the visited check.',
+          9: '0 <= nr < rows is one chained comparison, evaluated once, and it comes FIRST: bounds before the land check. Grid problems live and die on this if-condition.',
+          14: 'Identical shape to countComponents: unvisited starter → count → traverse. Grids are graphs.',
+        },
+      },
     },
     {
       type: 'intuition',
@@ -225,6 +326,23 @@ void dfsIter(int src, vector<vector<int>>& adj, vector<bool>& vis) {
         6: 'The whole algorithm is this else-if. Visited neighbor that is not the immediate parent = a second route exists.',
         12: 'Component loop again — a cycle might hide in a component your first DFS never reached. Root gets parent -1.',
       },
+      py: {
+        code: `def hasCycle(u: int, parent: int, adj: list[list[int]], vis: list[bool]) -> bool:
+    vis[u] = True
+    for v in adj[u]:
+        if not vis[v]:
+            if hasCycle(v, u, adj, vis):
+                return True
+        elif v != parent:
+            return True            # visited, and NOT where I came from: cycle
+    return False
+
+# caller: for every unvisited i: if hasCycle(i, -1, adj, vis): ...`,
+        annotations: {
+          7: 'The whole algorithm is this elif. Visited neighbor that is not the immediate parent = a second route exists.',
+          11: 'Component loop again — a cycle might hide in a component your first DFS never reached. Root gets parent -1.',
+        },
+      },
     },
     {
       type: 'intuition',
@@ -255,6 +373,23 @@ bool hasCycleDir(int u, vector<vector<int>>& adj, vector<int>& color) {
         3: 'Gray = "the recursion stack passes through here". Some people literally call this array onStack.',
         5: 'Gray hit = back edge = cycle. Black hit falls through both ifs — correctly ignored.',
         8: 'Painting black on exit is what the parent trick lacks. Without it, every cross edge to a finished node is a false positive.',
+      },
+      py: {
+        code: `# color: 0 white (untouched) · 1 gray (on current path) · 2 black (done)
+def hasCycleDir(u: int, adj: list[list[int]], color: list[int]) -> bool:
+    color[u] = 1                           # entering: u joins the current path
+    for v in adj[u]:
+        if color[v] == 1:
+            return True                    # edge INTO the current path: cycle
+        if color[v] == 0 and hasCycleDir(v, adj, color):
+            return True
+    color[u] = 2                           # leaving: fully explored, harmless
+    return False`,
+        annotations: {
+          3: 'Gray = "the recursion stack passes through here". Some people literally call this list on_stack.',
+          5: 'Gray hit = back edge = cycle. Black hit falls through both ifs — correctly ignored.',
+          9: 'Painting black on exit is what the parent trick lacks. Without it, every cross edge to a finished node is a false positive.',
+        },
       },
     },
     {
@@ -294,6 +429,33 @@ bool hasCycleDir(int u, vector<vector<int>>& adj, vector<int>& color) {
         13: 'The heartbeat of Kahn\'s: completing u peels one prerequisite off each dependent. Hitting zero unlocks it.',
         15: 'Cycle detection for free. Nodes on a cycle wait forever for each other — none ever reaches indegree 0. Course Schedule I is just: return order.size() == n.',
       },
+      py: {
+        code: `from collections import deque
+
+def findOrder(n: int, adj: list[list[int]]) -> list[int]:
+    indeg = [0] * n
+    for u in range(n):
+        for v in adj[u]:
+            indeg[v] += 1                  # count prerequisites per course
+    q = deque(i for i in range(n) if indeg[i] == 0)  # zero prereqs: available now
+    order = []
+    while q:
+        u = q.popleft()
+        order.append(u)
+        for v in adj[u]:
+            indeg[v] -= 1                  # u done -> one prereq cleared
+            if indeg[v] == 0:
+                q.append(v)
+    if len(order) < n:
+        return []                          # stuck nodes = cycle: no valid order
+    return order                           # one valid course order`,
+        annotations: {
+          7: 'indeg[v] = how many arrows point AT v = unmet prerequisites. Edge u->v reads "u before v".',
+          8: 'A generator feeds the deque directly — no second loop. Several zeros may coexist, and any of them is a legal next course: that is why topo orders are usually not unique.',
+          14: 'The heartbeat of Kahn\'s. C++ fuses decrement and test into --indeg[v] == 0; Python has no --, so it is two lines. Hitting zero unlocks v.',
+          17: 'Cycle detection for free. Nodes on a cycle wait forever for each other — none ever reaches indegree 0. Course Schedule I is just: return len(order) == n.',
+        },
+      },
     },
     {
       type: 'code',
@@ -318,6 +480,28 @@ vector<int> topoDFS(int n, vector<vector<int>>& adj) {
         5: 'The one load-bearing line: u is appended only after every node it points to is already in out. Reversed, u precedes them all.',
         13: 'Forgetting the reverse is the classic bug — unreversed postorder is exactly backwards.',
         14: 'Unlike Kahn\'s, this produces a confident-looking "order" even on cyclic graphs. Pair it with the three-color check, or use Kahn\'s and get detection built in.',
+      },
+      py: {
+        code: `def dfsTopo(u: int, adj: list[list[int]], vis: list[bool], out: list[int]) -> None:
+    vis[u] = True
+    for v in adj[u]:
+        if not vis[v]:
+            dfsTopo(v, adj, vis, out)
+    out.append(u)                  # POSTorder: u lands after all it needs done
+
+def topoDFS(n: int, adj: list[list[int]]) -> list[int]:
+    vis = [False] * n
+    out = []
+    for i in range(n):
+        if not vis[i]:
+            dfsTopo(i, adj, vis, out)
+    out.reverse()                  # reverse postorder = topological order
+    return out                     # valid ONLY if a cycle check passed first`,
+        annotations: {
+          6: 'The one load-bearing line: u is appended only after every node it points to is already in out. Reversed, u precedes them all.',
+          14: 'Forgetting the reverse is the classic bug — unreversed postorder is exactly backwards. out.reverse() is in place; out[::-1] builds a copy and reversed(out) returns an iterator. Any of the three, but pick deliberately.',
+          15: 'Unlike Kahn\'s, this produces a confident-looking "order" even on cyclic graphs. Pair it with the three-color check, or use Kahn\'s and get detection built in.',
+        },
       },
     },
     {
@@ -360,6 +544,31 @@ vector<int> topoDFS(int n, vector<vector<int>>& adj) {
         4: 'The component loop, third appearance. Each component gets colored independently — a free choice of which team starts.',
         12: '1 - color[u] flips 0<->1. The alternation IS the algorithm.',
         14: 'The contradiction detector. The edge u-v plus the two equal colors traces back to an odd cycle through u and v.',
+      },
+      py: {
+        code: `from collections import deque
+
+def isBipartite(n: int, adj: list[list[int]]) -> bool:
+    color = [-1] * n                          # -1 uncolored, else team 0 or 1
+    for s in range(n):
+        if color[s] != -1:
+            continue                          # colored by an earlier BFS
+        color[s] = 0
+        q = deque([s])
+        while q:
+            u = q.popleft()
+            for v in adj[u]:
+                if color[v] == -1:
+                    color[v] = 1 - color[u]   # neighbor takes the OTHER team
+                    q.append(v)
+                elif color[v] == color[u]:
+                    return False              # same-team edge: odd cycle exists
+    return True`,
+        annotations: {
+          5: 'The component loop, third appearance. Each component gets colored independently — a free choice of which team starts.',
+          14: '1 - color[u] flips 0<->1. The alternation IS the algorithm.',
+          16: 'The contradiction detector. The edge u-v plus the two equal colors traces back to an odd cycle through u and v.',
+        },
       },
     },
     {

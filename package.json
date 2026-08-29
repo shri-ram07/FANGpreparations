@@ -8,7 +8,7 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "test": "node scripts/anchor.test.mjs"
+    "test": "node scripts/anchor.test.mjs && node scripts/dsa-lang.test.mjs"
   },
   "dependencies": {
     "@fontsource/ibm-plex-sans": "^5.2.5",

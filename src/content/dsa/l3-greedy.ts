@@ -68,6 +68,21 @@ const m: Module = {
         7: '>= means touching intervals ([1,3) then [3,5)) are compatible — half-open ranges.',
         9: 'The greedy commit: one variable of state. No table, no backtracking.',
       },
+      py: {
+        code: `def maxNonOverlapping(iv: list[tuple[int, int]]) -> int:  # (start, end)
+    iv.sort(key=lambda p: p[1])       # by END time. The whole algorithm is this
+    count, last_end = 0, float('-inf')
+    for s, e in iv:
+        if s >= last_end:             # fits after the last pick
+            count += 1
+            last_end = e              # commit. Never reconsider
+    return count                      # O(n log n) sort + O(n) sweep`,
+        annotations: {
+          2: 'Sorting by end is the entire insight. Sort by start and the [1,10) trap eats you. Python sorts by a KEY function, not a comparator — one lambda naming the field, and .sort() is stable and in place.',
+          5: '>= means touching intervals ([1,3) then [3,5)) are compatible — half-open ranges.',
+          7: 'The greedy commit: one variable of state. No table, no backtracking.',
+        },
+      },
     },
     {
       type: 'visual',
@@ -155,6 +170,20 @@ const m: Module = {
         3: 'Same sort, same sweep as activity selection — the pattern transfers verbatim.',
         7: 'The one-line flip. If you wrote a fresh algorithm for this, you missed the complement.',
       },
+      py: {
+        code: `def eraseOverlapIntervals(iv: list[list[int]]) -> int:
+    iv.sort(key=lambda v: v[1])       # by end, as always
+    kept, last_end = 0, float('-inf')
+    for v in iv:
+        if v[0] >= last_end:
+            kept += 1
+            last_end = v[1]
+    return len(iv) - kept             # erase minimum == n - keep maximum`,
+        annotations: {
+          2: 'Same sort, same sweep as activity selection — the pattern transfers verbatim. float(\'-inf\') stands in for INT_MIN and can never be beaten by a real start.',
+          8: 'The one-line flip. If you wrote a fresh algorithm for this, you missed the complement.',
+        },
+      },
     },
     {
       type: 'intuition',
@@ -187,6 +216,22 @@ const m: Module = {
         5: 'v starts at or before the open block ends — they touch or overlap.',
         6: 'max, not v[1]: [1,10] then [2,3] must keep end 10. Forgetting max is the classic slip.',
       },
+      py: {
+        code: `def merge(iv: list[list[int]]) -> list[list[int]]:
+    iv.sort()                         # by START -- merging walks left to right
+    out = []
+    for v in iv:
+        if out and v[0] <= out[-1][1]:
+            out[-1][1] = max(out[-1][1], v[1])   # overlap: extend the block
+        else:
+            out.append(v)             # gap: open a new block
+    return out`,
+        annotations: {
+          2: 'A bare .sort() compares the inner lists element-wise: by start, ties by end. Exactly what merging needs — no key function at all.',
+          5: '"if out" is the not-empty test, and out[-1] is back(). v starts at or before the open block ends — they touch or overlap.',
+          6: 'max, not v[1]: [1,10] then [2,3] must keep end 10. Forgetting max is the classic slip. (Note this mutates the caller\'s inner lists — append out[-1][:] instead if that matters.)',
+        },
+      },
     },
     {
       type: 'intuition',
@@ -218,6 +263,23 @@ const m: Module = {
         5: 'top() <= start: the soonest-free room is free in time. If IT is not free, no room is. <= lets back-to-back meetings share a room.',
         9: 'Rooms are only added when every existing room is busy, so the heap size equals peak overlap. O(n log n).',
       },
+      py: {
+        code: `import heapq
+
+def minMeetingRooms(iv: list[list[int]]) -> int:
+    iv.sort()                         # meetings in start order
+    ends = []                         # min-heap of end times
+    for v in iv:
+        if ends and ends[0] <= v[0]:
+            heapq.heappop(ends)       # earliest-ending room is free: reuse it
+        heapq.heappush(ends, v[1])    # occupy a room until v[1]
+    return len(ends)                  # peak simultaneous meetings`,
+        annotations: {
+          5: 'No incantation this time: heapq is a min-heap by default, so the C++ line that flips a max-heap simply has no counterpart. The top is ends[0].',
+          7: 'ends[0] <= start: the soonest-free room is free in time. If IT is not free, no room is. <= lets back-to-back meetings share a room.',
+          10: 'Rooms are only added when every existing room is busy, so the heap size equals peak overlap. O(n log n).',
+        },
+      },
     },
     {
       type: 'intuition',
@@ -245,6 +307,19 @@ const m: Module = {
       annotations: {
         4: 'The only failure mode: a gap opens between reach and i. [3,2,1,0,4] dies here at i=4.',
         5: 'Not "where should I jump" — just "how far COULD anything reach". Greedy as a running max.',
+      },
+      py: {
+        code: `def canJump(nums: list[int]) -> bool:
+    reach = 0                         # furthest index reachable so far
+    for i, n in enumerate(nums):
+        if i > reach:
+            return False              # unreachable index: so is everything past
+        reach = max(reach, i + n)
+    return True                       # O(n) time, O(1) space`,
+        annotations: {
+          4: 'The only failure mode: a gap opens between reach and i. [3,2,1,0,4] dies here at i=4.',
+          6: 'Not "where should I jump" — just "how far COULD anything reach". Greedy as a running max, and enumerate hands you the index and the jump length together.',
+        },
       },
     },
     {
@@ -277,6 +352,21 @@ const m: Module = {
         3: 'i + 1 < size: stop BEFORE the last index — standing on the goal needs no jump out of it.',
         5: 'The level-edge insight. On [2,3,1,1,4]: layers are {0}, {1,2}, {3,4} -> 2 jumps.',
         7: 'edge = furthest, not i + nums[i]: the next layer is what the BEST member of this layer reaches.',
+      },
+      py: {
+        code: `def jump(nums: list[int]) -> int:
+    jumps = edge = furthest = 0
+    for i in range(len(nums) - 1):    # stop BEFORE the last index
+        furthest = max(furthest, i + nums[i])
+        if i == edge:                 # current BFS layer exhausted
+            jumps += 1                # forced to jump into the next layer
+            edge = furthest           # next layer ends where this one reached
+    return jumps`,
+        annotations: {
+          3: 'range(len(nums) - 1) stops one short of the end — standing on the goal needs no jump out of it. Same intent as the C++ i + 1 < size.',
+          5: 'The level-edge insight. On [2,3,1,1,4]: layers are {0}, {1,2}, {3,4} -> 2 jumps.',
+          7: 'edge = furthest, not i + nums[i]: the next layer is what the BEST member of this layer reaches.',
+        },
       },
     },
     {
@@ -312,6 +402,24 @@ const m: Module = {
         8: 'The skip. Retrying start+1 would be O(n^2); fact 2 lets you leap past the whole failed stretch.',
         12: 'total >= 0 guarantees the last surviving start works — no verification loop needed.',
       },
+      py: {
+        code: `def canCompleteCircuit(gas: list[int], cost: list[int]) -> int:
+    total = tank = start = 0
+    for i, (g, c) in enumerate(zip(gas, cost)):
+        gain = g - c
+        total += gain                 # circuit-wide surplus
+        tank += gain                  # fuel since the current start
+        if tank < 0:
+            start = i + 1             # every start in [start..i] died with us
+            tank = 0
+    return start if total >= 0 else -1   # surplus decides feasibility`,
+        annotations: {
+          3: 'zip walks the two lists in lockstep and enumerate numbers the stops — one loop header instead of an index and two lookups.',
+          5: 'total never resets — it answers "is the loop possible at all".',
+          8: 'The skip. Retrying start+1 would be O(n²); fact 2 lets you leap past the whole failed stretch.',
+          10: 'total >= 0 guarantees the last surviving start works — no verification loop needed.',
+        },
+      },
     },
     {
       type: 'intuition',
@@ -338,6 +446,20 @@ int greedyCoins(int target) {
       annotations: {
         5: 'Biggest-coin-first, fully committed — the textbook greedy that quietly fails.',
         6: 'Memorize this exact instance: {1,3,4}, target 6. It is the standard "prove greedy wrong" card.',
+      },
+      py: {
+        code: `# coins {1, 3, 4}, target 6
+def greedyCoins(target: int) -> int:
+    coins, used = [4, 3, 1], 0
+    for c in coins:
+        while target >= c:
+            target -= c
+            used += 1
+    return used   # greedy: 4+1+1 = 3 coins. Optimal: 3+3 = 2. WRONG`,
+        annotations: {
+          5: 'Biggest-coin-first, fully committed — the textbook greedy that quietly fails.',
+          8: 'Memorize this exact instance: {1,3,4}, target 6. It is the standard "prove greedy wrong" card.',
+        },
       },
     },
     {

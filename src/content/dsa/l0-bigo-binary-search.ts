@@ -55,9 +55,31 @@ const m: Module = {
     },
     {
       type: 'code',
-      lang: 'python',
+      lang: 'cpp',
       title: 'Read complexity straight off the code',
-      code: `def pairs(a):            # n = len(a)
+      code: `long long pairs(const vector<int>& a) {   // n = a.size()
+    long long total = 0;
+    for (int x : a)                       // runs n times
+        for (int y : a)                   // n times PER outer step
+            total += (long long)x * y;
+    return total;                         // O(n * n) = O(n^2)
+}
+
+int halves(int n) {
+    int steps = 0;
+    while (n > 1) {                       // 1000 -> 500 -> 250 -> ...
+        n /= 2;
+        steps++;
+    }
+    return steps;                         // O(log n): only ~10 steps for n=1000
+}`,
+      annotations: {
+        4: 'Nested loop over the same input = multiply the counts. n × n = n².',
+        12: 'Anything that halves the problem each iteration is O(log n). Memorize this shape.',
+        16: 'log₂(1000) ≈ 10. log₂(1,000,000) ≈ 20. Doubling n adds ONE step.',
+      },
+      py: {
+        code: `def pairs(a):            # n = len(a)
     total = 0
     for x in a:          # runs n times
         for y in a:      # n times PER outer step
@@ -70,10 +92,11 @@ def halves(n):
         n //= 2
         steps += 1
     return steps         # O(log n): only ~10 steps for n=1000`,
-      annotations: {
-        4: 'Nested loop over the same input = multiply the counts. n × n = n².',
-        10: 'Anything that halves the problem each iteration is O(log n). Memorize this shape.',
-        13: 'log₂(1000) ≈ 10. log₂(1,000,000) ≈ 20. Doubling n adds ONE step.',
+        annotations: {
+          4: 'Nested loop over the same input = multiply the counts. n × n = n².',
+          10: 'Anything that halves the problem each iteration is O(log n). Memorize this shape.',
+          13: 'log₂(1000) ≈ 10. log₂(1,000,000) ≈ 20. Doubling n adds ONE step.',
+        },
       },
     },
     {
@@ -95,7 +118,7 @@ def halves(n):
     {
       type: 'code',
       lang: 'cpp',
-      title: 'The interview-grade implementation (C++)',
+      title: 'The interview-grade implementation',
       code: `int binarySearch(const vector<int>& a, int target) {
     int lo = 0, hi = (int)a.size() - 1;
     while (lo <= hi) {
@@ -113,6 +136,24 @@ def halves(n):
         4: 'NOT (lo+hi)/2 — that can overflow int when lo and hi are both huge. Interviewers look for this.',
         7: 'mid+1, not mid — mid is already ruled out. Writing "lo = mid" here causes infinite loops.',
       },
+      py: {
+        code: `def binarySearch(a: list[int], target: int) -> int:
+    lo, hi = 0, len(a) - 1
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        if a[mid] == target:
+            return mid
+        if a[mid] < target:
+            lo = mid + 1       # mid already checked
+        else:
+            hi = mid - 1
+    return -1                  # lo crossed hi: not present`,
+        annotations: {
+          2: 'Invariant: if target exists, its index is always inside [lo, hi]. Every line protects this.',
+          4: 'Python ints never overflow, so plain (lo + hi) // 2 is safe here — but SAY the C++ reason (lo + (hi - lo) // 2 avoids int overflow) out loud, because interviewers listen for it.',
+          8: 'mid+1, not mid — mid is already ruled out. Writing "lo = mid" here causes infinite loops.',
+        },
+      },
     },
     {
       type: 'intuition',
@@ -127,9 +168,25 @@ def halves(n):
     },
     {
       type: 'code',
-      lang: 'python',
+      lang: 'cpp',
       title: 'The reusable template',
-      code: `def min_answer(lo, hi, works):
+      code: `int minAnswer(int lo, int hi, const function<bool(int)>& works) {
+    // smallest x in [lo, hi] with works(x) == true
+    while (lo < hi) {
+        int mid = lo + (hi - lo) / 2;
+        if (works(mid))
+            hi = mid;       // mid might BE the answer: keep it
+        else
+            lo = mid + 1;   // mid failed: answer is right of it
+    }
+    return lo;
+}`,
+      annotations: {
+        6: 'hi = mid (not mid-1): a passing mid stays in range because it may be the minimum.',
+        8: 'The asymmetry (hi=mid vs lo=mid+1) + (lo<hi) is what makes this terminate correctly.',
+      },
+      py: {
+        code: `def min_answer(lo, hi, works):
     # smallest x in [lo, hi] with works(x) == True
     while lo < hi:
         mid = (lo + hi) // 2
@@ -138,9 +195,10 @@ def halves(n):
         else:
             lo = mid + 1    # mid failed: answer is right of it
     return lo`,
-      annotations: {
-        6: 'hi = mid (not mid-1): a passing mid stays in range because it may be the minimum.',
-        8: 'The asymmetry (hi=mid vs lo=mid+1) + (lo<hi) is what makes this terminate correctly.',
+        annotations: {
+          6: 'hi = mid (not mid-1): a passing mid stays in range because it may be the minimum.',
+          8: 'The asymmetry (hi=mid vs lo=mid+1) + (lo<hi) is what makes this terminate correctly.',
+        },
       },
     },
   ],

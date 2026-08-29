@@ -53,6 +53,24 @@ const m: Module = {
         7: 'The +1 is earned by pairing THIS s-char with THIS t-char. Only the diagonal state has both of them removed.',
         9: 'Mismatch: try losing s\'s last char (up) or t\'s last char (left). The diagonal is never needed here — it can\'t beat either.',
       },
+      py: {
+        code: `def lcs(s: str, t: str) -> int:
+    n, m = len(s), len(t)
+    dp = [[0] * (m + 1) for _ in range(n + 1)]
+    for i in range(1, n + 1):
+        for j in range(1, m + 1):
+            if s[i-1] == t[j-1]:
+                dp[i][j] = 1 + dp[i-1][j-1]             # match: diagonal + 1
+            else:
+                dp[i][j] = max(dp[i-1][j], dp[i][j-1])  # drop one last char
+    return dp[n][m]   # lcs("abcde", "ace") == 3`,
+        annotations: {
+          3: 'The (n+1)×(m+1) shape: row 0 / col 0 mean "empty prefix" and stay 0 — the base case costs zero code. The comprehension is required; [[0] * (m+1)] * (n+1) would alias one row into every row.',
+          6: 'dp index i = "first i chars", so the newest char is s[i-1]. THE string-DP off-by-one — interviewers watch this line.',
+          7: 'The +1 is earned by pairing THIS s-char with THIS t-char. Only the diagonal state has both of them removed.',
+          9: 'Mismatch: try losing s\'s last char (up) or t\'s last char (left). The diagonal is never needed here — it cannot beat either.',
+        },
+      },
     },
     {
       type: 'visual',
@@ -171,6 +189,31 @@ const m: Module = {
         12: 'Insert appends a copy of t[j-1] to s: t\'s prefix shrinks, s\'s doesn\'t — hence left.',
         13: 'Delete throws away s[i-1]: s\'s prefix shrinks — hence up. horse→rorse→rose→ros: replace, delete, delete = 3.',
       },
+      py: {
+        code: `def editDistance(s: str, t: str) -> int:
+    n, m = len(s), len(t)
+    dp = [[0] * (m + 1) for _ in range(n + 1)]
+    for i in range(n + 1):
+        dp[i][0] = i                          # s-prefix -> "": i deletes
+    for j in range(m + 1):
+        dp[0][j] = j                          # "" -> t-prefix: j inserts
+    for i in range(1, n + 1):
+        for j in range(1, m + 1):
+            if s[i-1] == t[j-1]:
+                dp[i][j] = dp[i-1][j-1]       # free move: chars agree
+            else:
+                dp[i][j] = 1 + min(dp[i-1][j-1],  # replace  = diagonal
+                                   dp[i][j-1],    # insert   = left
+                                   dp[i-1][j])    # delete   = up
+    return dp[n][m]   # editDistance("horse", "ros") == 3`,
+        annotations: {
+          5: 'Unlike LCS, the base cases are NOT zero: emptying or building a prefix costs one op per character.',
+          11: 'Matching chars cost nothing — no +1. Forgetting that and writing 1 + dp[i-1][j-1] here is the classic wrong-answer.',
+          13: 'min takes the three candidates as plain arguments — no braced initializer list to remember. Replace rewrites s[i-1] into t[j-1]: both last chars are dealt with, so both prefixes shrink — hence diagonal.',
+          14: 'Insert appends a copy of t[j-1] to s: t\'s prefix shrinks, s\'s does not — hence left.',
+          15: 'Delete throws away s[i-1]: s\'s prefix shrinks — hence up. horse→rorse→rose→ros: replace, delete, delete = 3.',
+        },
+      },
     },
     {
       type: 'intuition',
@@ -234,6 +277,31 @@ int robTree(TreeNode* root) {
         9: 'The subtle line: skipping me frees each child to pick its own best. Writing lSkip + rSkip here (forcing kids to skip too) silently underpays.',
         15: 'Both worlds flow to the top; only the root converts the pair into a single answer.',
       },
+      py: {
+        code: `class TreeNode:
+    def __init__(self, val: int):
+        self.val, self.left, self.right = val, None, None
+
+# (best if this node IS robbed, best if it is SKIPPED)
+def solve(node) -> tuple[int, int]:
+    if not node:
+        return 0, 0
+    l_rob, l_skip = solve(node.left)     # children fully solved FIRST
+    r_rob, r_skip = solve(node.right)    # -- postorder
+    rob = node.val + l_skip + r_skip     # rob me: kids must sit out
+    skip = max(l_rob, l_skip) + max(r_rob, r_skip)
+    return rob, skip
+
+def robTree(root) -> int:
+    r, s = solve(root)
+    return max(r, s)                     # the root chooses freely`,
+        annotations: {
+          8: '"return 0, 0" already IS a tuple — no pair type, no structured-binding syntax, and the caller unpacks with a plain comma. Empty subtree contributes 0 to both worlds.',
+          11: 'The alarm constraint compiled to code: robbing this node forces BOTH children into their skipped value.',
+          12: 'The subtle line: skipping me frees each child to pick its own best. Writing l_skip + r_skip here (forcing kids to skip too) silently underpays.',
+          17: 'Both worlds flow to the top; only the root converts the pair into a single answer.',
+        },
+      },
     },
     {
       type: 'intuition',
@@ -261,6 +329,23 @@ int height(TreeNode* node) {
       annotations: {
         7: 'The combine step: this node as the bend point. The answer never flows up — it is caught here, in the global.',
         8: 'The report: a parent can extend only one arm. Returning l + r would count a forked path twice — the classic diameter bug.',
+      },
+      py: {
+        code: `best = 0                             # longest path seen anywhere (edges)
+
+def height(node) -> int:
+    global best
+    if not node:
+        return 0
+    l = height(node.left)            # postorder again: children first
+    r = height(node.right)
+    best = max(best, l + r)          # path bending THROUGH this node
+    return 1 + max(l, r)             # report ONE arm upward`,
+        annotations: {
+          4: 'Rebinding a module-level name from inside a function needs this declaration — C++ needs nothing. In real code, nest height() inside the caller and use nonlocal instead.',
+          9: 'The combine step: this node as the bend point. The answer never flows up — it is caught here, in the shared variable.',
+          10: 'The report: a parent can extend only one arm. Returning l + r would count a forked path twice — the classic diameter bug.',
+        },
       },
     },
     {

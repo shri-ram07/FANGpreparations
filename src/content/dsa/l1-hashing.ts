@@ -37,6 +37,22 @@ const m: Module = {
         5: 'The modulus squeezes an astronomically large space of possible keys into a handful of buckets. That squeeze is where collisions come from.',
         8: '"amy" and "ian" hash to different numbers, but % 5 lands both in bucket 2. Different keys, same box — the table must survive this.',
       },
+      py: {
+        code: `def bucketOf(key: str, buckets: int) -> int:
+    h = 0
+    for c in key:
+        h = h * 31 + ord(c)   # mix each character into the running value
+    return h % buckets        # fold the huge number into a small index
+
+# bucketOf("amy", 5) == 2    (h = 96717)
+# bucketOf("ian", 5) == 2    (h = 104022 -- same bucket: COLLISION)
+# bucketOf("zed", 5) == 3    (h = 120473)`,
+        annotations: {
+          4: 'Multiply-by-prime-and-add is the classic string hash (Java uses 31 too). ord(c) is the C++ implicit char-to-int. The exact recipe matters less than: deterministic, fast, spreads keys out.',
+          5: 'The modulus squeezes an astronomically large space of possible keys into a handful of buckets. That squeeze is where collisions come from. (Python\'s own hash() for str is salted per process — never persist it.)',
+          8: '"amy" and "ian" hash to different numbers, but % 5 lands both in bucket 2. Different keys, same box — the table must survive this.',
+        },
+      },
     },
     {
       type: 'intuition',
@@ -151,6 +167,24 @@ const m: Module = {
         4: '++freq[x] increments and tests in one move. O(n) time, O(n) space — n/2 distinct values could appear before the majority shows.',
         8: 'Desk-check: counts of 2 go 1, 2 (both ≤ 2), then the last 2 makes 3 > 2 — return fires on the final element.',
       },
+      py: {
+        code: `from collections import defaultdict
+
+def majorityElement(a: list[int]) -> int:
+    freq = defaultdict(int)                # value -> times seen so far
+    for x in a:
+        freq[x] += 1
+        if freq[x] > len(a) // 2:
+            return x                       # majority proven mid-scan
+    return -1                              # unreachable if a majority exists
+
+# [2, 2, 1, 1, 2]: count of 2 reaches 3 > 5//2 = 2 -> returns 2`,
+        annotations: {
+          4: 'defaultdict(int) IS C++ operator[]: a missing key materializes as 0 on first touch. A plain dict would raise KeyError here — that is the one-line difference between the two panes.',
+          6: 'No ++ in Python, so increment and test are two lines instead of C++\'s one. O(n) time, O(n) space — n/2 distinct values could appear before the majority shows.',
+          11: 'Desk-check: counts of 2 go 1, 2 (both ≤ 2), then the last 2 makes 3 > 2 — return fires on the final element.',
+        },
+      },
     },
     {
       type: 'note',
@@ -178,6 +212,25 @@ const m: Module = {
         8: 'The heap never exceeds k+1 elements, so every push/pop is O(log k), not O(log n). That cap is the entire trick.',
         12: 'O(n log k) beats sort-everything O(n log n) whenever k is small — say this comparison unprompted. Heaps get their own module; this is the bridge.',
       },
+      py: {
+        code: `import heapq
+from collections import Counter
+
+def topKFrequent(a: list[int], k: int) -> list[int]:
+    freq = Counter(a)                      # phase 1: count, O(n)
+
+    heap = []                              # min-heap of (count, value)
+    for val, cnt in freq.items():          # phase 2: keep the k best
+        heapq.heappush(heap, (cnt, val))
+        if len(heap) > k:
+            heapq.heappop(heap)            # evict the weakest survivor
+    return [val for cnt, val in heap]      # O(n log k) total`,
+        annotations: {
+          7: 'heapq is ALWAYS a min-heap, so the C++ greater<> incantation just disappears. Tuples compare by their first element, so the smallest count sits at heap[0] — ready to be evicted.',
+          10: 'The heap never exceeds k+1 elements, so every push/pop is O(log k), not O(log n). That cap is the entire trick.',
+          12: 'O(n log k) beats sort-everything O(n log n) whenever k is small — say this comparison unprompted. (Counter(a).most_common(k) is the library answer: mention it, then show this.)',
+        },
+      },
     },
     {
       type: 'code',
@@ -195,6 +248,22 @@ const m: Module = {
       annotations: {
         2: 'When keys are lowercase letters, the "hash function" is c - \'a\': perfect, collision-free, cache-friendly. Reaching for unordered_map here is overkill.',
         6: 'Order comes from re-scanning the INPUT, not the map — hash containers have no useful order to iterate. A classic wrong answer iterates the map.',
+      },
+      py: {
+        code: `def firstUniqChar(s: str) -> int:
+    freq = [0] * 26                        # fixed alphabet: array beats hash map
+    for c in s:
+        freq[ord(c) - ord('a')] += 1       # pass 1: count everything
+    for i, c in enumerate(s):
+        if freq[ord(c) - ord('a')] == 1:
+            return i                       # pass 2: first count-of-1 index
+    return -1
+
+# "leetcode" -> 0 ('l' appears once)      "aabb" -> -1`,
+        annotations: {
+          2: 'When keys are lowercase letters, the "hash function" is ord(c) - ord(\'a\'): perfect, collision-free, cache-friendly. Reaching for a dict here is overkill.',
+          5: 'Order comes from re-scanning the INPUT, not the map. Python dicts do preserve insertion order (3.7+), so iterating freq would actually work — but the array-as-map version has no order at all, and the habit of re-scanning the input is what transfers.',
+        },
       },
     },
     {
@@ -227,6 +296,23 @@ const m: Module = {
         8: 'Insert after the check, and {3, 3} with target 6 just works: at i=1, "need 3" finds the i=0 entry. Insert-before-check would let an element match itself.',
         12: 'Desk-check: i=0 needs 7 (absent), records 2->0. i=1 needs 2, found at 0. Answer {0, 1} in two iterations.',
       },
+      py: {
+        code: `def twoSum(a: list[int], target: int) -> list[int]:
+    seen = {}                              # value -> index where it appeared
+    for i, x in enumerate(a):
+        need = target - x                  # the complement
+        if need in seen:
+            return [seen[need], i]         # partner seen earlier: done
+        seen[x] = i                        # record AFTER the check
+    return []                              # problem guarantees one answer
+
+# [2, 7, 11, 15], target 9: i=1 needs 2 -> seen at index 0 -> [0, 1]`,
+        annotations: {
+          5: '"in", then index — the read-only lookup. This is also why seen is a plain dict and not a defaultdict: a defaultdict would INSERT need on every miss and poison later lookups, exactly the C++ operator[] trap.',
+          7: 'Insert after the check, and [3, 3] with target 6 just works: at i=1, "need 3" finds the i=0 entry. Insert-before-check would let an element match itself.',
+          10: 'Desk-check: i=0 needs 7 (absent), records 2->0. i=1 needs 2, found at 0. Answer [0, 1] in two iterations.',
+        },
+      },
     },
     {
       type: 'intuition',
@@ -258,6 +344,26 @@ const m: Module = {
         5: 'This guard is the entire algorithm. Without it, starting a walk at every element re-counts each run from every position: O(n²) on a single long run.',
         7: 'Looks nested, is not: across ALL walks, each value is stepped onto at most once. Total work = n head-checks + n walk-steps = O(n) — argue it exactly like this.',
         12: 'Desk-check: 100 has no 99 -> head, run length 1. 4 has 3 -> skipped. 1 has no 0 -> head; 2, 3, 4 present; 5 absent -> length 4.',
+      },
+      py: {
+        code: `def longestConsecutive(a: list[int]) -> int:
+    s = set(a)
+    best = 0
+    for x in s:
+        if x - 1 in s:
+            continue                       # x-1 exists: x is mid-sequence, skip
+        length = 1                         # x is a sequence HEAD
+        while x + length in s:             # walk right to the end of the run
+            length += 1
+        best = max(best, length)
+    return best
+
+# [100, 4, 200, 1, 3, 2]: heads are 100, 200, 1. From 1: 1,2,3,4 -> best = 4`,
+        annotations: {
+          5: 'This guard is the entire algorithm. Without it, starting a walk at every element re-counts each run from every position: O(n²) on a single long run.',
+          8: 'Looks nested, is not: across ALL walks, each value is stepped onto at most once. Total work = n head-checks + n walk-steps = O(n) — argue it exactly like this. (len is a builtin, so the counter is named length.)',
+          13: 'Desk-check: 100 has no 99 -> head, run length 1. 4 has 3 -> skipped. 1 has no 0 -> head; 2, 3, 4 present; 5 absent -> length 4.',
+        },
       },
     },
     {

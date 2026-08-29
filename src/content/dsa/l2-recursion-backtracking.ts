@@ -74,6 +74,24 @@ void backtrack(/* shared state */) {
         9: 'One shared state for the whole tree. Copies per call would be correct but cost O(n) time and memory at every node.',
         11: 'The undo. It must mirror choose() exactly, in reverse order if there are several mutations. Delete it and every sibling branch starts dirty.',
       },
+      py: {
+        code: `# The shape of EVERY problem in this module
+def backtrack(state):
+    if complete(state):          # base case: a full candidate
+        record(state)            # snapshot the answer
+        return
+    for choice in choices(state):
+        if not valid(choice):
+            continue             # PRUNE: kill hopeless branches early
+        choose(choice)           # mutate the ONE shared state
+        backtrack(state)         # EXPLORE: trust the smaller call
+        unchoose(choice)         # UN-CHOOSE: restore state exactly`,
+        annotations: {
+          7: 'Pruning lives here. A prune near the root deletes an entire exponential subtree — this is why backtracking finishes and brute force does not.',
+          9: 'One shared state for the whole tree. Python makes the temptation worse than C++: passing path + [x] instead is correct AND readable, but it copies at every node — O(n) time and memory per call.',
+          11: 'The undo. It must mirror choose() exactly, in reverse order if there are several mutations. Delete it and every sibling branch starts dirty.',
+        },
+      },
     },
     {
       type: 'intuition',
@@ -107,6 +125,26 @@ void dfs(int i, const vector<int>& a) {
         6: 'push_back(path) copies the whole path — O(n) per snapshot. That copy is where the ·n in O(2ⁿ·n) comes from.',
         11: 'This pop_back IS the backtracking. Delete it and every subset after the first branch carries stale elements.',
         12: 'Two recursive calls per element = 2 branches per level = 2ⁿ leaves. Read the complexity straight off the code.',
+      },
+      py: {
+        code: `ans = []
+path = []
+
+def dfs(i: int, a: list[int]) -> None:
+    if i == len(a):             # every element decided
+        ans.append(path[:])     # snapshot one finished subset
+        return
+    path.append(a[i])           # CHOOSE: a[i] goes in
+    dfs(i + 1, a)               # explore the include branch
+    path.pop()                  # UN-CHOOSE: restore path
+    dfs(i + 1, a)               # explore the exclude branch
+
+# dfs(0, a) on a=[1,2] fills ans: [1,2] [1] [2] []`,
+        annotations: {
+          6: 'path[:] is not optional. ans.append(path) would store a REFERENCE to the one shared list, and every answer would come back identical (and empty) at the end — the single most common Python backtracking bug. The copy is also where the ·n in O(2ⁿ·n) comes from.',
+          10: 'This pop() IS the backtracking. Delete it and every subset after the first branch carries stale elements.',
+          11: 'Two recursive calls per element = 2 branches per level = 2ⁿ leaves. Read the complexity straight off the code.',
+        },
       },
     },
     {
@@ -235,6 +273,39 @@ void permSwap(vector<int>& a, int start, vector<vector<int>>& ans) {
         19: 'The array splits at start: prefix = decided slots, suffix = remaining candidates. The swap moves one candidate across the border.',
         21: 'A swap is its own inverse — the cheapest un-choose in this module. The price: ans collects permutations in non-lexicographic order.',
       },
+      py: {
+        code: `# Way 1: used[] -- keeps input order, dup-skip is easy
+def permUsed(a: list[int], path: list[int],
+             used: list[bool], ans: list[list[int]]) -> None:
+    if len(path) == len(a):
+        ans.append(path[:])
+        return
+    for i in range(len(a)):
+        if used[i]:
+            continue                   # prune: already placed
+        used[i] = True                 # choose (two mutations)
+        path.append(a[i])
+        permUsed(a, path, used, ans)   # explore
+        path.pop()                     # un-choose in reverse order
+        used[i] = False
+
+# Way 2: swap-in-place -- O(1) extra space, scrambled order
+def permSwap(a: list[int], start: int, ans: list[list[int]]) -> None:
+    if start == len(a):
+        ans.append(a[:])
+        return
+    for i in range(start, len(a)):
+        a[start], a[i] = a[i], a[start]   # choose: a[i] fills slot start
+        permSwap(a, start + 1, ans)       # slots after start still open
+        a[start], a[i] = a[i], a[start]   # un-choose: same swap undoes it`,
+        annotations: {
+          8: 'used[] is the constraint check — O(1) per candidate. For duplicates (LC 47): a.sort() first, then also skip when i > 0 and a[i] == a[i-1] and not used[i-1].',
+          13: 'Two mutations in choose → two undos, in REVERSE order. Undoing out of order is the classic multi-mutation bug.',
+          19: 'a[:] again, and here it matters even more: a is the working array that the swaps keep scrambling, so storing it directly would leave every answer pointing at the same shuffled list.',
+          22: 'The array splits at start: prefix = decided slots, suffix = remaining candidates. The tuple swap moves one candidate across the border, with no temp variable and no std::swap.',
+          24: 'A swap is its own inverse — the cheapest un-choose in this module. The price: ans collects permutations in non-lexicographic order.',
+        },
+      },
     },
     {
       type: 'intuition',
@@ -265,6 +336,26 @@ void dfs(int start, int remain, vector<int>& cand,
       annotations: {
         6: 'break, not continue — the array is sorted, so once one candidate overshoots, every later one does too. One comparison kills the rest of the loop at EVERY node of the tree.',
         8: 'dfs(i, …), not i+1: reuse allowed. And never less than i — looking backwards would generate [2,3] and [3,2] as separate answers.',
+      },
+      py: {
+        code: `# cand.sort() BEFORE the first call
+def dfs(start: int, remain: int, cand: list[int],
+        path: list[int], ans: list[list[int]]) -> None:
+    if remain == 0:
+        ans.append(path[:])
+        return
+    for i in range(start, len(cand)):
+        if cand[i] > remain:
+            break                      # prune: all later ones are bigger
+        path.append(cand[i])           # choose
+        dfs(i, remain - cand[i], cand, path, ans)
+        path.pop()                     # un-choose
+
+# cand=[2,3,6,7], target=7 -> [2,2,3] and [7]`,
+        annotations: {
+          9: 'break, not continue — the list is sorted, so once one candidate overshoots, every later one does too. One comparison kills the rest of the loop at EVERY node of the tree.',
+          11: 'dfs(i, …), not i+1: reuse allowed. And never less than i — looking backwards would generate [2,3] and [3,2] as separate answers.',
+        },
       },
     },
     {
@@ -312,6 +403,39 @@ int solveNQueens(int n) {
         7: 'The whole trick in one line: three O(1) lookups replace an O(n) board scan. r-c can be negative, hence the +n-1 shift into array range.',
         20: 'Sanity anchors worth memorizing: n=4 has 2 solutions, n=8 has 92. If your code says otherwise, the diagonal indexing is off.',
       },
+      py: {
+        code: `total = 0
+col: list[bool] = []
+d1: list[bool] = []      # indexes r+c
+d2: list[bool] = []      # indexes r-c+n-1
+
+def place(r: int, n: int) -> None:
+    global total
+    if r == n:
+        total += 1                     # n queens placed: a solution
+        return
+    for c in range(n):
+        if col[c] or d1[r + c] or d2[r - c + n - 1]:
+            continue
+        col[c] = d1[r + c] = d2[r - c + n - 1] = True    # choose
+        place(r + 1, n)                                  # explore
+        col[c] = d1[r + c] = d2[r - c + n - 1] = False   # un-choose
+
+def solveNQueens(n: int) -> int:
+    global total, col, d1, d2
+    total = 0
+    col = [False] * n
+    d1 = [False] * (2 * n - 1)         # r+c ranges 0 .. 2n-2
+    d2 = [False] * (2 * n - 1)
+    place(0, n)
+    return total                       # n=4 -> 2, n=8 -> 92`,
+        annotations: {
+          9: 'Counting means the base case is a += — and because total is rebound, place() needs the global declaration above. For LC 51 (print boards), keep a queens-per-row list and render it here.',
+          12: 'The whole trick in one line: three O(1) lookups replace an O(n) board scan. The +n-1 shift is doubly load-bearing in Python — r-c can be negative, and a negative index does NOT raise here, it silently reads from the END of the list. A wrong-but-running answer is worse than a crash.',
+          14: 'Chained assignment sets all three in one statement, and line 16 undoes all three the same way — keeping choose and un-choose visibly symmetric.',
+          25: 'Sanity anchors worth memorizing: n=4 has 2 solutions, n=8 has 92. If your code says otherwise, the diagonal indexing is off.',
+        },
+      },
     },
     {
       type: 'intuition',
@@ -349,6 +473,37 @@ bool solve(vector<vector<char>>& g, int pos) {
         5: 'The box formula (r/3)*3 + c/3 maps any cell to its 3x3 box id 0..8 — memorize it, interviewers ask.',
         9: 'Three O(1) constraint checks — the same sets idea as N-Queens cols/diagonals, one size bigger.',
         13: 'Returning true UP the chain the moment a full board exists — Sudoku wants one solution, not all of them.',
+      },
+      py: {
+        code: `rowSet = [[False] * 10 for _ in range(9)]
+colSet = [[False] * 10 for _ in range(9)]
+boxSet = [[False] * 10 for _ in range(9)]
+
+def solve(g: list[list[str]], pos: int) -> bool:
+    if pos == 81:
+        return True                          # every cell placed
+    r, c = divmod(pos, 9)
+    b = (r // 3) * 3 + c // 3
+    if g[r][c] != '.':
+        return solve(g, pos + 1)
+
+    for d in range(1, 10):
+        if rowSet[r][d] or colSet[c][d] or boxSet[b][d]:
+            continue
+        g[r][c] = str(d)                     # choose
+        rowSet[r][d] = colSet[c][d] = boxSet[b][d] = True
+        if solve(g, pos + 1):
+            return True                      # explore
+        g[r][c] = '.'                        # un-choose
+        rowSet[r][d] = colSet[c][d] = boxSet[b][d] = False
+    return False                             # no digit fits: backtrack`,
+        annotations: {
+          1: 'The comprehension is mandatory: [[False] * 10] * 9 would build nine references to ONE row, so marking a digit in row 0 would mark it in all nine. Silent, and fatal.',
+          8: 'divmod returns quotient and remainder in one call — pos // 9 and pos % 9 together. pos walks 0..80 in row-major order, so one linear index replaces two nested loops.',
+          9: 'The box formula (r//3)*3 + c//3 maps any cell to its 3x3 box id 0..8 — memorize it, interviewers ask. Integer division must be //; / would give 1.0 and blow up as an index.',
+          14: 'Three O(1) constraint checks — the same sets idea as N-Queens cols/diagonals, one size bigger.',
+          19: 'Returning True UP the chain the moment a full board exists — Sudoku wants one solution, not all of them.',
+        },
       },
     },
   ],

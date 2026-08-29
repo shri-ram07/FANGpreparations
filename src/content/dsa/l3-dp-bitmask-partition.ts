@@ -52,6 +52,23 @@ for (int i = 0; i < 5; i++)            // iterate the members
         5: 'GCC/Clang builtin, O(1). C++20 spelling: std::popcount from <bit>. Set size without a loop.',
         8: 'The iterate-members idiom: scan all n bit positions, act on the ON ones. O(n) per mask.',
       },
+      py: {
+        code: `mask = 0b01101                        # the set {0, 2, 3}, as one int
+has2 = mask & (1 << 2)                # test: is 2 in the set? (nonzero = yes)
+add4 = mask | (1 << 4)                # add 4    -> 0b11101
+drop0 = mask & ~(1 << 0)              # remove 0 -> 0b01100
+size = mask.bit_count()               # how many members? 3   (Python 3.10+)
+for i in range(5):                    # iterate the members
+    if mask & (1 << i):
+        print(i, end=' ')             # prints: 0 2 3`,
+        annotations: {
+          1: 'Read right to left: bit 0 ON, bit 1 OFF, bit 2 ON, bit 3 ON → {0, 2, 3}. One int holds any subset — and with Python\'s unbounded ints, "any" really means any size, not just {0..30}.',
+          2: '1 << 2 builds 0b00100 — a set containing only 2. AND keeps the overlap: nonzero means present. (Nonzero is truthy, so "if mask & bit:" needs no comparison.)',
+          4: '~(1 << 0) is -2 here, not a 32-bit 0xFFFFFFFE: Python ints act like infinitely many sign bits. The AND still clears exactly bit 0 — but never PRINT a ~ result expecting a C++ bit pattern, and mask & 0xFFFFFFFF when you need a fixed width.',
+          5: 'int.bit_count() is popcount, O(1), since 3.10. Portable spelling: bin(mask).count("1").',
+          6: 'The iterate-members idiom: scan all n bit positions, act on the ON ones. O(n) per mask.',
+        },
+      },
     },
     {
       type: 'note',
@@ -173,6 +190,32 @@ for (int i = 0; i < 5; i++)            // iterate the members
         12: 'The transition: extend the tour by one unvisited city. Push-style DP: current state improves its successors.',
         16: 'Path version: best tour may end anywhere. Round-trip TSP instead: min over last of dp[FULL][last] + dist[last][0].',
       },
+      py: {
+        code: `def tsp(dist: list[list[int]]) -> float:
+    n = len(dist)
+    FULL = (1 << n) - 1
+    INF = float('inf')
+    dp = [[INF] * n for _ in range(1 << n)]
+    dp[1][0] = 0                               # visited {0}, standing at city 0
+    for mask in range(1, FULL + 1):
+        for last in range(n):
+            if not (mask & (1 << last)) or dp[mask][last] == INF:
+                continue                       # invalid or unreachable -- skip
+            for nxt in range(n):
+                if mask & (1 << nxt):
+                    continue                   # already visited
+                nm = mask | (1 << nxt)
+                dp[nm][nxt] = min(dp[nm][nxt],
+                                  dp[mask][last] + dist[last][nxt])
+    return min(dp[FULL])`,
+        annotations: {
+          5: '2ⁿ·n cells — and every cell is a Python object reference, not a packed int. Where C++ needs ~84 MB at n = 20, this needs several times that plus the interpreter overhead: treat n ≈ 15–18 as the honest ceiling and say so.',
+          6: 'Base: mask 1 = binary 00…001 — only city 0 visited, cost 0. Free choice of start? Seed dp[1 << s][s] = 0 for every s.',
+          7: 'Masks ascend numerically, and a successor mask | bit is always LARGER — so every state is final before anyone reads it. No recursion, and no recursion limit to worry about.',
+          15: 'The transition: extend the tour by one unvisited city. Push-style DP: the current state improves its successors.',
+          17: 'min over a list is one call — no min_element, no iterators. Path version: the best tour may end anywhere. Round-trip TSP instead: min(dp[FULL][last] + dist[last][0] for last in range(n)).',
+        },
+      },
     },
     {
       type: 'intuition',
@@ -208,6 +251,30 @@ for (int i = 0; i < 5; i++)            // iterate the members
         3: 'One dimension: 2ⁿ ints, not 2ⁿ·n. The popcount trick paid for itself before the loop even started.',
         7: 'THE trick: k jobs assigned ⇒ people 0..k−1 served ⇒ person k is next. Derived, not stored.',
         12: 'Give person their job, flip its bit. n transitions per mask → O(2ⁿ·n) total.',
+      },
+      py: {
+        code: `def minAssignCost(cost: list[list[int]]) -> float:  # cost[person][job]
+    n = len(cost)
+    INF = float('inf')
+    dp = [INF] * (1 << n)
+    dp[0] = 0                                   # nobody assigned anything
+    for mask in range(1 << n):
+        if dp[mask] == INF:
+            continue                            # unreachable
+        person = mask.bit_count()               # next person in line
+        if person == n:
+            continue                            # everyone served
+        for job in range(n):
+            if mask & (1 << job):
+                continue                        # job taken
+            nm = mask | (1 << job)
+            dp[nm] = min(dp[nm], dp[mask] + cost[person][job])
+    return dp[(1 << n) - 1]                     # all jobs assigned`,
+        annotations: {
+          4: 'One dimension: 2ⁿ entries, not 2ⁿ·n. The popcount trick paid for itself before the loop even started.',
+          9: 'THE trick: k jobs assigned ⇒ people 0..k−1 served ⇒ person k is next. Derived from the mask, never stored.',
+          16: 'Give person their job, flip its bit. n transitions per mask → O(2ⁿ·n) total.',
+        },
       },
     },
     {
@@ -259,6 +326,25 @@ for (int i = 0; i < 5; i++)            // iterate the members
         10: 'Cost of the FINAL multiply: (i..k) is dims[i−1]×dims[k], (k+1..j) is dims[k]×dims[j] → dims[i−1]·dims[k]·dims[j]. Cast first — three 500s already pass 10⁸.',
         12: 'Desk-check with the story above: dp[1][2] = 1500, dp[2][3] = 9000, dp[1][3] = min(27000, 4500) = 4500.',
       },
+      py: {
+        code: `def mcm(dims: list[int]) -> int:           # matrix i is dims[i-1] x dims[i]
+    n = len(dims) - 1                      # n matrices in the chain
+    dp = [[0] * (n + 1) for _ in range(n + 1)]
+    for length in range(2, n + 1):                 # 1. interval LENGTH
+        for i in range(1, n - length + 2):         # 2. left end
+            j = i + length - 1                     #    right end
+            dp[i][j] = float('inf')
+            for k in range(i, j):                  # 3. split (i..k)(k+1..j)
+                dp[i][j] = min(dp[i][j], dp[i][k] + dp[k + 1][j]
+                               + dims[i - 1] * dims[k] * dims[j])
+    return dp[1][n]                        # dims [10,30,5,60] -> 4500`,
+        annotations: {
+          3: 'Zero-init doubles as the base case: a single matrix (length-1 interval) needs no multiplication.',
+          4: 'THE template line. Length first guarantees every shorter interval inside is already final. Recite: length → i → k. (len is a builtin, so the variable is spelled length.)',
+          10: 'Cost of the FINAL multiply: (i..k) is dims[i−1]×dims[k], (k+1..j) is dims[k]×dims[j] → dims[i−1]·dims[k]·dims[j]. No 64-bit cast to remember — Python ints never overflow.',
+          11: 'Desk-check with the story above: dp[1][2] = 1500, dp[2][3] = 9000, dp[1][3] = min(27000, 4500) = 4500.',
+        },
+      },
     },
     {
       type: 'intuition',
@@ -294,6 +380,25 @@ for (int i = 0; i < 5; i++)            // iterate the members
         8: 'Open interval: borders i and j stay alive; only what is strictly between them bursts. Note dp[i][k] and dp[k][j] share borders with the parent — no +1/−1 offsets.',
         11: 'Three coins terms: left side fully burst (k as its right wall), right side fully burst (k as its left wall), then k itself against the fixed borders.',
         13: 'The classic check: [3,1,5,8] → 167 (burst 1, then 5, then 3, then 8: 15 + 120 + 24 + 8).',
+      },
+      py: {
+        code: `def maxCoins(nums: list[int]) -> int:
+    n = len(nums)
+    a = [1] + nums + [1]                   # virtual 1-balloons at both ends
+    dp = [[0] * (n + 2) for _ in range(n + 2)]
+    for length in range(2, n + 2):                 # window width j - i
+        for i in range(0, n + 2 - length):
+            j = i + length                 # dp[i][j]: OPEN interval (i, j)
+            for k in range(i + 1, j):              # k bursts LAST in (i, j)
+                dp[i][j] = max(dp[i][j],
+                               dp[i][k] + dp[k][j] + a[i] * a[k] * a[j])
+    return dp[0][n + 1]                    # [3,1,5,8] -> 167`,
+        annotations: {
+          3: 'List concatenation builds the padded copy in one expression — no sized vector, no copy loop. The padding kills every edge case: the first and last real balloons always have live neighbors to multiply with.',
+          7: 'Open interval: borders i and j stay alive; only what is strictly between them bursts. Note dp[i][k] and dp[k][j] share borders with the parent — no +1/−1 offsets.',
+          10: 'Three coins terms: left side fully burst (k as its right wall), right side fully burst (k as its left wall), then k itself against the fixed borders.',
+          11: 'The classic check: [3,1,5,8] → 167 (burst 1, then 5, then 3, then 8: 15 + 120 + 24 + 8).',
+        },
       },
     },
     {
@@ -332,6 +437,30 @@ for (int i = 0; i < 5; i++)            // iterate the members
         7: 'Ends equal + inside is a palindrome. len <= 2 short-circuits the base cases: "a" and "aa" have no inside to check.',
         15: 'The partition step: last piece s[i..j] is a palindrome → one cut after the prefix s[0..i−1]. Same "choose the last piece" thinking as MCM chooses the last multiply.',
         17: 'Desk-check "aab": pal[0][1] ("aa") true → cuts[1] = 0; pal[2][2] ("b") true → cuts[2] = cuts[1] + 1 = 1.',
+      },
+      py: {
+        code: `def minCut(s: str) -> int:
+    n = len(s)
+    pal = [[False] * n for _ in range(n)]
+    for length in range(1, n + 1):         # pass 1: palindrome table
+        for i in range(0, n - length + 1):
+            j = i + length - 1
+            pal[i][j] = s[i] == s[j] and (length <= 2 or pal[i + 1][j - 1])
+    cuts = [0] * n
+    for j in range(n):                     # pass 2: fewest cuts for s[0..j]
+        if pal[0][j]:
+            cuts[j] = 0
+            continue
+        cuts[j] = j                        # worst case: cut after every char
+        for i in range(1, j + 1):
+            if pal[i][j]:
+                cuts[j] = min(cuts[j], cuts[i - 1] + 1)
+    return cuts[-1]                        # "aab" -> 1  ("aa" | "b")`,
+        annotations: {
+          7: 'Ends equal + inside is a palindrome. length <= 2 short-circuits the base cases: "a" and "aa" have no inside to check. Python\'s and/or short-circuit exactly like C++\'s && and ||, so the guard is safe.',
+          16: 'The partition step: last piece s[i..j] is a palindrome → one cut after the prefix s[0..i−1]. Same "choose the last piece" thinking as MCM chooses the last multiply.',
+          17: 'Desk-check "aab": pal[0][1] ("aa") true → cuts[1] = 0; pal[2][2] ("b") true → cuts[2] = cuts[1] + 1 = 1.',
+        },
       },
     },
     {

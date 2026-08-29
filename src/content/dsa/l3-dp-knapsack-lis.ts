@@ -59,6 +59,26 @@ int knapsack(const vector<int>& wt, const vector<int>& val, int W) {
         9: 'The table index i is 1-based ("first i items"), the arrays are 0-based — hence wt[i - 1].',
         11: 'Take reads row i−1: the sub-world where THIS item was never available. That single index is the whole 0/1 guarantee.',
       },
+      py: {
+        code: `# 0/1 knapsack: each item taken once or not at all
+def knapsack(wt: list[int], val: list[int], W: int) -> int:
+    n = len(wt)
+    # dp[i][w] = best value using only the FIRST i items, capacity w
+    dp = [[0] * (W + 1) for _ in range(n + 1)]
+    for i in range(1, n + 1):
+        for w in range(W + 1):
+            dp[i][w] = dp[i - 1][w]                 # world 1: SKIP item i
+            if wt[i - 1] <= w:                      # does it even fit?
+                dp[i][w] = max(dp[i][w],
+                               dp[i - 1][w - wt[i - 1]] + val[i - 1])  # TAKE
+    return dp[n][W]`,
+        annotations: {
+          5: 'Row 0 stays all zeros — the base case "no items" — so every later row has something to read. The comprehension is not optional: [[0] * (W+1)] * (n+1) would alias one row into all of them.',
+          8: 'Skip: same capacity, one fewer item to think about. Row i−1, same column.',
+          9: 'The table index i is 1-based ("first i items"), the lists are 0-based — hence wt[i - 1].',
+          11: 'Take reads row i−1: the sub-world where THIS item was never available. That single index is the whole 0/1 guarantee.',
+        },
+      },
     },
     {
       type: 'intuition',
@@ -179,6 +199,20 @@ int knapsack(const vector<int>& wt, const vector<int>& val, int W) {
         4: 'The interview question hiding in this line: backwards keeps every left cell on the previous item\'s row. Forward would let the item pay for itself twice.',
         6: 'dp[w − wt[i]] is left of the writer — still untouched this round — so it is genuinely row i−1. The 2D correctness argument survives compression intact.',
       },
+      py: {
+        code: `def knapsack1D(wt: list[int], val: list[int], W: int) -> int:
+    dp = [0] * (W + 1)           # one row: dp[w] = best value at capacity w
+    for i in range(len(wt)):
+        for w in range(W, wt[i] - 1, -1):        # BACKWARDS -- load-bearing
+            dp[w] = max(dp[w],                   # skip
+                        dp[w - wt[i]] + val[i])  # take: reads a LEFT cell
+    return dp[W]`,
+        annotations: {
+          2: 'The all-zero list doubles as the base case. After item i finishes, dp IS row i of the 2D table.',
+          4: 'The interview question hiding in this line: backwards keeps every left cell on the previous item\'s row; forward would let the item pay for itself twice. Read the range carefully — the stop is exclusive, so wt[i] - 1 is what keeps w == wt[i] in the sweep.',
+          6: 'dp[w − wt[i]] is left of the writer — still untouched this round — so it is genuinely row i−1. The 2D correctness argument survives compression intact.',
+        },
+      },
     },
     {
       type: 'note',
@@ -215,6 +249,25 @@ int knapsack(const vector<int>& wt, const vector<int>& val, int W) {
         8: 'Same direction, same reason: forward would let one number contribute to a sum twice — 5 alone "making" 10.',
         9: 'Flex upgrade: bitset<10001> dp; dp[0]=1; for x: dp |= dp << x. Same DP, 64 sums per instruction.',
       },
+      py: {
+        code: `def canPartition(nums: list[int]) -> bool:
+    total = sum(nums)
+    if total % 2:
+        return False                 # odd total: two equal halves impossible
+    target = total // 2
+    dp = [False] * (target + 1)      # dp[s] = "some subset sums to exactly s"
+    dp[0] = True                     # the empty subset makes 0
+    for x in nums:                   # 0/1: each number usable once...
+        for s in range(target, x - 1, -1):   # ...so the sweep is BACKWARDS
+            dp[s] = dp[s] or dp[s - x]       # skip x  OR  take x on top of s-x
+    return dp[target]`,
+        annotations: {
+          3: 'Say this check out loud before coding — interviewers count it. Odd sum ends the problem in O(n).',
+          6: 'A plain list of bools: none of the C++ vector<bool> bit-proxy weirdness to dodge. This is value-knapsack with max() swapped for or.',
+          9: 'Same direction, same reason: forward would let one number contribute to a sum twice — 5 alone "making" 10.',
+          10: 'Flex upgrade, and Python has it built in: bits = 1, then bits |= bits << x for each x, and the answer is (bits >> target) & 1. Arbitrary-precision ints ARE std::bitset — 64 sums per machine word, no size to declare.',
+        },
+      },
     },
     {
       type: 'intuition',
@@ -243,6 +296,21 @@ int knapsack(const vector<int>& wt, const vector<int>& val, int W) {
         2: 'INT_MAX + 1 overflows to a huge negative and "wins" every min(). 1e9 survives the +1. A real submitted-and-failed classic.',
         6: 'The mirror insight in one line: the direction that was a bug in 0/1 is the definition of unbounded.',
         7: 'dp[a − c] may already include coin c — that is a second copy of c, which unbounded explicitly allows.',
+      },
+      py: {
+        code: `def coinChange(coins: list[int], amount: int) -> int:
+    INF = float('inf')               # "unreachable"
+    dp = [INF] * (amount + 1)
+    dp[0] = 0                        # amount 0 needs 0 coins
+    for c in coins:
+        for a in range(c, amount + 1):      # FORWARD: reuse is legal now
+            dp[a] = min(dp[a], dp[a - c] + 1)
+    return -1 if dp[amount] == INF else dp[amount]`,
+        annotations: {
+          2: 'The C++ trap here — INT_MAX + 1 overflowing to a huge negative and "winning" every min() — simply cannot happen: inf + 1 is inf. Price: dp holds floats. Want it integral? Use 10**9, exactly like the C++ pane.',
+          6: 'The mirror insight in one line: the direction that was a bug in 0/1 is the definition of unbounded.',
+          7: 'dp[a − c] may already include coin c — that is a second copy of c, which unbounded explicitly allows.',
+        },
       },
     },
     {
@@ -279,6 +347,28 @@ long long countWays(vector<int>& coins, int amount) {
         5: 'Coin types are committed in a fixed order, so every multiset of coins is built exactly once. That is the whole combinations argument.',
         7: 'At this moment dp[a − c] = ways to build a−c using only coins seen SO FAR — later coins cannot sneak back in.',
       },
+      py: {
+        code: `# Coin Change II: COUNT ways to make amount (order irrelevant)
+def countWays(coins: list[int], amount: int) -> int:
+    dp = [0] * (amount + 1)
+    dp[0] = 1                        # one way to make 0: take nothing
+    for c in coins:                  # coins OUTER
+        for a in range(c, amount + 1):
+            dp[a] += dp[a - c]
+    return dp[amount]
+
+# Swap the loops and you count something ELSE:
+#   for a in range(1, amount + 1):
+#       for c in coins:
+#           if c <= a: dp[a] += dp[a - c]
+# Now 1+2 and 2+1 count separately: PERMUTATIONS
+# (that exact variant is LeetCode "Combination Sum IV")`,
+        annotations: {
+          4: 'Counting DPs seed with 1, not 0 — the empty selection is one valid way to make zero. (No long long line to worry about: the counts can grow past 2⁶⁴ and Python will not care.)',
+          5: 'Coin types are committed in a fixed order, so every multiset of coins is built exactly once. That is the whole combinations argument.',
+          7: 'At this moment dp[a − c] = ways to build a−c using only coins seen SO FAR — later coins cannot sneak back in.',
+        },
+      },
     },
     {
       type: 'intuition',
@@ -310,6 +400,22 @@ long long countWays(vector<int>& coins, int amount) {
         3: 'The word "ENDING" is the entire trick. It pins down the one fact extension needs: the chain\'s last value is a[i].',
         6: 'Flip to <= and you compute longest NON-decreasing subsequence — a different problem. Know which one is being asked.',
         10: 'Returning dp[n−1] is the classic bug: [2, 3, 4, 1] gives dp = [1, 2, 3, 1] — answer 3 lives in the middle.',
+      },
+      py: {
+        code: `def lisN2(a: list[int]) -> int:
+    n, best = len(a), 0
+    dp = [1] * n                     # dp[i] = length of the LIS ENDING at i
+    for i in range(n):
+        for j in range(i):
+            if a[j] < a[i]:          # strict <: equal elements cannot chain
+                dp[i] = max(dp[i], dp[j] + 1)
+        best = max(best, dp[i])
+    return best                      # the LIS can end ANYWHERE`,
+        annotations: {
+          3: 'The word "ENDING" is the entire trick. It pins down the one fact extension needs: the chain\'s last value is a[i].',
+          6: 'Flip to <= and you compute longest NON-decreasing subsequence — a different problem. Know which one is being asked.',
+          9: 'Returning dp[-1] is the classic bug: [2, 3, 4, 1] gives dp = [1, 2, 3, 1] — the answer 3 lives in the middle. max(dp) is the one-liner.',
+        },
       },
     },
     {
@@ -344,6 +450,29 @@ long long countWays(vector<int>& coins, int amount) {
         5: 'lower_bound = first element >= x. Using upper_bound (first > x) instead would let equal values chain — that computes longest NON-decreasing.',
         7: 'Replacing never changes the length — it only makes future extensions easier. Lengths only grow via push_back.',
         12: 'Trace it by hand once: 5 gets appended, then 3 replaces it — length stays 2, but the length-2 chain now ends cheaper.',
+      },
+      py: {
+        code: `import bisect
+
+def lis(a: list[int]) -> int:
+    tails = []   # tails[k] = SMALLEST tail of any increasing
+                 #            subsequence of length k+1
+    for x in a:
+        i = bisect.bisect_left(tails, x)     # first index with tails[i] >= x
+        if i == len(tails):
+            tails.append(x)                  # x extends the longest
+        else:
+            tails[i] = x                     # x ends that length more cheaply
+    return len(tails)
+
+# [10, 9, 2, 5, 3, 7, 101, 18]:
+# [10] -> [9] -> [2] -> [2,5] -> [2,3] -> [2,3,7] -> [2,3,7,101] -> [2,3,7,18]
+# answer: 4. (Here tails happens to equal a real LIS -- pure luck, see note.)`,
+        annotations: {
+          7: 'bisect_left IS lower_bound: the first index whose value is >= x, returned as an int rather than an iterator. bisect_right (upper_bound) would let equal values chain — that computes longest NON-decreasing.',
+          11: 'Replacing never changes the length — it only makes future extensions easier. Lengths only grow via append.',
+          16: 'Trace it by hand once: 5 gets appended, then 3 replaces it — length stays 2, but the length-2 chain now ends cheaper.',
+        },
       },
     },
     {
@@ -381,6 +510,24 @@ long long countWays(vector<int>& coins, int amount) {
       annotations: {
         4: 'The whole problem lives in this line. Height-descending on ties makes equal-width envelopes mutually unpickable in a strict LIS.',
         6: 'From here down it is character-for-character the LIS from the previous snippet — the reduction is total.',
+      },
+      py: {
+        code: `import bisect
+
+def maxEnvelopes(env: list[list[int]]) -> int:
+    env.sort(key=lambda e: (e[0], -e[1]))   # width ASC, height DESC on ties
+    tails = []                              # plain LIS on heights
+    for w, h in env:
+        i = bisect.bisect_left(tails, h)
+        if i == len(tails):
+            tails.append(h)
+        else:
+            tails[i] = h
+    return len(tails)`,
+        annotations: {
+          4: 'The whole problem lives in this line. Python sorts by a KEY, not a comparator, so "ascending then descending" is spelled with a minus sign on the second field — works for numbers; for strings you would need functools.cmp_to_key. Height-descending on ties makes equal-width envelopes mutually unpickable in a strict LIS.',
+          6: 'From here down it is character-for-character the LIS from the previous snippet — the reduction is total.',
+        },
       },
     },
     {

@@ -50,6 +50,21 @@ int m6 = a >> 2;           // 3          shift right: divide by 4`,
         5: '~12 = -13 because ~n = -n - 1 (the two\'s complement note above). ~ flips ALL 32 bits, sign bit included.',
         7: 'Integer division, floored: 12 >> 2 = 3. For non-negative numbers, >> k and / 2^k agree exactly.',
       },
+      py: {
+        code: `a, b = 12, 10              # binary: a = 1100, b = 1010
+m1 = a & b                 # 8  (1000)  AND: 1 only where BOTH are 1
+m2 = a | b                 # 14 (1110)  OR: 1 where EITHER is 1
+m3 = a ^ b                 # 6  (0110)  XOR: 1 where they DIFFER
+m4 = ~a                    # -13        NOT: flip every bit
+m5 = a << 1                # 24         shift left: multiply by 2
+m6 = a >> 2                # 3          shift right: floor-divide by 4`,
+        annotations: {
+          2: 'Check column by column: 1100 & 1010 — only the 8s column has 1 in both. Masking = ANDing with a pattern of "keep" bits.',
+          4: 'XOR is its own undo: (x ^ k) ^ k == x. That self-inverse property is the engine of every XOR trick below.',
+          5: 'Same −13, different reason. A Python int is two\'s complement with INFINITELY many sign bits, so there is no fixed width to flip and no overflow ever. When a problem really means 32 bits, mask it yourself: ~a & 0xFFFFFFFF.',
+          7: '>> is an arithmetic shift that FLOORS: 12 >> 2 == 3, and −13 >> 2 == −4 while int(−13 / 4) == −3. For non-negative numbers >> k and // 2**k agree exactly. There is no >>> and no unsigned shift — mask to a width first if you need one.',
+        },
+      },
     },
     {
       type: 'intuition',
@@ -132,6 +147,23 @@ bool isPowerOfTwo(int n) {
         7: 'Production one-liner worth naming: __builtin_popcount(n) (GCC/Clang) or C++20 std::popcount — hardware instruction speed.',
         11: 'A power of two has exactly ONE set bit, so killing it leaves 0. The n > 0 guard matters: without it, n = 0 passes (0 & -1 == 0) and 0 is not a power of two.',
       },
+      py: {
+        code: `def countSetBits(n: int) -> int:   # Brian Kernighan's algorithm
+    count = 0
+    while n:                       # assumes n >= 0
+        n &= n - 1                 # kill the lowest set bit
+        count += 1
+    return count                   # countSetBits(13) == 3   (1101)
+
+def isPowerOfTwo(n: int) -> bool:
+    return n > 0 and (n & (n - 1)) == 0`,
+        annotations: {
+          3: 'The guard comment is load-bearing. Feed this a NEGATIVE n and it hangs forever: infinite sign bits mean n & (n-1) never reaches 0. In C++ the same loop terminates after 32 iterations. Mask with & 0xFFFFFFFF when the input can be negative.',
+          4: 'One kill per iteration, so the loop runs once per SET bit — O(k), not O(32). For 13: 1101 → 1100 → 1000 → 0000. Three kills.',
+          6: 'The production one-liner worth naming: n.bit_count() (3.10+), or bin(n).count("1") on older runtimes. Both beat this loop; the loop is what they want to see you can derive.',
+          9: 'A power of two has exactly ONE set bit, so killing it leaves 0. The n > 0 guard matters: without it n = 0 passes (0 & -1 == 0) and 0 is not a power of two.',
+        },
+      },
     },
     {
       type: 'intuition',
@@ -153,6 +185,15 @@ int idx = __builtin_ctz(n);  // 2 -- count trailing zeros = INDEX of that bit`,
       annotations: {
         2: 'Fenwick/BIT in one line: the tree moves between nodes with i += i & -i (update) and i -= i & -i (query). This trick IS that data structure\'s engine.',
         3: 'ctz = count trailing zeros. low gives the bit as a value (4); ctz gives its position (2). Interviews accept either — know both names.',
+      },
+      py: {
+        code: `n = 12                             # 1100
+low = n & -n                       # 4 (0100) -- lowest set bit survives
+idx = low.bit_length() - 1         # 2 -- the INDEX of that bit (ctz)`,
+        annotations: {
+          2: 'Works unchanged in Python: -n is two\'s complement here too, just with unbounded width. Fenwick/BIT in one line — the tree moves with i += i & -i (update) and i -= i & -i (query). This trick IS that data structure\'s engine.',
+          3: 'There is no __builtin_ctz; bit_length() - 1 on the isolated bit is the standard spelling (4 → bit_length 3 → index 2). low gives the bit as a VALUE, idx gives its POSITION — know both names.',
+        },
       },
     },
     {
@@ -184,6 +225,24 @@ int missingNumber(const vector<int>& a) {  // a holds 0..n, one missing
         3: 'Order never matters (commutative), so no sorting needed. Every duplicate pair self-destructs regardless of position.',
         10: 'Each value v in the array eventually meets index v somewhere in the stream and cancels. Only the missing number\'s index survives.',
         11: 'Indices run 0..n-1 but values run 0..n — the value n never got an index partner. XOR it in at the end. Trace {3,0,1}: x ends at 1, 1 ^ 3 = 2. Correct.',
+      },
+      py: {
+        code: `def singleNumber(a: list[int]) -> int:
+    x = 0
+    for v in a:
+        x ^= v                     # pairs annihilate: x ^ x = 0
+    return x                       # [4,1,2,1,2] -> 4
+
+def missingNumber(a: list[int]) -> int:   # a holds 0..n, one missing
+    x, n = 0, len(a)
+    for i, v in enumerate(a):
+        x ^= i ^ v                 # index XOR value: matched pairs cancel
+    return x ^ n                   # n itself had no index -- fold it in last`,
+        annotations: {
+          4: 'Order never matters (XOR is commutative), so no sorting needed. Every duplicate pair self-destructs regardless of position. The library one-liner: reduce(operator.xor, a).',
+          10: 'enumerate hands you index and value together — exactly the two things being cancelled. Each value v eventually meets index v somewhere in the stream; only the missing number\'s index survives.',
+          11: 'Indices run 0..n-1 but values run 0..n — the value n never got an index partner. XOR it in at the end. Trace [3,0,1]: x ends at 1, 1 ^ 3 = 2. Correct.',
+        },
       },
     },
     {
@@ -221,6 +280,25 @@ for (int m = 0; m < (1 << n); m++)   // m = 0..7: EVERY subset of {0,1,2}
         6: 'The remove idiom: build the bit with 1 << i, invert it with ~ (all 1s except position i), AND to clear. |= with ~ is a classic wrong answer.',
         9: '1 << n subsets, each checked in n steps: O(2^n · n) total. Fine to n ≈ 20-ish; state that ceiling before the interviewer asks.',
         12: 'Read m = 5 = 101 right to left: bit 0 on, bit 1 off, bit 2 on — the subset {0, 2}. The loop counter IS the subset.',
+      },
+      py: {
+        code: `mask = 0                          # {} -- the empty set
+mask |= 1 << 0                    # insert 0  -> {0}    mask = 1 (0001)
+mask |= 1 << 3                    # insert 3  -> {0,3}  mask = 9 (1001)
+has3 = (mask >> 3) & 1            # membership -> 1 (truthy)
+mask ^= 1 << 0                    # toggle 0  -> {3}    mask = 8 (1000)
+mask &= ~(1 << 3)                 # remove 3  -> {}     mask = 0
+
+n = 3
+for m in range(1 << n):           # m = 0..7: EVERY subset of {0,1,2}
+    for i in range(n):
+        if (m >> i) & 1:
+            useItem(i)            # m = 5 (101) uses items 0 and 2`,
+        annotations: {
+          6: 'The remove idiom: build the bit with 1 << i, invert with ~, AND to clear. In Python ~(1 << 3) is the negative number −9, not a 32-bit pattern — and that is fine: ANDing a non-negative mask with it clears exactly bit 3. Using |= with ~ is still the classic wrong answer.',
+          9: '1 << n subsets, each checked in n steps: O(2ⁿ · n) total. Fine to n ≈ 20 in C++; in Python treat ~18 as the practical ceiling and say so before the interviewer asks.',
+          12: 'Read m = 5 = 101 right to left: bit 0 on, bit 1 off, bit 2 on — the subset {0, 2}. The loop counter IS the subset.',
+        },
       },
     },
     {

@@ -182,6 +182,47 @@ public:
         28: 'search = the walk survives AND isEnd is set. Both O(L), L = length of the query — the word count N never enters.',
         29: 'startsWith = the walk survives, full stop. This one-line difference is a favorite quiz question.',
       },
+      py: {
+        code: `class TrieNode:
+    def __init__(self):
+        self.child = {}             # letter -> TrieNode; absent = no such path
+        self.isEnd = False          # a stored word ends exactly here
+
+class Trie:
+    def __init__(self):
+        self.root = TrieNode()      # the empty prefix
+
+    def _walk(self, s: str):        # follow s letter by letter
+        cur = self.root
+        for ch in s:
+            cur = cur.child.get(ch)
+            if cur is None:
+                return None         # path breaks: prefix not present
+        return cur
+
+    def insert(self, w: str) -> None:
+        cur = self.root
+        for ch in w:
+            if ch not in cur.child:
+                cur.child[ch] = TrieNode()
+            cur = cur.child[ch]
+        cur.isEnd = True            # stamp the word's last node
+
+    def search(self, w: str) -> bool:
+        n = self._walk(w)
+        return n is not None and n.isEnd
+
+    def startsWith(self, p: str) -> bool:
+        return self._walk(p) is not None`,
+        annotations: {
+          3: 'A dict of letter -> node replaces the 26-slot array: no lowercase-only assumption, unused branches cost nothing, and the node stays 2 attributes. The C++ array is faster and cache-friendlier — say you know both, and which you would pick.',
+          13: '.get(ch) hands back None on a miss instead of raising KeyError — the dict spelling of "child[i] is nullptr". All the ord(ch) - ord(\'a\') arithmetic disappears with it.',
+          21: 'Create-on-demand: insert only allocates where the path is missing. Shared prefixes cost nothing — see the diagram above.',
+          24: 'Without this line "cat" would be indistinguishable from the prefix "ca". isEnd is the entire difference between search and startsWith.',
+          28: 'search = the walk survives AND isEnd is set. Both O(L), L = length of the query — the word count N never enters.',
+          31: 'startsWith = the walk survives, full stop. This one-line difference is a favorite quiz question.',
+        },
+      },
     },
     {
       type: 'code',
@@ -197,6 +238,19 @@ cout << t.search("cab");       // 0 -- a has no b child: the walk breaks`,
       annotations: {
         5: 'The classic trap: "ca" is a path in the trie but not a stored word. search says no; startsWith says yes.',
         7: "walk reaches a, then child['b'-'a'] is nullptr → return nullptr → false. Same code path handles missing words and missing prefixes.",
+      },
+      py: {
+        code: `t = Trie()
+t.insert("cat")
+t.insert("car")
+print(t.search("car"))       # True
+print(t.search("ca"))        # False -- the a node exists but isEnd is False
+print(t.startsWith("ca"))    # True -- for a prefix, existing is enough
+print(t.search("cab"))       # False -- a has no b child: the walk breaks`,
+        annotations: {
+          5: 'The classic trap: "ca" is a path in the trie but not a stored word. search says no; startsWith says yes.',
+          7: '_walk reaches a, then child.get("b") is None → return None → False. Same code path handles missing words and missing prefixes.',
+        },
       },
     },
     {
@@ -244,6 +298,36 @@ cout << t.search("cab");       // 0 -- a has no b child: the walk breaks`,
         13: 'No separate visited[][] — overwrite the cell with a sentinel, restore on the way out. Less state, same guarantee.',
         18: 'Backtracking in two lines (18–19): undo the board mark, undo the path letter. Forgetting either corrupts every later branch.',
       },
+      py: {
+        code: `def dfs(b: list[list[str]], r: int, c: int, node: TrieNode,
+        path: list[str], found: list[str]) -> None:
+    if not (0 <= r < len(b) and 0 <= c < len(b[0])):
+        return
+    ch = b[r][c]
+    if ch == '#':
+        return                             # cell already used on this path
+    nxt = node.child.get(ch)
+    if nxt is None:
+        return                             # no dictionary word continues: PRUNE
+    path.append(ch)
+    if nxt.isEnd:
+        found.append(''.join(path))        # a full word matched mid-walk
+        nxt.isEnd = False                  # report each word once
+    b[r][c] = '#'                          # the board itself is the visited set
+    dfs(b, r + 1, c, nxt, path, found)
+    dfs(b, r - 1, c, nxt, path, found)
+    dfs(b, r, c + 1, nxt, path, found)
+    dfs(b, r, c - 1, nxt, path, found)
+    b[r][c] = ch                           # backtrack: restore the letter
+    path.pop()`,
+        annotations: {
+          9: 'THE line. One None check discards every extension of a dead prefix — this is why the trie version passes where per-word search TLEs.',
+          11: 'path is a LIST of characters, not a str: strings are immutable, so there is no append/pop on one. Build the word only when a match fires, with join.',
+          14: 'Flipping isEnd off after recording is the standard dedupe: the same word reachable via two board paths gets reported once.',
+          15: 'No separate visited grid — overwrite the cell with a sentinel, restore on the way out. Less state, same guarantee. (Only works because the board is a list of LISTS; a list of strings would be immutable.)',
+          20: 'Backtracking in two lines (20–21): undo the board mark, undo the path letter. Forgetting either corrupts every later branch.',
+        },
+      },
     },
     {
       type: 'note',
@@ -274,6 +358,21 @@ cout << t.search("cab");       // 0 -- a has no b child: the walk breaks`,
       annotations: {
         5: 'The walk dies before any isEnd → no dictionary root prefixes this word → it stays as-is.',
         6: 'Roots {"cat"}, word "cattle": c, a, then t has isEnd → return substr(0, 3) = "cat". Stopping at the FIRST flag is what makes it the shortest.',
+      },
+      py: {
+        code: `def shortestRoot(root: TrieNode, w: str) -> str:
+    cur = root
+    for i, ch in enumerate(w):
+        cur = cur.child.get(ch)
+        if cur is None:
+            return w                       # no root is a prefix: keep the word
+        if cur.isEnd:
+            return w[:i + 1]               # FIRST flag = shortest root
+    return w   # walked the whole word without a flag`,
+        annotations: {
+          6: 'The walk dies before any isEnd → no dictionary root prefixes this word → it stays as-is.',
+          8: 'Roots {"cat"}, word "cattle": c, a, then t has isEnd → return w[:3] = "cat". The slice end is exclusive, hence i + 1. Stopping at the FIRST flag is what makes it the shortest.',
+        },
       },
     },
     {

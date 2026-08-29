@@ -38,6 +38,21 @@ head->next->next = new ListNode(3);   // 1 -> 2 -> 3 -> nullptr`,
         4: 'Constructor sets next to nullptr — a fresh node is a complete one-element list by itself.',
         9: 'Chains are built by assignment, walked by ->next hops. There is no operator[] and never will be.',
       },
+      py: {
+        code: `class ListNode:
+    def __init__(self, val: int):
+        self.val = val
+        self.next = None              # a fresh node is a one-element list already
+
+head = ListNode(1)
+head.next = ListNode(2)
+head.next.next = ListNode(3)          # 1 -> 2 -> 3 -> None`,
+        annotations: {
+          2: '__init__ IS the constructor; self.next = None is the C++ member initializer : next(nullptr). No struct, no new, no delete — the GC reclaims unreachable nodes.',
+          4: 'The entire data structure is this one attribute, and None is nullptr. Every trick in this module is a different way of rewriting it.',
+          8: 'Chains are built by assignment, walked by .next hops. There is no indexing and never will be.',
+        },
+      },
     },
     {
       type: 'note',
@@ -151,6 +166,22 @@ head->next->next = new ListNode(3);   // 1 -> 2 -> 3 -> nullptr`,
         6: 'The only line that mutates the list. Everything else is bookkeeping to survive this mutation.',
         10: 'Returning cur is THE classic slip — cur is nullptr here. The reversed list hangs off prev. O(n) time, O(1) space.',
       },
+      py: {
+        code: `def reverseList(head: ListNode | None) -> ListNode | None:
+    prev = None
+    cur = head
+    while cur is not None:
+        nxt = cur.next        # 1. save the escape route (next is a builtin -> nxt)
+        cur.next = prev       # 2. flip the arrow
+        prev = cur            # 3. slide prev up
+        cur = nxt             # 4. slide cur up
+    return prev               # cur fell off the end; prev is the new head`,
+        annotations: {
+          5: 'This line MUST come before the flip. Reverse the order and cur.next already points backward — the rest of the list is unreachable.',
+          6: 'The only line that mutates the list. Everything else is bookkeeping to survive this mutation.',
+          9: 'Returning cur is THE classic slip — cur is None here. The reversed list hangs off prev. O(n) time, O(1) space.',
+        },
+      },
     },
     {
       type: 'intuition',
@@ -178,6 +209,20 @@ head->next->next = new ListNode(3);   // 1 -> 2 -> 3 -> nullptr`,
         4: 'The leap of faith. newHead is the last node of the original list, and it never changes on the way back up.',
         5: 'The famous line. head->next is my old neighbor — currently the tail of the reversed part. This hooks me on after it.',
         6: 'Without this, node 1 and node 2 point at each other forever — a two-node cycle. The most common recursive-reversal bug.',
+      },
+      py: {
+        code: `def reverseRec(head: ListNode | None) -> ListNode | None:
+    if head is None or head.next is None:
+        return head                           # already reversed
+    new_head = reverseRec(head.next)          # trust: rest is reversed now
+    head.next.next = head                     # old neighbor points back at me
+    head.next = None                          # I am the new tail (for now)
+    return new_head                           # same head bubbles all the way up`,
+        annotations: {
+          4: 'The leap of faith: new_head is the last node of the original list, and it never changes on the way back up. Python caveat the C++ pane does not have — the default recursion limit is 1000, so a long list raises RecursionError. Say that, then offer the iterative version.',
+          5: 'The famous line. head.next is my old neighbor — currently the tail of the reversed part. This hooks me on after it.',
+          6: 'Without this, node 1 and node 2 point at each other forever — a two-node cycle. The most common recursive-reversal bug.',
+        },
       },
     },
     {
@@ -209,6 +254,21 @@ head->next->next = new ListNode(3);   // 1 -> 2 -> 3 -> nullptr`,
       annotations: {
         4: 'Only fast needs null checks — it runs ahead, so it hits any end first. Checking fast->next before fast->next->next is the crash guard.',
         7: 'Compare pointers, never values — duplicated values are everywhere, but two pointers equal means the SAME node.',
+      },
+      py: {
+        code: `def hasCycle(head: ListNode | None) -> bool:
+    slow = head
+    fast = head
+    while fast is not None and fast.next is not None:
+        slow = slow.next              # 1 step
+        fast = fast.next.next         # 2 steps
+        if slow is fast:
+            return True               # same NODE: they met on the track
+    return False                      # fast found an end: no cycle`,
+        annotations: {
+          4: 'Only fast needs None checks — it runs ahead, so it hits any end first. Checking fast.next before fast.next.next is the crash guard.',
+          7: '"is", not "==": identity, not equality. == would call __eq__ and could compare values — two different nodes holding 3 are not the same node. This is precisely the C++ pointer comparison.',
+        },
       },
     },
     {
@@ -256,6 +316,25 @@ head->next->next = new ListNode(3);   // 1 -> 2 -> 3 -> nullptr`,
         8: 'Reset slow, keep fast at the meeting point. Both are now L steps away from the cycle start — that is the L = kC − d identity.',
         10: 'Phase 2 speeds are BOTH 1. Keeping fast at 2x here is the classic way to fail the follow-up.',
       },
+      py: {
+        code: `def cycleStart(head: ListNode | None) -> ListNode | None:
+    slow = head
+    fast = head
+    while fast is not None and fast.next is not None:
+        slow = slow.next
+        fast = fast.next.next
+        if slow is fast:              # phase 1: met somewhere inside the cycle
+            slow = head               # phase 2: reset ONE pointer to head
+            while slow is not fast:
+                slow = slow.next      # both walk 1 step now -- equal speeds
+                fast = fast.next
+            return slow               # first shared node = cycle start
+    return None                       # no cycle`,
+        annotations: {
+          8: 'Reset slow, keep fast at the meeting point. Both are now L steps away from the cycle start — that is the L = kC − d identity.',
+          10: 'Phase 2 speeds are BOTH 1. Keeping fast at 2x here is the classic way to fail the follow-up.',
+        },
+      },
     },
     {
       type: 'intuition',
@@ -287,6 +366,26 @@ head->next->next = new ListNode(3);   // 1 -> 2 -> 3 -> nullptr`,
         2: 'Lives on the stack — no new, no delete. Its value is never read; only its next slot matters.',
         5: '<= (not <) keeps the merge stable: equal elements keep their original relative order. Worth saying out loud.',
         9: 'One list ran dry; the survivor is already sorted. One pointer write splices the WHOLE remaining chain — no loop needed. Total: O(n+m) time, O(1) space.',
+      },
+      py: {
+        code: `def mergeTwoLists(a: ListNode | None, b: ListNode | None) -> ListNode | None:
+    dummy = ListNode(0)                    # sentinel: parked before the real list
+    tail = dummy
+    while a is not None and b is not None:
+        if a.val <= b.val:
+            tail.next = a
+            a = a.next
+        else:
+            tail.next = b
+            b = b.next
+        tail = tail.next
+    tail.next = a if a is not None else b  # splice the leftover chain in O(1)
+    return dummy.next                      # real head lives right after the sentinel`,
+        annotations: {
+          2: 'Just another node — no stack/heap distinction to make, and the GC drops it when the function returns. Its value is never read; only its next slot matters.',
+          5: '<= (not <) keeps the merge stable: equal elements keep their original relative order. Worth saying out loud.',
+          12: 'One list ran dry; the survivor is already sorted. One attribute write splices the WHOLE remaining chain — no loop needed. Total: O(n+m) time, O(1) space.',
+        },
       },
     },
     {
@@ -328,6 +427,30 @@ ListNode* nthFromEnd(ListNode* head, int n) {
         8: 'Even length picks the SECOND middle: on 1→2→3→4 this returns node 3. Interviewers ask which one — know your loop.',
         13: 'The gap IS the answer encoded as a distance. After this loop, lead and trail are n apart and stay n apart.',
         20: 'trail points AT the nth from end. To DELETE that node, run trail from a dummy in front of head and stop one earlier.',
+      },
+      py: {
+        code: `def middleNode(head: ListNode | None) -> ListNode | None:
+    slow = head
+    fast = head
+    while fast is not None and fast.next is not None:
+        slow = slow.next              # 1x speed
+        fast = fast.next.next         # 2x speed
+    return slow                       # fast at the end => slow at the middle
+
+def nthFromEnd(head: ListNode | None, n: int) -> ListNode | None:
+    lead = head
+    for _ in range(n):                # open a gap of exactly n nodes
+        lead = lead.next
+    trail = head
+    while lead is not None:           # march both; the gap stays frozen
+        lead = lead.next
+        trail = trail.next
+    return trail                      # lead fell off; trail is n from the end`,
+        annotations: {
+          7: 'Even length picks the SECOND middle: on 1→2→3→4 this returns node 3. Interviewers ask which one — know your loop.',
+          11: 'The gap IS the answer encoded as a distance. _ is the throwaway loop variable: the count matters, the index does not. After this loop lead and trail are n apart and stay n apart.',
+          17: 'trail points AT the nth from end. To DELETE that node, run trail from a dummy in front of head and stop one earlier.',
+        },
       },
     },
     {
@@ -380,6 +503,34 @@ public:
         4: 'The map stores list ITERATORS — effectively node addresses. This is the O(1) bridge between "find by key" and "move in recency order".',
         11: 'splice relinks pointers to move an existing node — no copy, no allocation, and list iterators stay valid through it. The whole design hinges on this.',
         23: 'Eviction order matters: erase the map entry FIRST (you need back() alive to read its key), then pop the node.',
+      },
+      py: {
+        code: `from collections import OrderedDict
+
+class LRUCache:
+    def __init__(self, capacity: int):
+        self.cap = capacity
+        self.items = OrderedDict()          # key -> value, in recency order
+
+    def get(self, key: int) -> int:
+        if key not in self.items:
+            return -1
+        self.items.move_to_end(key)         # mark most recent, O(1)
+        return self.items[key]
+
+    def put(self, key: int, value: int) -> None:
+        if key in self.items:
+            self.items[key] = value         # overwrite value
+            self.items.move_to_end(key)
+            return
+        if len(self.items) == self.cap:
+            self.items.popitem(last=False)  # evict the coldest: the front
+        self.items[key] = value             # new keys land at the recent end`,
+        annotations: {
+          6: 'OrderedDict is the C++ list + unordered_map already fused: a dict with a doubly-linked list threaded through it. That is why there is no map-of-iterators here — the stdlib ships the whole design. Say that, then show you know what it is made of.',
+          11: 'move_to_end IS splice: it relinks the node inside the recency list without copying the value. O(1), and it is the line the entire design hinges on.',
+          20: 'popitem(last=False) pops the least-recently-used end and drops the key in one move — so the C++ ordering trap (erase the map entry while back() is still alive) simply cannot happen here.',
+        },
       },
     },
     {

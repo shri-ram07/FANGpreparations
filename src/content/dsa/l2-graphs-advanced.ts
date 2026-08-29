@@ -51,6 +51,28 @@ const m: Module = {
         9: 'Lazy deletion: dist[u] improved after this entry was pushed, so the entry is outdated. Skipping it on the way OUT is the poor man\'s decrease-key.',
         13: 'std::priority_queue has no decrease-key — push a duplicate instead. The heap holds up to O(E) entries: O(E log E) total, and log E ≤ 2 log V, so O(E log V).',
       },
+      py: {
+        code: `import heapq
+
+def dijkstra(n: int, adj: list[list[tuple[int, int]]], src: int) -> list[float]:
+    dist = [float('inf')] * n          # adj[u] = list of (v, w)
+    pq = [(0, src)]                    # min-heap of (dist, node)
+    dist[src] = 0
+    while pq:
+        d, u = heapq.heappop(pq)
+        if d > dist[u]:
+            continue                   # stale entry -- skip it
+        for v, w in adj[u]:
+            if dist[u] + w < dist[v]:
+                dist[v] = dist[u] + w              # relax the edge
+                heapq.heappush(pq, (dist[v], v))   # old entry stays: now stale
+    return dist`,
+        annotations: {
+          5: 'Tuples compare element-wise, so the DISTANCE goes first. heapq is already a min-heap, so the whole greater<> incantation from the C++ pane disappears — a bare list is the heap.',
+          9: 'Lazy deletion: dist[u] improved after this entry was pushed, so the entry is outdated. Skipping it on the way OUT is the poor man\'s decrease-key.',
+          14: 'heapq has no decrease-key either — push a duplicate instead. The heap holds up to O(E) entries: O(E log E) total, and log E ≤ 2 log V, so O(E log V).',
+        },
+      },
     },
     {
       type: 'note',
@@ -101,6 +123,26 @@ vector<long long> bellmanFord(int n, vector<array<int,3>>& edges, int src) {
         8: 'The INF guard: never relax FROM an unreached node — INF + w would masquerade as a real (huge) distance and can overflow.',
         12: 'An improvement on pass V means some path still gets shorter with more edges. Only a negative cycle can feed that forever.',
       },
+      py: {
+        code: `# edges: (u, v, w). Empty result = negative cycle reachable from src.
+def bellmanFord(n: int, edges: list[tuple[int, int, int]], src: int) -> list[float]:
+    INF = float('inf')
+    dist = [INF] * n
+    dist[src] = 0
+    for _ in range(n - 1):                  # V-1 passes
+        for u, v, w in edges:               # relax EVERY edge
+            if dist[u] != INF and dist[u] + w < dist[v]:
+                dist[v] = dist[u] + w
+    for u, v, w in edges:                   # the V-th pass
+        if dist[u] != INF and dist[u] + w < dist[v]:
+            return []                       # still improving = neg cycle
+    return dist`,
+        annotations: {
+          6: 'The invariant: after pass i, every shortest path using ≤ i edges is final. A shortest path has at most V−1 edges, so V−1 passes cover them all. The pass counter is never read — hence _.',
+          8: 'Never relax FROM an unreached node. Python is kinder than C++ here (inf + w is inf, so nothing overflows and nothing beats a real distance), but keep the guard: it states the intent, and it is required the moment you swap inf for a sentinel like 10**18.',
+          12: 'An improvement on pass V means some path still gets shorter with more edges. Only a negative cycle can feed that forever.',
+        },
+      },
     },
     {
       type: 'note',
@@ -135,6 +177,17 @@ for (int k = 0; k < n; k++)          // allow k as an intermediate stop
       annotations: {
         2: 'k is the DP dimension, not a plain loop: it MUST be outermost. Each stage builds on the finished previous stage — move k inside and half-updated stages corrupt each other.',
         5: 'With int, pick INF = 1e9: INF + INF = 2·10⁹ still fits. If edges can be negative, also guard dist[i][k] < INF && dist[k][j] < INF so "unreachable + discount" cannot fake a path.',
+      },
+      py: {
+        code: `# dist[i][j] = edge weight; 0 on the diagonal; float('inf') if no edge
+for k in range(n):                   # allow k as an intermediate stop
+    for i in range(n):
+        for j in range(n):
+            dist[i][j] = min(dist[i][j], dist[i][k] + dist[k][j])`,
+        annotations: {
+          2: 'k is the DP dimension, not a plain loop: it MUST be outermost. Each stage builds on the finished previous stage — move k inside and half-updated stages corrupt each other.',
+          5: 'float(\'inf\') retires the whole C++ sentinel problem: inf + inf is inf, never a wrapped-around fake shortcut, even with negative edges. Price: the matrix goes float. Want to stay integral? Use 10**9 and add the two "< INF" guards, exactly like the C++ pane.',
+        },
       },
     },
     {
@@ -259,6 +312,34 @@ for (int k = 0; k < n; k++)          // allow k as an intermediate stop
         10: 'find(a) == find(b) means edge {a, b} would close a cycle. Returning false here IS the answer to Redundant Connection.',
         11: 'Union by size: the smaller tree hangs under the bigger root. A node gets deeper only when its tree at least doubles — depth O(log n) even before compression.',
       },
+      py: {
+        code: `class DSU:
+    def __init__(self, n: int):
+        self.parent = list(range(n))   # every node starts as its own root
+        self.size = [1] * n
+
+    def find(self, x: int) -> int:
+        if self.parent[x] == x:
+            return x
+        self.parent[x] = self.find(self.parent[x])   # path compression
+        return self.parent[x]
+
+    def unite(self, a: int, b: int) -> bool:
+        a, b = self.find(a), self.find(b)
+        if a == b:
+            return False                             # already in one set
+        if self.size[a] < self.size[b]:
+            a, b = b, a                              # union by size
+        self.parent[b] = a
+        self.size[a] += self.size[b]
+        return True`,
+        annotations: {
+          3: 'list(range(n)) is std::iota — the whole constructor in one expression.',
+          9: 'Path compression: on the way back from the recursion, every node on the walked path is re-pointed DIRECTLY at the root. C++ fuses assign-and-return; Python needs two lines. On a deep chain this can hit the 1000-frame recursion limit — the iterative find (walk to the root, then a second pass to re-point) is the version that never blows up.',
+          14: 'find(a) == find(b) means edge (a, b) would close a cycle. Returning False here IS the answer to Redundant Connection.',
+          17: 'Union by size, with the tuple swap standing in for std::swap. The smaller tree hangs under the bigger root, so a node gets deeper only when its tree at least doubles — depth O(log n) even before compression.',
+        },
+      },
     },
     {
       type: 'note',
@@ -298,6 +379,22 @@ for (int k = 0; k < n; k++)          // allow k as an intermediate stop
         6: 'This is why Kruskal and DSU are taught together: unite is simultaneously the cycle check and the merge. Reject = the edge is useless for spanning.',
         9: 'A spanning tree has exactly n−1 edges. Fewer accepted = the graph was never connected.',
       },
+      py: {
+        code: `def kruskal(n: int, edges: list[tuple[int, int, int]]) -> int:  # (w, u, v)
+    edges.sort()                          # lightest first (w is [0])
+    dsu = DSU(n)
+    cost = used = 0
+    for w, u, v in edges:
+        if dsu.unite(u, v):               # False = would close a cycle
+            cost += w
+            used += 1
+    return cost if used == n - 1 else -1  # -1 = graph not connected`,
+        annotations: {
+          2: 'Tuples sort lexicographically, so storing the weight FIRST means a bare .sort() with no key= — the same trick as the C++ array. The sort dominates: O(E log E).',
+          6: 'This is why Kruskal and DSU are taught together: unite is simultaneously the cycle check and the merge. Reject = the edge is useless for spanning.',
+          9: 'A spanning tree has exactly n−1 edges. Fewer accepted = the graph was never connected.',
+        },
+      },
     },
     {
       type: 'intuition',
@@ -328,6 +425,29 @@ for (int k = 0; k < n; k++)          // allow k as an intermediate stop
       annotations: {
         4: 'THE one-line difference from Dijkstra: the key is the single crossing-edge weight. Dijkstra keys on dist[u] + w — total path cost from the source.',
         9: 'The same lazy-deletion idiom: a node may sit in the heap several times with different entry costs; only its first (cheapest) pop counts.',
+      },
+      py: {
+        code: `import heapq
+
+def prim(n: int, adj: list[list[tuple[int, int]]]) -> int:  # adj[u]: (v, w)
+    in_tree = [False] * n
+    pq = [(0, 0)]                             # (edge weight, node); start at 0
+    cost = taken = 0
+    while pq and taken < n:
+        w, u = heapq.heappop(pq)
+        if in_tree[u]:
+            continue                          # stale entry -- skip
+        in_tree[u] = True
+        cost += w
+        taken += 1
+        for v, wt in adj[u]:
+            if not in_tree[v]:
+                heapq.heappush(pq, (wt, v))
+    return cost if taken == n else -1`,
+        annotations: {
+          5: 'THE one-line difference from Dijkstra: the key is the single crossing-edge weight. Dijkstra keys on dist[u] + w — total path cost from the source.',
+          9: 'The same lazy-deletion idiom: a node may sit in the heap several times with different entry costs; only its first (cheapest) pop counts.',
+        },
       },
     },
     {

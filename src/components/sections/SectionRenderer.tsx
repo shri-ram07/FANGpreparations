@@ -105,7 +105,7 @@ export function SectionRenderer({ s }: { s: Section }) {
     case 'math':
       return <MathSection intro={s.intro} latex={s.latex} />
     case 'code':
-      return <CodeBlock code={s.code} lang={s.lang} title={s.title} annotations={s.annotations} />
+      return <CodeBlock code={s.code} lang={s.lang} title={s.title} annotations={s.annotations} py={s.py} />
     case 'visual':
       return <VisualSectionView s={s} />
     default:

@@ -73,6 +73,44 @@ void buildHeap(vector<int>& h) {          // O(n), NOT O(n log n) -- note below
         24: 'Why the LAST element? Removing any other slot punches a hole mid-array and the tree is no longer complete. Overwrite root, shrink from the end: gapless, then fix the one violation by sifting.',
         31: 'Start at the last internal node, n/2 − 1. Every index after it is a leaf — a leaf is already a valid one-node heap, so half the array needs zero work.',
       },
+      py: {
+        code: `def push(h: list[int], x: int) -> None:
+    h.append(x)                            # new leaf at the end
+    i = len(h) - 1
+    while i > 0 and h[i] > h[(i - 1) // 2]:     # sift-up: beat your parent?
+        h[i], h[(i - 1) // 2] = h[(i - 1) // 2], h[i]
+        i = (i - 1) // 2                   # climb one level
+
+def siftDown(h: list[int], i: int) -> None:
+    n = len(h)
+    while True:
+        big, l, r = i, 2 * i + 1, 2 * i + 2
+        if l < n and h[l] > h[big]:
+            big = l
+        if r < n and h[r] > h[big]:
+            big = r
+        if big == i:
+            return                         # both children smaller: settled
+        h[i], h[big] = h[big], h[i]        # sink one level
+        i = big
+
+def popMax(h: list[int]) -> int:
+    top = h[0]
+    h[0] = h[-1]                           # last leaf -> root: stays complete
+    h.pop()
+    siftDown(h, 0)                         # restore the property
+    return top
+
+def buildHeap(h: list[int]) -> None:       # O(n), NOT O(n log n) -- note below
+    for i in range(len(h) // 2 - 1, -1, -1):
+        siftDown(h, i)`,
+        annotations: {
+          4: 'The climb is at most the tree height. A complete tree with n nodes is ⌈log₂ n⌉ tall — so push is O(log n). Note // and not /: index arithmetic must stay integer, and / would hand you a float index.',
+          11: 'The child formulas, live, in one tuple unpack. big tracks the largest of {parent, left, right}; the parent must beat both to stay.',
+          23: 'Why the LAST element? Removing any other slot punches a hole mid-list and the tree is no longer complete. Overwrite root, shrink from the end: gapless, then fix the one violation by sifting.',
+          29: 'Start at the last internal node, n//2 − 1, and count DOWN — range(start, -1, -1), where the -1 stop is exclusive so index 0 is included. Every index after the start is a leaf, already a valid one-node heap: half the list needs zero work.',
+        },
+      },
     },
     {
       type: 'visual',
@@ -190,6 +228,26 @@ priority_queue<pair<int,int>, vector<pair<int,int>>, decltype(cmp)> pq(cmp);`,
         2: 'greater<int> flips every comparison: smallest on top. Same O(log n) costs.',
         7: 'priority_queue takes the comparator TYPE as a template argument — hence decltype(cmp) — plus the instance in the constructor. sort just takes the lambda.',
       },
+      py: {
+        code: `import heapq
+
+h = []                                   # heapq is ALWAYS a min-heap
+heapq.heappush(h, 5)
+
+mx = []                                  # want a max-heap? push negatives
+heapq.heappush(mx, -5)
+biggest = -mx[0]                         # ...and negate on the way out
+
+counts = {'a': 3, 'b': 1}
+pairs = [(cnt, val) for val, cnt in counts.items()]
+heapq.heapify(pairs)                     # tuples compare by [0], then [1], ...
+# no comparator parameter exists: decorate the tuple instead`,
+        annotations: {
+          3: 'The exact mirror of C++: min by default, and there is no max-heap flavour at all. If your answers come out inverted, this line is why.',
+          7: 'The negation trick IS the C++ greater<> line, moved into the data. Works for numbers; for tuples negate the key element only, and remember every push and every read must agree on the sign.',
+          13: 'heapq takes no cmp/key — it compares whatever you pushed. So decorate: push (key, tiebreak, payload). The tiebreak matters — without it, equal keys fall through to comparing payloads, which raises TypeError for objects that define no <.',
+        },
+      },
     },
     {
       type: 'intuition',
@@ -219,6 +277,22 @@ priority_queue<pair<int,int>, vector<pair<int,int>>, decltype(cmp)> pq(cmp);`,
         2: 'MIN-heap for a LARGEST question — the eviction candidate (weakest member) must sit on top.',
         6: 'push-then-pop keeps the invariant "club holds the k best seen so far" true after every element.',
         8: 'O(n log k) time, O(k) space. For one-shot arrays quickselect averages O(n) — name it as the alternative.',
+      },
+      py: {
+        code: `import heapq
+
+def findKthLargest(nums: list[int], k: int) -> int:
+    club = []                          # MIN-heap, capped at k
+    for x in nums:
+        heapq.heappush(club, x)        # everyone steps inside for a moment
+        if len(club) > k:
+            heapq.heappop(club)        # bouncer evicts the weakest of the k+1
+    return club[0]                     # weakest of the top-k = kth largest`,
+        annotations: {
+          4: 'MIN-heap for a LARGEST question — the eviction candidate (weakest member) must sit on top, and in heapq that is club[0], no top() call.',
+          6: 'push-then-pop keeps the invariant "club holds the k best seen so far" true after every element. Once the club is full, heapq.heappushpop(club, x) does both in one sift — the idiomatic speed-up.',
+          9: 'O(n log k) time, O(k) space. For one-shot arrays quickselect averages O(n) — name it as the alternative. (heapq.nlargest(k, nums)[-1] is the library one-liner.)',
+        },
       },
     },
     {
@@ -266,6 +340,33 @@ vector<vector<int>> kClosest(vector<vector<int>>& pts, int k) {
         16: 'The mirror rule live: a SMALLEST-distance question keeps a MAX-heap — the farthest point must sit on top, ready for eviction.',
         18: 'Squared distance: sqrt preserves order, so skip it. 1LL forces 64-bit math before the multiply can overflow.',
       },
+      py: {
+        code: `import heapq
+from collections import Counter
+
+def topKFrequent(nums: list[int], k: int) -> list[int]:
+    freq = Counter(nums)                       # value -> count, O(n)
+    club = []                                  # min-heap on count
+    for val, cnt in freq.items():
+        heapq.heappush(club, (cnt, val))
+        if len(club) > k:
+            heapq.heappop(club)                # weakest count leaves
+    return [val for cnt, val in club]          # O(n + m log k), m = distinct
+
+def kClosest(pts: list[list[int]], k: int) -> list[list[int]]:
+    club = []                                  # MAX-heap this time: negate
+    for i, (x, y) in enumerate(pts):
+        d = x * x + y * y                      # squared distance
+        heapq.heappush(club, (-d, i))          # (-dist², index)
+        if len(club) > k:
+            heapq.heappop(club)                # farthest of the k+1 leaves
+    return [pts[i] for _, i in club]`,
+        annotations: {
+          8: 'Tuples compare by [0], so (count, value) heaps on count for free — and heapq being a min-heap is exactly what this loop wants.',
+          16: 'Squared distance: sqrt preserves order, so skip it. No 1LL cast either — Python ints are arbitrary precision, so the multiply cannot overflow.',
+          17: 'The mirror rule live: a SMALLEST-distance question needs the FARTHEST point on top, ready for eviction — and the only way to get a max-heap out of heapq is to negate the key.',
+        },
+      },
     },
     {
       type: 'intuition',
@@ -302,6 +403,31 @@ public:
         7: 'The push-through is what enforces order: whatever crosses to hi is lo\'s current maximum, so every lo element stays ≤ every hi element — no explicit comparison needed.',
         8: 'Balance invariant: after every insert, |lo| − |hi| is 0 or 1. Two pushes and up to two pops = O(log n) per insert.',
         14: '/ 2.0, not / 2 — integer division silently floors the median of an even count. Small bug, real rejections.',
+      },
+      py: {
+        code: `import heapq
+
+class MedianFinder:
+    def __init__(self):
+        self.lo = []                     # max-heap of NEGATED values: lower half
+        self.hi = []                     # min-heap: upper half
+
+    def addNum(self, x: int) -> None:
+        heapq.heappush(self.lo, -x)                        # 1. enter via lower half
+        heapq.heappush(self.hi, -heapq.heappop(self.lo))   # 2. lo's BEST crosses
+        if len(self.hi) > len(self.lo):                    # 3. lo == hi or hi + 1
+            heapq.heappush(self.lo, -heapq.heappop(self.hi))
+
+    def findMedian(self) -> float:
+        if len(self.lo) > len(self.hi):
+            return -self.lo[0]           # odd count: lo holds the extra
+        return (-self.lo[0] + self.hi[0]) / 2   # even: average the two tops`,
+        annotations: {
+          5: 'Every value in lo is stored negated, so lo[0] is the LARGEST of the lower half. Negate on the way in and on the way out — miss one and the halves silently swap roles.',
+          10: 'The push-through is what enforces order: whatever crosses to hi is lo\'s current maximum, so every lo element stays ≤ every hi element — no explicit comparison needed. The double negation is the sign bookkeeping, nothing more.',
+          11: 'Balance invariant: after every insert, |lo| − |hi| is 0 or 1. Two pushes and up to two pops = O(log n) per insert.',
+          17: '/ is true division in Python, so the C++ "/ 2.0, never / 2" trap is gone — but // would floor it, so the same bug is one character away.',
+        },
       },
     },
     {
@@ -340,6 +466,33 @@ public:
         7: 'The null check here and on line 13 is the whole robustness story: empty lists never enter, exhausted lists never re-enter.',
         11: 'The invariant: the heap holds exactly the unmerged front of every non-empty list, so its top is provably the next output node.',
         15: 'Each of the N nodes is pushed once and popped once through a size-≤k heap. O(N log k) time, O(k) extra space.',
+      },
+      py: {
+        code: `import heapq
+
+def mergeKLists(lists: list[ListNode | None]) -> ListNode | None:
+    heads = []                               # (val, tiebreak, node)
+    for i, h in enumerate(lists):
+        if h:
+            heapq.heappush(heads, (h.val, i, h))  # k heads in; empty lists stay out
+
+    dummy = ListNode(0)
+    tail = dummy
+    seq = len(lists)                         # keeps tiebreaks unique
+    while heads:
+        _, _, node = heapq.heappop(heads)    # global min of all k fronts
+        tail.next = node
+        tail = node
+        if node.next:
+            seq += 1
+            heapq.heappush(heads, (node.next.val, seq, node.next))
+    return dummy.next                        # N pops x O(log k) = O(N log k)`,
+        annotations: {
+          6: 'The falsy check here and on line 16 is the whole robustness story: empty lists never enter, exhausted lists never re-enter.',
+          7: 'The middle element is load-bearing, not decoration. Tuples compare left to right, so two equal vals would fall through to comparing ListNode objects — TypeError, since the class defines no <. A unique int stops the comparison there. C++ needed a lambda for the same reason: raw pointers would order by address.',
+          13: 'The invariant: the heap holds exactly the unmerged front of every non-empty list, so its top is provably the next output node. The two _ names say "position and tiebreak are not the payload".',
+          19: 'Each of the N nodes is pushed once and popped once through a size-≤k heap. O(N log k) time, O(k) extra space.',
+        },
       },
     },
   ],

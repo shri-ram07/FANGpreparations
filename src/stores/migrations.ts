@@ -18,6 +18,10 @@ export const migrations: Array<(state: unknown) => unknown> = [
   // v2 -> v3: highlights and margin notes. Older saves have no annotations map;
   // {} means "nothing highlighted", which is what a module renders by default.
   (state) => ({ ...(state as object), annotations: {} }),
+
+  // v3 -> v4: the C++/Python switch on code blocks. Older saves have no
+  // codeLang; 'cpp' is the default the DSA content was written in.
+  (state) => ({ ...(state as object), codeLang: 'cpp' }),
 ]
 
 export const CURRENT_VERSION = migrations.length
