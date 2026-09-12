@@ -14,7 +14,6 @@
     "@fontsource/ibm-plex-sans": "^5.2.5",
     "@fontsource/jetbrains-mono": "^5.2.5",
     "@fontsource/space-grotesk": "^5.2.5",
-    "@google/genai": "^2.22.0",
     "katex": "^0.18.4",
     "markmap-lib": "0.18.12",
     "markmap-view": "0.18.12",

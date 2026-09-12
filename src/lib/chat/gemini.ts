@@ -1,4 +1,5 @@
-// The chat backend. Two jobs: hold the user's own API key, and stream answers.
+// The chat backend. Three jobs: hold the user's own API key, work out how Google
+// will accept it, and stream answers.
 //
 // The key lives in its OWN localStorage entry, deliberately NOT in the zustand
 // store. The store has no partialize, so everything in it lands in the backup
@@ -8,14 +9,19 @@
 // There is no key in this repo, this bundle, or the deployed site. Frontend-only
 // code cannot hide one: the browser must decrypt it to make the call, so the
 // decryption key ships alongside it. Bring-your-own-key is the honest version.
-
-import type { GenerateContentResponse } from '@google/genai'
+//
+// Plain fetch rather than @google/genai. Google is mid-migration from "AIza" API
+// keys to "AQ." auth keys, and the two are carried on DIFFERENT transports; the
+// SDK always sends x-goog-api-key and offers no way to change that. Owning the
+// request is what lets a key be tried every documented way, instead of failing
+// with one message that blames the key. It also drops a 347kB dependency.
 
 const KEY_ENTRY = 'faang-prep-gemini-key'
 const TRANSPORT_ENTRY = 'faang-prep-gemini-transport'
 // Pinned, not a "-latest" alias: an alias can resolve to a preview model that a
 // free-tier key cannot call, which fails as an unhelpful 404 for the reader.
 const MODEL = 'gemini-2.5-flash'
+const BASE = 'https://generativelanguage.googleapis.com/v1beta'
 
 export const getKey = (): string => localStorage.getItem(KEY_ENTRY) ?? ''
 export const setKey = (k: string) => {
@@ -28,33 +34,71 @@ export const clearKey = () => {
   localStorage.removeItem(TRANSPORT_ENTRY)
 }
 
-const MODELS_URL = 'https://generativelanguage.googleapis.com/v1beta/models'
+/* ---------- how the key is carried ---------- */
 
-/** Google issues two key formats. Legacy "AIza" keys go on the x-goog-api-key
- *  header (or ?key=). The newer "AQ." auth keys are rejected by that transport
- *  with ACCESS_TOKEN_TYPE_UNSUPPORTED; their documented transport is an
- *  Authorization header using the "Token" auth-scheme, or an access_token query
- *  parameter. Which one a given key accepts is decided by trying it, because
- *  Google's own migration is mid-flight and the docs do not say. */
-const TRANSPORTS = [
-  { id: 'key', label: 'x-goog-api-key (legacy AIza)', url: (k: string) => `${MODELS_URL}?key=${encodeURIComponent(k)}`, headers: () => ({}) },
-  { id: 'token', label: 'Authorization: Token (new AQ.)', url: () => MODELS_URL, headers: (k: string) => ({ Authorization: `Token ${k}` }) },
-  { id: 'access_token', label: 'access_token query param', url: (k: string) => `${MODELS_URL}?access_token=${encodeURIComponent(k)}`, headers: () => ({}) },
-] as const
+/** Google accepts credentials several different ways and does not document which
+ *  applies to which key format. Rather than guess, every one is tried against the
+ *  real endpoint and the winner is remembered. */
+const TRANSPORTS = {
+  header: { label: 'x-goog-api-key header', headers: (k: string) => ({ 'x-goog-api-key': k }), query: () => '' },
+  query: { label: '?key= parameter', headers: () => ({}), query: (k: string) => `&key=${encodeURIComponent(k)}` },
+  bearer: { label: 'Authorization: Bearer', headers: (k: string) => ({ Authorization: `Bearer ${k}` }), query: () => '' },
+  token: { label: 'Authorization: Token', headers: (k: string) => ({ Authorization: `Token ${k}` }), query: () => '' },
+  access_token: {
+    label: '?access_token= parameter',
+    headers: () => ({}),
+    query: (k: string) => `&access_token=${encodeURIComponent(k)}`,
+  },
+} as const
 
-export type TransportId = (typeof TRANSPORTS)[number]['id']
+export type TransportId = keyof typeof TRANSPORTS
+const ORDER = Object.keys(TRANSPORTS) as TransportId[]
 
-/** The transport to use for a key, once testKey has found a working one. */
-export const transportFor = (key: string): TransportId =>
-  (localStorage.getItem(TRANSPORT_ENTRY) as TransportId | null) ?? (key.startsWith('AQ.') ? 'token' : 'key')
+/** The transport a key is known to work with, else the best guess for its format. */
+export const transportFor = (key: string): TransportId => {
+  const saved = localStorage.getItem(TRANSPORT_ENTRY) as TransportId | null
+  if (saved !== null && saved in TRANSPORTS) return saved
+  return key.startsWith('AQ.') ? 'bearer' : 'header'
+}
+
+function request(path: string, key: string, t: TransportId, init: RequestInit = {}) {
+  const tr = TRANSPORTS[t]
+  // The dummy first parameter is always present so a transport can append with
+  // '&' unconditionally, whatever the path already carries.
+  return fetch(`${BASE}${path}?_=1${tr.query(key)}`, {
+    ...init,
+    headers: { ...tr.headers(key), ...(init.body === undefined ? {} : { 'content-type': 'application/json' }) },
+  })
+}
+
+/* ---------- the diagnostic ---------- */
+
+/** One token in, one token out — the smallest version of the call the chat
+ *  actually makes, so a transport that passes here is one that really works. */
+const PROBE_BODY = JSON.stringify({
+  contents: [{ role: 'user', parts: [{ text: 'hi' }] }],
+  generationConfig: { maxOutputTokens: 1 },
+})
+
+function explain(status: number, body: string): string {
+  let err: { status?: string; message?: string; details?: { reason?: string }[] } | undefined
+  try {
+    err = JSON.parse(body).error
+  } catch {
+    /* not JSON — fall back to the raw body */
+  }
+  const reason = err?.details?.find((d) => d.reason)?.reason ?? ''
+  return `HTTP ${status} ${err?.status ?? ''} ${reason} — ${(err?.message ?? body).slice(0, 150)}`
+}
 
 /**
- * Ask Google directly what it thinks of a key, and report the answer verbatim.
+ * Ask Google directly what it thinks of a key, trying every transport, and
+ * report the answers verbatim.
  *
  * "API key not valid" has several causes that look identical from the chat
  * panel — wrong credential type, restricted key, API not enabled, unsupported
- * region, or a key format this transport cannot carry. This tries every
- * transport, names which ones Google accepts, and remembers the winner.
+ * region, or a key format the transport cannot carry. This names which, and
+ * remembers any transport that works so the chat then uses it.
  */
 export async function testKey(key: string): Promise<string> {
   const k = key.trim()
@@ -64,52 +108,37 @@ export async function testKey(key: string): Promise<string> {
 
   const lines: string[] = []
   let winner: TransportId | null = null
-  let models: string[] = []
 
-  for (const t of TRANSPORTS) {
+  for (const id of ORDER) {
     let res: Response
     try {
-      res = await fetch(t.url(k), { headers: t.headers(k) })
+      res = await request(`/models/${MODEL}:generateContent`, k, id, { method: 'POST', body: PROBE_BODY })
     } catch (e) {
-      lines.push(`${t.label}: could not reach Google (${e instanceof Error ? e.message : String(e)})`)
+      lines.push(`${TRANSPORTS[id].label}: could not reach Google (${e instanceof Error ? e.message : String(e)})`)
       continue
     }
     const body = await res.text()
     if (res.ok) {
-      if (winner === null) {
-        winner = t.id
-        try {
-          models = ((JSON.parse(body).models ?? []) as { name: string }[]).map((m) => m.name.replace('models/', ''))
-        } catch {
-          /* the transport works even if the list does not parse */
-        }
-      }
-      lines.push(`${t.label}: OK`)
+      winner ??= id
+      lines.push(`${TRANSPORTS[id].label}: OK`)
       continue
     }
-    let err: { status?: string; message?: string; details?: { reason?: string }[] } | undefined
-    try {
-      err = JSON.parse(body).error
-    } catch {
-      /* fall through to the raw body */
-    }
-    const reason = err?.details?.find((d) => d.reason)?.reason ?? ''
-    lines.push(`${t.label}: HTTP ${res.status} ${err?.status ?? ''} ${reason} — ${err?.message ?? body.slice(0, 160)}`)
+    lines.push(`${TRANSPORTS[id].label}: ${explain(res.status, body)}`)
   }
 
   if (winner === null) {
     localStorage.removeItem(TRANSPORT_ENTRY)
-    return `Google refused this key on every transport.\n\n${lines.join('\n')}`
+    const aq = k.startsWith('AQ.')
+      ? '\n\nEvery transport refused an "AQ." key, which matches Google\'s own open issue: AI Studio now issues these, but the Gemini REST API does not accept them yet. No frontend change can work around that — it needs a legacy "AIza" key, or a small server-side proxy.'
+      : ''
+    return `Google refused this key on every transport.\n\n${lines.join('\n')}${aq}`
   }
 
   localStorage.setItem(TRANSPORT_ENTRY, winner)
-  const head = models.includes(MODEL)
-    ? `Key works. ${MODEL} is available. (${models.length} models.)`
-    : models.length > 0
-      ? `Key works, but ${MODEL} is NOT offered to it. Flash models it does offer: ${models.filter((n) => n.includes('flash')).slice(0, 6).join(', ') || 'none'}.`
-      : 'Key works.'
-  return `${head}\n\n${lines.join('\n')}`
+  return `Key works, via ${TRANSPORTS[winner].label}. ${MODEL} answered.\n\n${lines.join('\n')}`
 }
+
+/* ---------- the chat itself ---------- */
 
 export interface Msg {
   role: 'user' | 'model'
@@ -134,11 +163,7 @@ export interface Session {
   state: Record<string, unknown>
 }
 
-export function buildContext(s: {
-  moduleTitle?: string
-  selection?: string
-  page?: string
-}): string {
+export function buildContext(s: { moduleTitle?: string; selection?: string; page?: string }): string {
   const parts: string[] = []
   if (s.moduleTitle) parts.push(`The reader is on the module "${s.moduleTitle}".`)
   if (s.selection) parts.push(`They have selected this text:\n"""\n${s.selection}\n"""`)
@@ -147,36 +172,41 @@ export function buildContext(s: {
   return parts.length === 0 ? '' : `PAGE CONTEXT\n${parts.join('\n\n')}\n\n---\n\n`
 }
 
-/**
- * Streams one answer. Yields text deltas.
- *
- * @google/genai is loaded on first send, not at page load — it is ~835kb and
- * most visits never open the chat.
- */
-export async function* streamAnswer(
-  messages: Msg[],
-  context: string,
-  signal: AbortSignal,
-): AsyncGenerator<string> {
+/** Server-sent events, the framing Gemini's streaming endpoint uses with
+ *  alt=sse. Split on blank lines; keep a trailing partial event for the next
+ *  chunk, since a JSON payload is routinely cut across reads. */
+async function* sseData(res: Response, signal: AbortSignal): AsyncGenerator<string> {
+  const reader = res.body?.getReader()
+  if (!reader) return
+  const decoder = new TextDecoder()
+  let buf = ''
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done || signal.aborted) break
+      buf += decoder.decode(value, { stream: true })
+      let cut = buf.indexOf('\n\n')
+      while (cut >= 0) {
+        const event = buf.slice(0, cut)
+        buf = buf.slice(cut + 2)
+        for (const line of event.split('\n')) if (line.startsWith('data:')) yield line.slice(5).trim()
+        cut = buf.indexOf('\n\n')
+      }
+    }
+  } finally {
+    void reader.cancel().catch(() => {})
+  }
+}
+
+/** Streams one answer, yielding text deltas. */
+export async function* streamAnswer(messages: Msg[], context: string, signal: AbortSignal): AsyncGenerator<string> {
   const key = getKey()
   if (key === '') throw new Error('No API key set.')
-
-  const { GoogleGenAI } = await import('@google/genai')
-  // Carry the key the way THIS key is accepted. An AQ. key on the legacy
-  // transport fails as ACCESS_TOKEN_TYPE_UNSUPPORTED, which reads like a bad key.
-  const transport = transportFor(key)
-  const ai = new GoogleGenAI(
-    transport === 'key'
-      ? { apiKey: key }
-      : { apiKey: key, httpOptions: { headers: { Authorization: `Token ${key}` } } },
-  )
 
   // The UI appends an EMPTY model turn as a streaming placeholder before calling
   // this. Sending it makes the conversation end on a model turn, which Gemini
   // rejects with a 400 — so drop it here, where every caller routes through.
-  const turns = messages.filter(
-    (m, i) => !(i === messages.length - 1 && m.role === 'model' && m.text === ''),
-  )
+  const turns = messages.filter((m, i) => !(i === messages.length - 1 && m.role === 'model' && m.text === ''))
 
   // Context rides on the latest turn so it reflects the page they are on NOW,
   // not the page they were on when the conversation started.
@@ -185,30 +215,37 @@ export async function* streamAnswer(
     parts: [{ text: i === turns.length - 1 ? context + m.text : m.text }],
   }))
 
-  let stream: AsyncGenerator<GenerateContentResponse>
+  let res: Response
   try {
-    stream = await ai.models.generateContentStream({
-      model: MODEL,
-      contents,
-      config: { systemInstruction: INSTRUCTION, abortSignal: signal },
+    res = await request(`/models/${MODEL}:streamGenerateContent&alt=sse`, key, transportFor(key), {
+      method: 'POST',
+      body: JSON.stringify({ contents, systemInstruction: { parts: [{ text: INSTRUCTION }] } }),
+      signal,
     })
-  } catch (e) {
-    throw new Error(friendly(e))
-  }
-
-  try {
-    for await (const chunk of stream) {
-      if (signal.aborted) return
-      const t = chunk.text
-      if (t) yield t
-    }
   } catch (e) {
     if (signal.aborted) return
     throw new Error(friendly(e))
   }
+
+  if (!res.ok) throw new Error(friendly(new Error(await res.text())))
+
+  for await (const data of sseData(res, signal)) {
+    if (signal.aborted) return
+    if (data === '' || data === '[DONE]') continue
+    let parsed: { candidates?: { content?: { parts?: { text?: string }[] } }[] }
+    try {
+      parsed = JSON.parse(data)
+    } catch {
+      continue // a keep-alive or a partial line; the next event carries the text
+    }
+    const text = parsed.candidates?.[0]?.content?.parts?.map((p) => p.text ?? '').join('') ?? ''
+    if (text !== '') yield text
+  }
 }
 
-/** The SDK throws ApiError whose message is JSON wrapping more JSON. Dig out the
+/* ---------- error text ---------- */
+
+/** Errors arrive as JSON, sometimes JSON wrapping more JSON. Dig out the
  *  sentence a human wrote. */
 function googleMessage(raw: string): string {
   let cur = raw
@@ -234,18 +271,16 @@ function googleMessage(raw: string): string {
 export function friendly(e: unknown): string {
   const raw = e instanceof Error ? e.message : String(e)
   const hay = googleMessage(raw) || raw
-  // Google is migrating AI Studio to "AQ." auth keys, and the REST API does not
-  // accept them yet. Verified against the live endpoint: an AQ. key on the
-  // api-key transport returns 401 ACCESS_TOKEN_TYPE_UNSUPPORTED, and the
-  // documented Token/access_token transports answer "unregistered callers".
+  // Google is migrating AI Studio to "AQ." auth keys and the REST API does not
+  // accept them yet. Verified against the live endpoint on v1, v1beta and
+  // v1alpha, across every transport.
   if (/ACCESS_TOKEN_TYPE_UNSUPPORTED|Expected OAuth 2 access token/i.test(hay))
-    return 'Google rejected this key’s FORMAT, not the key itself. New "AQ." keys from AI Studio are not yet accepted by the Gemini REST API — a known, unresolved Google migration issue. Create a legacy "AIza" key instead: Google Cloud Console → APIs & Services → Credentials → Create credentials → API key, then enable the Generative Language API on that project.'
+    return 'Google rejected this key’s FORMAT, not the key itself. New "AQ." keys from AI Studio are not yet accepted by the Gemini REST API — a known, unresolved Google migration issue. Press "Test key" for the full detail.'
   if (/API key not valid|API_KEY_INVALID|API key expired/i.test(hay))
     return 'That API key was rejected by Google. Open the Key panel and paste a valid one.'
   if (/SERVICE_DISABLED|has not been used in project|PERMISSION_DENIED/i.test(hay))
     return 'The key is valid but the Gemini API is not enabled for it. Enable it in Google AI Studio.'
-  if (/RESOURCE_EXHAUSTED|quota|rate.?limit/i.test(hay))
-    return 'Rate limit or quota hit. Wait a minute and ask again.'
+  if (/RESOURCE_EXHAUSTED|quota|rate.?limit/i.test(hay)) return 'Rate limit or quota hit. Wait a minute and ask again.'
   if (/not found|NOT_FOUND|is not supported/i.test(hay)) return `Model unavailable for this key: ${hay}`
   if (/Failed to fetch|NetworkError|ERR_NAME|ERR_INTERNET/i.test(hay))
     return 'Could not reach Google. Check your connection.'

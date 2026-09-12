@@ -57,7 +57,7 @@ const aq = friendly(
   ),
 )
 assert.match(aq, /AQ/, 'must name the AQ key format')
-assert.match(aq, /AIza/, 'must say which format to get instead')
+assert.match(aq, /Test key/, 'must point at the diagnostic that gives the detail')
 assert.doesNotMatch(aq, /paste a valid one/, 'must not tell them the key is simply wrong')
 
 console.log('chat-errors: 12 checks passed')
