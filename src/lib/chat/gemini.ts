@@ -20,6 +20,52 @@ export const getKey = (): string => localStorage.getItem(KEY_ENTRY) ?? ''
 export const setKey = (k: string) => localStorage.setItem(KEY_ENTRY, k.trim())
 export const clearKey = () => localStorage.removeItem(KEY_ENTRY)
 
+/**
+ * Ask Google directly what it thinks of a key, and report the answer verbatim.
+ *
+ * "API key not valid" has several different causes that look identical from the
+ * chat panel — wrong key type, restricted key, API not enabled, unsupported
+ * region. This names which one, and also says whether MODEL is actually offered
+ * to that key, which no amount of guessing from the error text can tell us.
+ */
+export async function testKey(key: string): Promise<string> {
+  const k = key.trim()
+  if (k === '') return 'No key entered.'
+  if (!k.startsWith('AIza'))
+    return `That does not look like a Gemini API key (they start with "AIza"). You may have pasted an OAuth client id, a project number, or a service-account field instead. Got ${k.length} characters starting "${k.slice(0, 6)}".`
+
+  let res: Response
+  try {
+    res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(k)}`)
+  } catch (e) {
+    return `Could not reach Google at all: ${e instanceof Error ? e.message : String(e)}. A network block or extension may be stopping the request.`
+  }
+  const body = await res.text()
+
+  if (res.ok) {
+    let names: string[] = []
+    try {
+      names = ((JSON.parse(body).models ?? []) as { name: string }[]).map((m) => m.name.replace('models/', ''))
+    } catch {
+      return `Key works, but the model list did not parse: ${body.slice(0, 200)}`
+    }
+    const flash = names.filter((n) => n.includes('flash')).slice(0, 8).join(', ')
+    return names.includes(MODEL)
+      ? `Key works. ${MODEL} is available. (${names.length} models in total.)`
+      : `Key works, but ${MODEL} is NOT offered to it. Flash models it does offer: ${flash || 'none'}.`
+  }
+
+  let err: { status?: string; message?: string; details?: { reason?: string }[] } | undefined
+  try {
+    err = JSON.parse(body).error
+  } catch {
+    /* fall through to the raw body */
+  }
+  const reason = err?.details?.find((d) => d.reason)?.reason ?? ''
+  return `HTTP ${res.status} ${err?.status ?? ''} ${reason}
+${err?.message ?? body.slice(0, 300)}`
+}
+
 export interface Msg {
   role: 'user' | 'model'
   text: string

@@ -7,7 +7,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { Md } from '@/lib/md'
-import { buildContext, clearKey, getKey, setKey, streamAnswer } from '@/lib/chat/gemini'
+import { buildContext, clearKey, getKey, setKey, streamAnswer, testKey } from '@/lib/chat/gemini'
 import { useChat } from '@/stores/chat'
 
 const FENCE = /```[a-z]*\n?/gi
@@ -35,16 +35,24 @@ function Answer({ text }: { text: string }) {
   )
 }
 
-function KeyPanel({ onDone }: { onDone: () => void }) {
-  const [v, setV] = useState('')
+function KeyPanel({ onDone, onCancel }: { onDone: () => void; onCancel?: () => void }) {
+  const [v, setV] = useState(() => getKey())
+  const [diag, setDiag] = useState('')
+  const [testing, setTesting] = useState(false)
   const save = () => {
     if (v.trim() === '') return
     setKey(v)
     onDone()
   }
+  const test = async () => {
+    setTesting(true)
+    setDiag('Asking Google…')
+    setDiag(await testKey(v))
+    setTesting(false)
+  }
   return (
-    <div className="p-4 text-[14px]">
-      <p className="font-semibold">Add your Gemini API key</p>
+    <div className="overflow-y-auto p-4 text-[14px]">
+      <p className="font-semibold">Your Gemini API key</p>
       <p className="mt-1.5 text-ink-soft">
         Stored in this browser only, and sent nowhere except Google. This site ships no key of its own — a
         frontend-only page cannot hide one.
@@ -57,13 +65,20 @@ function KeyPanel({ onDone }: { onDone: () => void }) {
         placeholder="AIza..."
         className="mt-3 w-full rounded-md border border-line px-2.5 py-1.5 font-mono text-[13px] outline-none focus:border-accent"
       />
-      <div className="mt-2.5 flex items-center gap-3">
+      <div className="mt-2.5 flex flex-wrap items-center gap-3">
         <button
           disabled={v.trim() === ''}
           onClick={save}
           className="rounded-md bg-accent px-3.5 py-1.5 font-medium text-white disabled:opacity-40"
         >
           Save
+        </button>
+        <button
+          disabled={v.trim() === '' || testing}
+          onClick={() => void test()}
+          className="rounded-md border border-line px-3 py-1.5 font-medium disabled:opacity-40 hover:border-accent hover:text-accent"
+        >
+          Test key
         </button>
         <a
           href="https://aistudio.google.com/apikey"
@@ -73,7 +88,32 @@ function KeyPanel({ onDone }: { onDone: () => void }) {
         >
           Get a free key
         </a>
+        {onCancel && (
+          <button onClick={onCancel} className="text-ink-soft hover:text-ink">
+            Cancel
+          </button>
+        )}
       </div>
+
+      {/* Google's own words, unedited — the point is to stop guessing. */}
+      {diag !== '' && (
+        <pre className="mt-3 max-h-40 overflow-auto rounded-md bg-raised p-2.5 font-mono text-[12px] whitespace-pre-wrap">
+          {diag}
+        </pre>
+      )}
+
+      {getKey() !== '' && (
+        <button
+          onClick={() => {
+            clearKey()
+            setV('')
+            setDiag('Key removed from this browser.')
+          }}
+          className="mt-3 text-[12px] text-ink-soft hover:text-wrong"
+        >
+          Remove the stored key
+        </button>
+      )}
     </div>
   )
 }
@@ -89,6 +129,7 @@ export function ChatBubble() {
 
   const s = useChat.getState
   const [hasKey, setHasKey] = useState(() => getKey() !== '')
+  const [showKey, setShowKey] = useState(false)
   const [draft, setDraft] = useState('')
   const abortRef = useRef<AbortController | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -169,13 +210,7 @@ export function ChatBubble() {
             </button>
           )}
           {hasKey && (
-            <button
-              onClick={() => {
-                clearKey()
-                setHasKey(false)
-              }}
-              className="hover:text-ink"
-            >
+            <button onClick={() => setShowKey(true)} className="hover:text-ink">
               Key
             </button>
           )}
@@ -185,8 +220,14 @@ export function ChatBubble() {
         </div>
       </header>
 
-      {!hasKey ? (
-        <KeyPanel onDone={() => setHasKey(true)} />
+      {!hasKey || showKey ? (
+        <KeyPanel
+          onDone={() => {
+            setHasKey(getKey() !== '')
+            setShowKey(false)
+          }}
+          onCancel={hasKey ? () => setShowKey(false) : undefined}
+        />
       ) : (
         <>
           <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-3.5 py-3 text-[14px]">
