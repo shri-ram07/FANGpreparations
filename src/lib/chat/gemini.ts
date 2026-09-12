@@ -12,7 +12,9 @@
 import type { GenerateContentResponse } from '@google/genai'
 
 const KEY_ENTRY = 'faang-prep-gemini-key'
-const MODEL = 'gemini-flash-latest'
+// Pinned, not a "-latest" alias: an alias can resolve to a preview model that a
+// free-tier key cannot call, which fails as an unhelpful 404 for the reader.
+const MODEL = 'gemini-2.5-flash'
 
 export const getKey = (): string => localStorage.getItem(KEY_ENTRY) ?? ''
 export const setKey = (k: string) => localStorage.setItem(KEY_ENTRY, k.trim())
@@ -71,11 +73,18 @@ export async function* streamAnswer(
   const { GoogleGenAI } = await import('@google/genai')
   const ai = new GoogleGenAI({ apiKey: key })
 
-  // Context rides on the latest user turn so it reflects the page they are on
-  // NOW, not the page they were on when the conversation started.
-  const contents = messages.map((m, i) => ({
+  // The UI appends an EMPTY model turn as a streaming placeholder before calling
+  // this. Sending it makes the conversation end on a model turn, which Gemini
+  // rejects with a 400 — so drop it here, where every caller routes through.
+  const turns = messages.filter(
+    (m, i) => !(i === messages.length - 1 && m.role === 'model' && m.text === ''),
+  )
+
+  // Context rides on the latest turn so it reflects the page they are on NOW,
+  // not the page they were on when the conversation started.
+  const contents = turns.map((m, i) => ({
     role: m.role,
-    parts: [{ text: i === messages.length - 1 ? context + m.text : m.text }],
+    parts: [{ text: i === turns.length - 1 ? context + m.text : m.text }],
   }))
 
   let stream: AsyncGenerator<GenerateContentResponse>
@@ -101,12 +110,40 @@ export async function* streamAnswer(
   }
 }
 
-/** Google's errors arrive as a JSON blob in the message. Say the useful part. */
-function friendly(e: unknown): string {
+/** The SDK throws ApiError whose message is JSON wrapping more JSON. Dig out the
+ *  sentence a human wrote. */
+function googleMessage(raw: string): string {
+  let cur = raw
+  for (let i = 0; i < 3; i++) {
+    const brace = cur.indexOf('{')
+    if (brace < 0) break
+    try {
+      const inner: unknown = JSON.parse(cur.slice(brace))
+      const m = (inner as { error?: { message?: unknown } })?.error?.message
+      if (typeof m !== 'string') break
+      cur = m
+      if (!m.trimStart().startsWith('{')) return m
+    } catch {
+      break
+    }
+  }
+  return cur === raw ? '' : cur
+}
+
+/** Match on the REASON Google gives, never on the bare status code: a malformed
+ *  request is also a 400, and reporting that as "bad key" sends you hunting for
+ *  a problem that is not there. */
+export function friendly(e: unknown): string {
   const raw = e instanceof Error ? e.message : String(e)
-  if (/API key not valid|API_KEY_INVALID|400/.test(raw)) return 'That API key was rejected. Check it in the key panel.'
-  if (/PERMISSION_DENIED|403/.test(raw)) return 'The key is valid but not allowed to call the Gemini API. Enable it in Google AI Studio.'
-  if (/RESOURCE_EXHAUSTED|429/.test(raw)) return 'Rate limit hit on the free tier. Wait a minute and ask again.'
-  if (/Failed to fetch|NetworkError/.test(raw)) return 'Could not reach Google. Check your connection.'
-  return raw
+  const hay = googleMessage(raw) || raw
+  if (/API key not valid|API_KEY_INVALID|API key expired/i.test(hay))
+    return 'That API key was rejected by Google. Open the Key panel and paste a valid one.'
+  if (/SERVICE_DISABLED|has not been used in project|PERMISSION_DENIED/i.test(hay))
+    return 'The key is valid but the Gemini API is not enabled for it. Enable it in Google AI Studio.'
+  if (/RESOURCE_EXHAUSTED|quota|rate.?limit/i.test(hay))
+    return 'Rate limit or quota hit. Wait a minute and ask again.'
+  if (/not found|NOT_FOUND|is not supported/i.test(hay)) return `Model unavailable for this key: ${hay}`
+  if (/Failed to fetch|NetworkError|ERR_NAME|ERR_INTERNET/i.test(hay))
+    return 'Could not reach Google. Check your connection.'
+  return hay
 }
