@@ -9,6 +9,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Md } from '@/lib/md'
 import { buildContext, clearKey, getKey, setKey, streamAnswer, testKey } from '@/lib/chat/gemini'
 import { useChat } from '@/stores/chat'
+import { PROVIDERS } from '@/lib/chat/providers'
 
 const FENCE = /```[a-z]*\n?/gi
 
@@ -52,10 +53,23 @@ function KeyPanel({ onDone, onCancel }: { onDone: () => void; onCancel?: () => v
   }
   return (
     <div className="overflow-y-auto p-4 text-[14px]">
-      <p className="font-semibold">Your Gemini API key</p>
+      <p className="font-semibold">Your API key</p>
       <p className="mt-1.5 text-ink-soft">
-        Stored in this browser only, and sent nowhere except Google. This site ships no key of its own — a
+        Stored in this browser only, and sent nowhere except the provider. This site ships no key of its own — a
         frontend-only page cannot hide one.
+      </p>
+      <p className="mt-1.5 text-[13px] text-ink-soft">
+        Works with a Google key (<span className="font-mono">AIza…</span>), or a free key from{' '}
+        {PROVIDERS.map((p, i) => (
+          <span key={p.id}>
+            {i > 0 && ', '}
+            <a href={p.signup} target="_blank" rel="noreferrer" className="text-accent hover:underline">
+              {p.label}
+            </a>
+          </span>
+        ))}
+        . Google&apos;s newer <span className="font-mono">AQ.</span> keys are currently rejected by Google&apos;s own
+        API — press Test key to see exactly what it says.
       </p>
       <input
         type="password"
@@ -80,12 +94,7 @@ function KeyPanel({ onDone, onCancel }: { onDone: () => void; onCancel?: () => v
         >
           Test key
         </button>
-        <a
-          href="https://aistudio.google.com/apikey"
-          target="_blank"
-          rel="noreferrer"
-          className="text-accent hover:underline"
-        >
+        <a href={PROVIDERS[0].signup} target="_blank" rel="noreferrer" className="text-accent hover:underline">
           Get a free key
         </a>
         {onCancel && (

@@ -16,6 +16,8 @@
 // request is what lets a key be tried every documented way, instead of failing
 // with one message that blames the key. It also drops a 347kB dependency.
 
+import { PROVIDERS, clearModel, probeProvider, providerFor, streamOpenAI } from './providers'
+
 const KEY_ENTRY = 'faang-prep-gemini-key'
 const TRANSPORT_ENTRY = 'faang-prep-gemini-transport'
 // Pinned, not a "-latest" alias: an alias can resolve to a preview model that a
@@ -26,12 +28,16 @@ const BASE = 'https://generativelanguage.googleapis.com/v1beta'
 export const getKey = (): string => localStorage.getItem(KEY_ENTRY) ?? ''
 export const setKey = (k: string) => {
   // A new key may need a different transport; forget what the old one used.
-  if (k.trim() !== localStorage.getItem(KEY_ENTRY)) localStorage.removeItem(TRANSPORT_ENTRY)
+  if (k.trim() !== localStorage.getItem(KEY_ENTRY)) {
+    localStorage.removeItem(TRANSPORT_ENTRY)
+    clearModel()
+  }
   localStorage.setItem(KEY_ENTRY, k.trim())
 }
 export const clearKey = () => {
   localStorage.removeItem(KEY_ENTRY)
   localStorage.removeItem(TRANSPORT_ENTRY)
+  clearModel()
 }
 
 /* ---------- how the key is carried ---------- */
@@ -103,8 +109,15 @@ function explain(status: number, body: string): string {
 export async function testKey(key: string): Promise<string> {
   const k = key.trim()
   if (k === '') return 'No key entered.'
+  const provider = providerFor(k)
+  if (provider !== null) {
+    const { ok, lines: got } = await probeProvider(provider, k)
+    return ok
+      ? `Key works, via ${provider.label}.\n\n${got.join('\n')}`
+      : `${provider.label} refused this key.\n\n${got.join('\n')}`
+  }
   if (!k.startsWith('AIza') && !k.startsWith('AQ.'))
-    return `That does not look like a Gemini API key. They start with "AIza" (legacy) or "AQ." (new). You may have pasted an OAuth client id, a project number, or a service-account field. Got ${k.length} characters starting "${k.slice(0, 4)}".`
+    return `That key is not one this site recognises. It accepts a Google key ("AIza" or "AQ.") or a key from ${PROVIDERS.map((p) => `${p.label} (${p.match('gsk_') ? 'gsk_' : ''}…)`).join(', ')}. Got ${k.length} characters starting "${k.slice(0, 4)}".`
 
   const lines: string[] = []
   let winner: TransportId | null = null
@@ -207,6 +220,21 @@ export async function* streamAnswer(messages: Msg[], context: string, signal: Ab
   // this. Sending it makes the conversation end on a model turn, which Gemini
   // rejects with a 400 — so drop it here, where every caller routes through.
   const turns = messages.filter((m, i) => !(i === messages.length - 1 && m.role === 'model' && m.text === ''))
+
+  // A non-Google key speaks the OpenAI wire format. Same turns, same context,
+  // same streaming — only the envelope differs.
+  const provider = providerFor(key)
+  if (provider !== null) {
+    const msgs = [
+      { role: 'system', content: INSTRUCTION },
+      ...turns.map((m, i) => ({
+        role: m.role === 'model' ? 'assistant' : 'user',
+        content: i === turns.length - 1 ? context + m.text : m.text,
+      })),
+    ]
+    yield* streamOpenAI(provider, key, msgs, signal, sseData)
+    return
+  }
 
   // Context rides on the latest turn so it reflects the page they are on NOW,
   // not the page they were on when the conversation started.
