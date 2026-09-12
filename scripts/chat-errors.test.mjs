@@ -47,4 +47,17 @@ assert.match(nomodel, /Model unavailable/)
 // 6. a plain network failure is not dressed up as an API error
 assert.match(friendly(new TypeError('Failed to fetch')), /Could not reach Google/)
 
-console.log('chat-errors: 9 checks passed')
+// 7. an AQ.-format key is a FORMAT problem, not a wrong-key problem. Reported
+//    verbatim by Google as ACCESS_TOKEN_TYPE_UNSUPPORTED; captured live.
+const aq = friendly(
+  apiError(
+    'Request had invalid authentication credentials. Expected OAuth 2 access token, login cookie or other valid authentication credential.',
+    'UNAUTHENTICATED',
+    'ACCESS_TOKEN_TYPE_UNSUPPORTED',
+  ),
+)
+assert.match(aq, /AQ/, 'must name the AQ key format')
+assert.match(aq, /AIza/, 'must say which format to get instead')
+assert.doesNotMatch(aq, /paste a valid one/, 'must not tell them the key is simply wrong')
+
+console.log('chat-errors: 12 checks passed')

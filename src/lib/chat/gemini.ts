@@ -12,58 +12,103 @@
 import type { GenerateContentResponse } from '@google/genai'
 
 const KEY_ENTRY = 'faang-prep-gemini-key'
+const TRANSPORT_ENTRY = 'faang-prep-gemini-transport'
 // Pinned, not a "-latest" alias: an alias can resolve to a preview model that a
 // free-tier key cannot call, which fails as an unhelpful 404 for the reader.
 const MODEL = 'gemini-2.5-flash'
 
 export const getKey = (): string => localStorage.getItem(KEY_ENTRY) ?? ''
-export const setKey = (k: string) => localStorage.setItem(KEY_ENTRY, k.trim())
-export const clearKey = () => localStorage.removeItem(KEY_ENTRY)
+export const setKey = (k: string) => {
+  // A new key may need a different transport; forget what the old one used.
+  if (k.trim() !== localStorage.getItem(KEY_ENTRY)) localStorage.removeItem(TRANSPORT_ENTRY)
+  localStorage.setItem(KEY_ENTRY, k.trim())
+}
+export const clearKey = () => {
+  localStorage.removeItem(KEY_ENTRY)
+  localStorage.removeItem(TRANSPORT_ENTRY)
+}
+
+const MODELS_URL = 'https://generativelanguage.googleapis.com/v1beta/models'
+
+/** Google issues two key formats. Legacy "AIza" keys go on the x-goog-api-key
+ *  header (or ?key=). The newer "AQ." auth keys are rejected by that transport
+ *  with ACCESS_TOKEN_TYPE_UNSUPPORTED; their documented transport is an
+ *  Authorization header using the "Token" auth-scheme, or an access_token query
+ *  parameter. Which one a given key accepts is decided by trying it, because
+ *  Google's own migration is mid-flight and the docs do not say. */
+const TRANSPORTS = [
+  { id: 'key', label: 'x-goog-api-key (legacy AIza)', url: (k: string) => `${MODELS_URL}?key=${encodeURIComponent(k)}`, headers: () => ({}) },
+  { id: 'token', label: 'Authorization: Token (new AQ.)', url: () => MODELS_URL, headers: (k: string) => ({ Authorization: `Token ${k}` }) },
+  { id: 'access_token', label: 'access_token query param', url: (k: string) => `${MODELS_URL}?access_token=${encodeURIComponent(k)}`, headers: () => ({}) },
+] as const
+
+export type TransportId = (typeof TRANSPORTS)[number]['id']
+
+/** The transport to use for a key, once testKey has found a working one. */
+export const transportFor = (key: string): TransportId =>
+  (localStorage.getItem(TRANSPORT_ENTRY) as TransportId | null) ?? (key.startsWith('AQ.') ? 'token' : 'key')
 
 /**
  * Ask Google directly what it thinks of a key, and report the answer verbatim.
  *
- * "API key not valid" has several different causes that look identical from the
- * chat panel — wrong key type, restricted key, API not enabled, unsupported
- * region. This names which one, and also says whether MODEL is actually offered
- * to that key, which no amount of guessing from the error text can tell us.
+ * "API key not valid" has several causes that look identical from the chat
+ * panel — wrong credential type, restricted key, API not enabled, unsupported
+ * region, or a key format this transport cannot carry. This tries every
+ * transport, names which ones Google accepts, and remembers the winner.
  */
 export async function testKey(key: string): Promise<string> {
   const k = key.trim()
   if (k === '') return 'No key entered.'
-  if (!k.startsWith('AIza'))
-    return `That does not look like a Gemini API key (they start with "AIza"). You may have pasted an OAuth client id, a project number, or a service-account field instead. Got ${k.length} characters starting "${k.slice(0, 6)}".`
+  if (!k.startsWith('AIza') && !k.startsWith('AQ.'))
+    return `That does not look like a Gemini API key. They start with "AIza" (legacy) or "AQ." (new). You may have pasted an OAuth client id, a project number, or a service-account field. Got ${k.length} characters starting "${k.slice(0, 4)}".`
 
-  let res: Response
-  try {
-    res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(k)}`)
-  } catch (e) {
-    return `Could not reach Google at all: ${e instanceof Error ? e.message : String(e)}. A network block or extension may be stopping the request.`
-  }
-  const body = await res.text()
+  const lines: string[] = []
+  let winner: TransportId | null = null
+  let models: string[] = []
 
-  if (res.ok) {
-    let names: string[] = []
+  for (const t of TRANSPORTS) {
+    let res: Response
     try {
-      names = ((JSON.parse(body).models ?? []) as { name: string }[]).map((m) => m.name.replace('models/', ''))
-    } catch {
-      return `Key works, but the model list did not parse: ${body.slice(0, 200)}`
+      res = await fetch(t.url(k), { headers: t.headers(k) })
+    } catch (e) {
+      lines.push(`${t.label}: could not reach Google (${e instanceof Error ? e.message : String(e)})`)
+      continue
     }
-    const flash = names.filter((n) => n.includes('flash')).slice(0, 8).join(', ')
-    return names.includes(MODEL)
-      ? `Key works. ${MODEL} is available. (${names.length} models in total.)`
-      : `Key works, but ${MODEL} is NOT offered to it. Flash models it does offer: ${flash || 'none'}.`
+    const body = await res.text()
+    if (res.ok) {
+      if (winner === null) {
+        winner = t.id
+        try {
+          models = ((JSON.parse(body).models ?? []) as { name: string }[]).map((m) => m.name.replace('models/', ''))
+        } catch {
+          /* the transport works even if the list does not parse */
+        }
+      }
+      lines.push(`${t.label}: OK`)
+      continue
+    }
+    let err: { status?: string; message?: string; details?: { reason?: string }[] } | undefined
+    try {
+      err = JSON.parse(body).error
+    } catch {
+      /* fall through to the raw body */
+    }
+    const reason = err?.details?.find((d) => d.reason)?.reason ?? ''
+    lines.push(`${t.label}: HTTP ${res.status} ${err?.status ?? ''} ${reason} — ${err?.message ?? body.slice(0, 160)}`)
   }
 
-  let err: { status?: string; message?: string; details?: { reason?: string }[] } | undefined
-  try {
-    err = JSON.parse(body).error
-  } catch {
-    /* fall through to the raw body */
+  if (winner === null) {
+    localStorage.removeItem(TRANSPORT_ENTRY)
+    return `Google refused this key on every transport.\n\n${lines.join('\n')}`
   }
-  const reason = err?.details?.find((d) => d.reason)?.reason ?? ''
-  return `HTTP ${res.status} ${err?.status ?? ''} ${reason}
-${err?.message ?? body.slice(0, 300)}`
+
+  localStorage.setItem(TRANSPORT_ENTRY, winner)
+  const head = models.includes(MODEL)
+    ? `Key works. ${MODEL} is available. (${models.length} models.)`
+    : models.length > 0
+      ? `Key works, but ${MODEL} is NOT offered to it. Flash models it does offer: ${models.filter((n) => n.includes('flash')).slice(0, 6).join(', ') || 'none'}.`
+      : 'Key works.'
+  return `${head}\n\n${lines.join('\n')}`
 }
 
 export interface Msg {
@@ -117,7 +162,14 @@ export async function* streamAnswer(
   if (key === '') throw new Error('No API key set.')
 
   const { GoogleGenAI } = await import('@google/genai')
-  const ai = new GoogleGenAI({ apiKey: key })
+  // Carry the key the way THIS key is accepted. An AQ. key on the legacy
+  // transport fails as ACCESS_TOKEN_TYPE_UNSUPPORTED, which reads like a bad key.
+  const transport = transportFor(key)
+  const ai = new GoogleGenAI(
+    transport === 'key'
+      ? { apiKey: key }
+      : { apiKey: key, httpOptions: { headers: { Authorization: `Token ${key}` } } },
+  )
 
   // The UI appends an EMPTY model turn as a streaming placeholder before calling
   // this. Sending it makes the conversation end on a model turn, which Gemini
@@ -182,6 +234,12 @@ function googleMessage(raw: string): string {
 export function friendly(e: unknown): string {
   const raw = e instanceof Error ? e.message : String(e)
   const hay = googleMessage(raw) || raw
+  // Google is migrating AI Studio to "AQ." auth keys, and the REST API does not
+  // accept them yet. Verified against the live endpoint: an AQ. key on the
+  // api-key transport returns 401 ACCESS_TOKEN_TYPE_UNSUPPORTED, and the
+  // documented Token/access_token transports answer "unregistered callers".
+  if (/ACCESS_TOKEN_TYPE_UNSUPPORTED|Expected OAuth 2 access token/i.test(hay))
+    return 'Google rejected this key’s FORMAT, not the key itself. New "AQ." keys from AI Studio are not yet accepted by the Gemini REST API — a known, unresolved Google migration issue. Create a legacy "AIza" key instead: Google Cloud Console → APIs & Services → Credentials → Create credentials → API key, then enable the Generative Language API on that project.'
   if (/API key not valid|API_KEY_INVALID|API key expired/i.test(hay))
     return 'That API key was rejected by Google. Open the Key panel and paste a valid one.'
   if (/SERVICE_DISABLED|has not been used in project|PERMISSION_DENIED/i.test(hay))
