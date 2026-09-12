@@ -13,7 +13,9 @@ export interface Provider {
   id: string
   label: string
   base: string
-  /** Tried in order; the first the key can actually use is remembered. */
+  /** Preferred model ids, best first. Only a HINT: providers retire models
+   *  without notice (Groq dropped llama-3.3-70b-versatile), so the real list is
+   *  fetched from the provider and these are used only to rank it. */
   models: string[]
   match: (key: string) => boolean
   signup: string
@@ -49,6 +51,43 @@ export const PROVIDERS: Provider[] = [
 export const providerFor = (key: string): Provider | null => PROVIDERS.find((p) => p.match(key.trim())) ?? null
 
 export const getModel = (p: Provider): string => localStorage.getItem(MODEL_ENTRY) ?? p.models[0]!
+
+/** Models that answer chat completions. A provider's list also carries speech,
+ *  embedding, moderation and guard models, which 404 or error on this endpoint. */
+const NOT_CHAT = /whisper|tts|embed|guard|moderat|rerank|bge-|distil-whisper|playai/i
+
+/** Ask the provider what it actually offers, best candidate first. Falls back to
+ *  the compiled-in hints if the list cannot be read. */
+export async function listModels(p: Provider, key: string): Promise<string[]> {
+  let ids: string[] = []
+  try {
+    const res = await fetch(`${p.base}/models`, { headers: { Authorization: `Bearer ${key}` } })
+    if (res.ok) {
+      const data: unknown = await res.json()
+      ids = ((data as { data?: { id?: unknown }[] }).data ?? [])
+        .map((m) => (typeof m.id === 'string' ? m.id : ''))
+        .filter((id) => id !== '' && !NOT_CHAT.test(id))
+    }
+  } catch {
+    /* offline or blocked — fall through to the hints */
+  }
+  if (ids.length === 0) return p.models
+
+  // Rank: a preferred id first, then bigger instruct-style models, then the rest.
+  const score = (id: string) => {
+    const pref = p.models.indexOf(id)
+    if (pref >= 0) return 1000 - pref
+    let n = 0
+    if (/free/i.test(id)) n += 40
+    if (/instruct|chat|versatile|instant/i.test(id)) n += 20
+    if (/70b|72b|120b/i.test(id)) n += 15
+    else if (/[389]b|8x7b/i.test(id)) n += 8
+    if (/llama|qwen|gemma|mistral|gpt-oss/i.test(id)) n += 10
+    if (/preview|alpha|beta|deprecated/i.test(id)) n -= 10
+    return n
+  }
+  return [...ids].sort((a, b) => score(b) - score(a))
+}
 export const setModel = (m: string) => localStorage.setItem(MODEL_ENTRY, m)
 export const clearModel = () => localStorage.removeItem(MODEL_ENTRY)
 
@@ -61,7 +100,9 @@ const bodyFor = (model: string, messages: { role: string; content: string }[], s
  *  line plus whether anything worked. */
 export async function probeProvider(p: Provider, key: string): Promise<{ ok: boolean; lines: string[] }> {
   const lines: string[] = []
-  for (const model of p.models) {
+  const candidates = (await listModels(p, key)).slice(0, 4)
+  lines.push(`${p.label} offers ${candidates.length > 0 ? candidates.join(', ') : '(no model list)'}`)
+  for (const model of candidates) {
     let res: Response
     try {
       res = await fetch(`${p.base}/chat/completions`, {
@@ -98,21 +139,38 @@ export async function* streamOpenAI(
   signal: AbortSignal,
   sse: (res: Response, signal: AbortSignal) => AsyncGenerator<string>,
 ): AsyncGenerator<string> {
-  const res = await fetch(`${p.base}/chat/completions`, {
-    method: 'POST',
-    headers: headers(key),
-    body: bodyFor(getModel(p), messages, true),
-    signal,
-  })
-  if (!res.ok) {
+  const send = (model: string) =>
+    fetch(`${p.base}/chat/completions`, {
+      method: 'POST',
+      headers: headers(key),
+      body: bodyFor(model, messages, true),
+      signal,
+    })
+
+  const readError = async (res: Response) => {
     const text = await res.text()
-    let msg = text.slice(0, 200)
     try {
-      msg = JSON.parse(text)?.error?.message ?? msg
+      return String(JSON.parse(text)?.error?.message ?? text.slice(0, 200))
     } catch {
-      /* not JSON — keep the raw body */
+      return text.slice(0, 200)
     }
-    throw new Error(`${p.label}: ${msg}`)
+  }
+
+  let res = await send(getModel(p))
+
+  // Providers retire models without notice, and a stored choice then fails every
+  // message until someone reruns the key test. Re-pick once, silently, instead.
+  if (!res.ok) {
+    const first = await readError(res)
+    if (/does not exist|not found|decommission|deprecat|no access|invalid.*model/i.test(first)) {
+      clearModel()
+      const next = (await listModels(p, key))[0]
+      if (next !== undefined && next !== '') {
+        setModel(next)
+        res = await send(next)
+      }
+    }
+    if (!res.ok) throw new Error(`${p.label}: ${res.bodyUsed ? first : await readError(res)}`)
   }
   for await (const data of sse(res, signal)) {
     if (signal.aborted) return
