@@ -3,6 +3,7 @@ import { NavLink, Outlet } from 'react-router'
 import { SUBJECTS } from '@/content/registry'
 import { useApp } from '@/stores/app'
 import { localDay } from '@/lib/dates'
+import { ChatBubble } from '@/components/chat/ChatBubble'
 
 const navLink = ({ isActive }: { isActive: boolean }) =>
   `block rounded-md px-3 py-1.5 text-sm transition-colors ${
@@ -99,6 +100,9 @@ export function AppShell() {
           <Outlet />
         </Suspense>
       </main>
+
+      {/* Outside <Suspense> on purpose: a lazy route swap must not unmount a live stream. */}
+      <ChatBubble />
     </div>
   )
 }

@@ -7,13 +7,20 @@ import { SectionRenderer } from '@/components/sections/SectionRenderer'
 import { QuizBlock } from '@/components/QuizBlock'
 import { InterviewBlock, WorkedCases } from '@/components/InterviewBlock'
 import { Annotator } from '@/components/Annotator'
+import { useChat } from '@/stores/chat'
+import { applyOverrides } from '@/lib/chat/overrides'
+import { blocksIn, anchorFromSelection } from '@/lib/anchor'
 
 const MindMap = lazy(() => import('@/components/MindMap'))
 
 export function Component() {
   const { subjectId = '', moduleId = '' } = useParams()
   const found = useMemo(() => findModuleEntry(subjectId, moduleId), [subjectId, moduleId])
-  const [module, setModule] = useState<Module | null>(null)
+  const [loaded, setLoaded] = useState<Module | null>(null)
+  const overrides = useChat((s) => s.overrides)
+  // Chat replacements are applied for display only. loadModule caches the Module
+  // object and review/revision read the same one, so this never writes to it.
+  const module = useMemo(() => (loaded ? applyOverrides(loaded, overrides) : null), [loaded, overrides])
   const setLastVisited = useApp((s) => s.setLastVisited)
   const completeModule = useApp((s) => s.completeModule)
   const completedOn = useApp((s) => s.completed[moduleId])
@@ -23,12 +30,41 @@ export function Component() {
     if (found) setLastVisited(found.subject.id, found.entry.id)
   }, [found, setLastVisited])
 
+  // Feed the chat what this page is about, so a question needs no context typed
+  // into it. Runs after paint, so blocksIn() sees the rendered sections.
+  useEffect(() => {
+    if (!loaded) return
+    const root = bodyRef.current
+    const pageText = root ? blocksIn(root).map((b) => b.textContent ?? '').join('\n') : ''
+    useChat.setState((s) => ({ state: { ...s.state, moduleTitle: loaded.title, pageText } }))
+    return () => useChat.setState((s) => ({ state: { ...s.state, moduleTitle: undefined, pageText: undefined } }))
+  }, [loaded])
+
+  // One selection reader for the chat, sharing anchor.ts with the highlighter.
+  useEffect(() => {
+    const setSelection = useChat.getState().setSelection
+    const onUp = (e: MouseEvent) => {
+      const root = bodyRef.current
+      if (!root || !loaded) return
+      // Clicking into the chat panel collapses the page selection; ignoring those
+      // mouseups is what keeps the selected text available to replace.
+      if (e.target instanceof Element && e.target.closest('[data-no-anno]')) return
+      const a = anchorFromSelection(root, getSelection())
+      setSelection(a && a.text.trim() !== '' ? { text: a.text, prefix: a.prefix, moduleId: loaded.id } : null)
+    }
+    document.addEventListener('mouseup', onUp)
+    return () => {
+      document.removeEventListener('mouseup', onUp)
+      setSelection(null)
+    }
+  }, [loaded])
+
   useEffect(() => {
     let live = true
-    setModule(null)
+    setLoaded(null)
     if (found) {
       void loadModule(found.entry).then((m) => {
-        if (live) setModule(m)
+        if (live) setLoaded(m)
       })
     }
     return () => {
@@ -127,7 +163,7 @@ export function Component() {
         </div>
       )}
       </div>
-      {module && <Annotator moduleId={module.id} rootRef={bodyRef} contentKey={module.id} />}
+      {module && <Annotator moduleId={module.id} rootRef={bodyRef} contentKey={`${module.id}:${overrides.length}`} />}
     </div>
   )
 }
